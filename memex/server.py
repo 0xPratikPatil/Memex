@@ -35,12 +35,19 @@ _engine = None
 
 
 def _get_engine():
-    """Return the RAGEngine singleton, creating it on first call."""
+    """Return the RAGEngine singleton, creating it on first call.
+
+    Also forces Qdrant connection and collection creation so the first
+    tool call (ingest, query, stats, etc.) never fails with "collection
+    not found".  If Qdrant is unreachable the call is retried on next
+    engine access thanks to the reset logic in _get_qdrant().
+    """
     global _engine
     if _engine is None:
         from rag.pipeline import RAGEngine
 
         _engine = RAGEngine()
+        _engine._get_qdrant()  # ensures collection exists before any tool runs
     return _engine
 
 

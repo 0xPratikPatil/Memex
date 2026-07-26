@@ -305,7 +305,11 @@ class RAGEngine:
                 url=config.QDRANT_URL,
                 timeout=config.QDRANT_TIMEOUT,
             )
-            self._ensure_collection()
+            try:
+                self._ensure_collection()
+            except Exception:
+                self._qdrant = None
+                raise
         return self._qdrant
 
     def _get_ollama(self) -> httpx.Client:

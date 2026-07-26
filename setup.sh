@@ -118,16 +118,16 @@ curl -sf -X POST http://localhost:11434/api/chat \
 # ── 6. Verify advanced features ───────────────────────────────────────────────
 echo "[6/7] Advanced features"
 # Redis cache ping (informational only — won't stop bootstrap)
-if uv run python -c "import redis; r = redis.Redis(host='localhost', port=6379, decode_responses=True); r.ping()" 2>/dev/null; then
+if docker compose exec -T redis redis-cli ping | grep -q PONG 2>/dev/null; then
     echo "  ✓ redis cache ping"
 else
     echo "  ✗ redis cache ping (non-fatal)"
 fi
 # Hybrid chunker availability (informational only — won't stop bootstrap)
-if uv run python -c "from rag.chunking import is_hybrid_chunker_available; assert is_hybrid_chunker_available(), 'HybridChunker not available'" 2>/dev/null; then
+if uv sync 2>/dev/null && uv run python -c "from rag.chunking import is_hybrid_chunker_available; assert is_hybrid_chunker_available(), 'not available'" 2>/dev/null; then
     echo "  ✓ hybrid chunker"
 else
-    echo "  ✗ hybrid chunker (non-fatal)"
+    echo "  ✗ hybrid chunker (non-fatal, run: uv sync)"
 fi
 
 # ── Done ────────────────────────────────────────────────────────────────────
