@@ -4,7 +4,7 @@
 #
 #   ./setup.sh                      # use defaults
 #   EMBED_MODEL=llama3.2:1b ./setup.sh   # custom embedding model
-#   CHAT_MODEL=qwen2:0.5b ./setup.sh     # custom chat model
+#   CHAT_MODEL=qwen2:5.5b ./setup.sh     # custom chat model
 #
 # What it does:
 #   1. Checks Docker is running
@@ -21,7 +21,7 @@ if [ -f .env ]; then set -a; source .env; set +a; fi
 
 # ── Models (env var > .env > default) ───────────────────────────────────────
 EMBED="${EMBED_MODEL:-bge-m3}"
-CHAT="${CHAT_MODEL:-qwen2:0.5b}"
+CHAT="${CHAT_MODEL:-qwen2:5.5b}"
 RERANK="${RERANK_MODEL:-BAAI/bge-reranker-base}"
 SPARSE="${SPARSE_MODEL:-Qdrant/bm25}"
 
@@ -62,16 +62,30 @@ ok "started"
 
 # ── 3. Health checks ────────────────────────────────────────────────────────
 echo "[3/6] Health checks"
+
+check_http() {
+    local name="$1" url="$2"
+    while ! curl -sf --max-time 3 "$url" >/dev/null 2>&1; do sleep 2; done
+    ok "$name"
+}
+
 for svc in "${BOOT_SERVICES[@]}"; do
     if ! docker compose ps -q "$svc" &>/dev/null; then
         info "${svc}: not in compose, skipping"
         continue
     fi
+    # Wait for Docker health check first
     while ! docker compose ps "$svc" 2>/dev/null | tail -n+2 | grep -q "healthy"; do
         sleep 2
     done
-    ok "${svc}"
 done
+
+# Verify actual endpoints respond
+check_http "qdrant"     "http://localhost:6333/"
+check_http "ollama"     "http://localhost:11434/api/tags"
+check_http "docling"    "http://localhost:5001/health"
+check_http "ml-services" "http://localhost:5002/health"
+ok "redis         (Docker healthcheck)"
 
 # ── 4. Pull models ──────────────────────────────────────────────────────────
 echo "[4/6] Models"
@@ -88,9 +102,18 @@ pull "$EMBED"
 pull "$CHAT"
 ok "ready"
 
-# ── 5. Verify ────────────────────────────────────────────────────────────────
-echo "[5/6] Verify"
-curl -sf http://localhost:5002/health >/dev/null && ok "ml-services" || fail "ml-services unreachable"
+# ── 5. Verify models loaded ─────────────────────────────────────────────────
+echo "[5/6] Verify models"
+# Test embedding model responds
+curl -sf -X POST http://localhost:11434/api/embeddings \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"${EMBED}\",\"prompt\":\"test\"}" >/dev/null \
+    && ok "${EMBED}" || fail "${EMBED} not responding"
+# Test chat model responds
+curl -sf -X POST http://localhost:11434/api/chat \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"${CHAT}\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":false}" >/dev/null \
+    && ok "${CHAT}" || fail "${CHAT} not responding"
 
 # ── Done ────────────────────────────────────────────────────────────────────
 echo ""
