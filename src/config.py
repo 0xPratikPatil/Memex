@@ -140,7 +140,7 @@ MAX_TOPICS_PER_CHUNK: int = _env_int("MAX_TOPICS_PER_CHUNK", 5)
 
 # ── Evaluation ──────────────────────────────────────────────────────────────
 EVAL_ENABLED: bool = _env_bool("EVAL_ENABLED", False)
-EVAL_DATASET_PATH: str = _env("EVAL_DATASET_PATH", "evaluation.jsonl")
+EVAL_DATASET_PATH: str = _env("EVAL_DATASET_PATH", "tests/fixtures/evaluation.xml")
 EVAL_OUTPUT_DIR: str = _env("EVAL_OUTPUT_DIR", "eval_reports")
 EVAL_TOP_K: int = _env_int("EVAL_TOP_K", 10)
 EVAL_RUN_RAGAS: bool = _env_bool("EVAL_RUN_RAGAS", False)
