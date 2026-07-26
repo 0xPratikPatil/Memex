@@ -9,44 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Architecture: MCP runs locally, services in Docker**
-  - MCP server now runs directly on host machine (not in Docker)
-  - Backend services (Qdrant, Ollama, Docling, Redis) remain in Docker
-  - Eliminates Docker permission issues for file access
-  - Faster development cycle (no Docker rebuild for MCP changes)
-  - Added `memex_cli` package for local MCP execution
+- **Env-driven configuration**: All settings flow from env vars (env > .env > default)
+  - `python-dotenv` auto-loads `.env` at startup
+  - Docker ports use `${VAR:-default}` syntax
+  - Service URLs constructed from `*_PORT` env vars, overridable via `*_URL`
+  - Comprehensive `.env.example` with all 60+ settings documented
 
-- **Simplified file handling**: Removed file server dependency, MCP now reads files directly from filesystem
-  - Removed `fileserver` service from Docker Compose
-  - Removed `FILE_SERVER_URL` configuration
-  - Updated `rag_ingest_file` tool to read files directly
-  - Improved performance by eliminating HTTP overhead for file reads
+- **Architecture: MCP local + Docker backend**
+  - MCP runs directly on host (stdio mode, `uv run memex`)
+  - Backend (Qdrant, Ollama, Docling, ML Services, Redis) in Docker
+  - `rag/` package = RAG engine; `memex/` package = MCP server
+  - No file server — direct filesystem access via `pathlib`
 
-- **MCP now lightweight**: Moved ML models (BM25 sparse, cross-encoder reranker) into Docker ML services container
-  - MCP only does HTTP orchestration — no model loading at startup
-  - ML services run on GPU inside Docker with HTTP API endpoints
-  - Added `setup.sh` bootstrap script for one-command setup
-  - MCP install drops fastembed and sentence-transformers dependencies (~2GB savings)
+- **MCP thin + Docker ML**
+  - ML models (BM25 sparse, cross-encoder reranker) moved to Docker
+  - MCP only does HTTP orchestration — no `fastembed` or `sentence-transformers`
+  - Configurable providers: `SPARSE_PROVIDER`/`RERANK_PROVIDER` (http or local)
+
+- **Docker optimization**
+  - Multi-stage Dockerfile (deps → preload → runtime) with layer caching
+  - ML models pre-cached at build time (instant startup, no runtime download)
+  - Pinned image versions (qdrant:v1.18, ollama:0.32.4, redis:7.4.10-alpine)
+  - Named volumes with documented persistence rationale
+  - Professional Makefile with 12 targets + `make help`
+
+- **Unified chat model**: All LLM features fall back to `CHAT_MODEL=qwen2:0.5b`
+  - Context retrieval, query expansion, metadata extraction all use one model
+  - No more broken fallback to embedding-only `bge-m3`
 
 ### Added
+
+- **8 MCP tools**: ingest_file, ingest_url, ingest_batch, query, list_documents,
+  collection_stats, delete_document, service_status
 - Query Expansion (HyDE + Multi-Query + Query Rewriting)
 - Contextual Retrieval (document context prefixes for chunks)
 - Caching Layer (Redis cache-aside for embeddings, search, parsing)
 - Metadata Enhancement (entity extraction, classification, topics)
 - Evaluation Framework (RAGAS integration, custom metrics, A/B testing)
-- GitHub Actions CI/CD pipelines
-- Dependabot for automated dependency updates
-- Pre-commit hooks with ruff
-- Makefile for common development tasks
-- MIT License
-- Design specifications for all new features
-
-### Changed
-- Moved config.py into src/ package
-- Restructured repository for production readiness
-- Updated entry point to python -m src.cli
-- Improved error handling and logging
-- Enhanced documentation
+- **Integration tests**: 53 tests (Redis cache, contextual, query expansion, metadata)
+- setup.sh bootstrap script (one-command setup with model downloads)
+- scripts/test_e2e.py (9/9 E2E checks)
+- Provider system (`SPARSE_PROVIDER`, `RERANK_PROVIDER`)
+- Configurable ports (`QDRANT_PORT`, `OLLAMA_PORT`, etc.)
+- `.env.example` comprehensive reference
+- MIT License, GitHub Actions CI, Dependabot, pre-commit hooks
 
 ### Fixed
 - Import paths after restructuring

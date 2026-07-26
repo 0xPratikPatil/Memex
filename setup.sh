@@ -1,103 +1,105 @@
 #!/usr/bin/env bash
 # ══════════════════════════════════════════════════════════════════════════════
-# Memex Bootstrap — one command to ready everything
+# Memex Bootstrap — one command to ready everything.
 #
-# Reads models from environment, falls back to defaults.
-#   EMBED_MODEL=bge-m3 ./setup.sh     # custom embedding model
-#   CHAT_MODEL=llama3.2:3b ./setup.sh # custom chat model
-#   ./setup.sh                        # use defaults
+#   ./setup.sh                      # use defaults
+#   EMBED_MODEL=llama3.2:1b ./setup.sh   # custom embedding model
+#   CHAT_MODEL=qwen2:0.5b ./setup.sh     # custom chat model
+#
+# What it does:
+#   1. Checks Docker is running
+#   2. Builds and starts all backend services
+#   3. Waits for health checks
+#   4. Pulls Ollama models (skips if already present)
+#   5. Verifies ML services respond
 # ══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# ── Config (env vars take priority) ────────────────────────────────────────
-source_env() {  # load .env if it exists (doesn't override existing env vars)
-    if [ -f ".env" ]; then
-        set -a; source .env; set +a
-    fi
-}
-source_env
+# ── Load .env if it exists (does not override existing env vars) ────────────
+if [ -f .env ]; then set -a; source .env; set +a; fi
 
-# Models — env var > .env > default
-EMBED_MODEL="${EMBED_MODEL:-bge-m3}"
-CHAT_MODEL="${CHAT_MODEL:-qwen2:0.5b}"
-RERANK_MODEL="${RERANK_MODEL:-BAAI/bge-reranker-base}"
-SPARSE_MODEL="${SPARSE_MODEL:-Qdrant/bm25}"
+# ── Models (env var > .env > default) ───────────────────────────────────────
+EMBED="${EMBED_MODEL:-bge-m3}"
+CHAT="${CHAT_MODEL:-qwen2:0.5b}"
+RERANK="${RERANK_MODEL:-BAAI/bge-reranker-base}"
+SPARSE="${SPARSE_MODEL:-Qdrant/bm25}"
 
-# Services expected to be healthy
-SERVICES=(qdrant ollama docling ml-services redis)
+BOOT_SERVICES=(qdrant ollama docling ml-services redis)
 
-# ── Banner ─────────────────────────────────────────────────────────────────
-echo "╔════════════════════════════════╗"
-echo "║       Memex Bootstrap         ║"
-echo "╚════════════════════════════════╝"
+# ── Helpers ──────────────────────────────────────────────────────────────────
+ok()   { echo "  ✓ $1"; }
+fail() { echo "  ✗ $1"; exit 1; }
+info() { echo "  → $1"; }
+
+# ── Banner ──────────────────────────────────────────────────────────────────
 echo ""
-echo "  Embed:  ${EMBED_MODEL}"
-echo "  Chat:   ${CHAT_MODEL}"
-echo "  Rerank: ${RERANK_MODEL} (in ml-services)"
-echo "  Sparse: ${SPARSE_MODEL} (in ml-services)"
+echo "╔══════════════════════════════════════════╗"
+echo "║            Memex Bootstrap              ║"
+echo "╚══════════════════════════════════════════╝"
+echo ""
+echo "  embed   ${EMBED}"
+echo "  chat    ${CHAT}"
+echo "  rerank  ${RERANK}"
+echo "  sparse  ${SPARSE}"
 echo ""
 
-# ── Step 1: Check Docker ──────────────────────────────────────────────────
-echo "[1/5] Checking Docker..."
-if ! docker info >/dev/null 2>&1; then
-    echo "  ERROR: Docker is not running. Start Docker first."
-    exit 1
-fi
-echo "  ✓ OK"
+# ── 1. Docker ───────────────────────────────────────────────────────────────
+echo "[1/5] Docker"
+docker info >/dev/null 2>&1 || fail "Docker not running"
+ok "running"
 
-# ── Step 2: Start services ────────────────────────────────────────────────
-echo "[2/5] Starting services..."
+# ── 2. Start services ───────────────────────────────────────────────────────
+echo "[2/5] Services"
 docker compose up -d --build --remove-orphans
-echo "  ✓ Started"
+ok "started"
 
-# ── Step 3: Wait for healthy ──────────────────────────────────────────────
-echo "[3/5] Waiting for services..."
-for svc in "${SERVICES[@]}"; do
-    printf "  %-15s " "${svc}:"
+# ── 3. Health checks ────────────────────────────────────────────────────────
+echo "[3/5] Health checks"
+for svc in "${BOOT_SERVICES[@]}"; do
     if ! docker compose ps -q "$svc" &>/dev/null; then
-        echo "SKIP (not in compose)"
+        info "${svc}: not in compose, skipping"
         continue
     fi
-    until docker compose ps "$svc" 2>/dev/null | tail -n +2 | grep -q "healthy"; do
+    while ! docker compose ps "$svc" 2>/dev/null | tail -n+2 | grep -q "healthy"; do
         sleep 2
     done
-    echo "✓"
+    ok "${svc}"
 done
-echo "  ✓ All services healthy"
 
-# ── Step 4: Pull models into Ollama ───────────────────────────────────────
-echo "[4/5] Pulling models..."
-pull_if_needed() {
-    local model="$1"
-    if docker compose exec -T ollama ollama list 2>/dev/null | grep -q "$model"; then
-        echo "  → ${model} (already present)"
+# ── 4. Pull models ──────────────────────────────────────────────────────────
+echo "[4/5] Models"
+pull() {
+    local m="$1"
+    if docker compose exec -T ollama ollama list 2>/dev/null | grep -q "$m"; then
+        info "$m (cached)"
     else
-        echo "  → ${model} (pulling...)"
-        docker compose exec -T ollama ollama pull "$model"
-        echo "  → ${model} ✓"
+        info "$m (downloading…)"
+        docker compose exec -T ollama ollama pull "$m"
     fi
 }
-pull_if_needed "$EMBED_MODEL"
-pull_if_needed "$CHAT_MODEL"
-echo "  ✓ Models ready"
+pull "$EMBED"
+pull "$CHAT"
+ok "ready"
 
-# ── Step 5: Verify ML services ────────────────────────────────────────────
-echo "[5/5] Verifying ML services..."
-if curl -s -o /dev/null -w "%{http_code}" http://localhost:5002/health 2>/dev/null | grep -q "200"; then
-    echo "  ✓ ML services responded"
-else
-    echo "  ⚠ ML services still loading (check: docker logs rag-ml-services-1)"
-fi
+# ── 5. Verify ────────────────────────────────────────────────────────────────
+echo "[5/5] Verify"
+curl -sf http://localhost:5002/health >/dev/null && ok "ml-services" || fail "ml-services unreachable"
 
-# ── Done ──────────────────────────────────────────────────────────────────
+# ── Done ────────────────────────────────────────────────────────────────────
 echo ""
-echo "╔══════════════════════════════════════╗"
-echo "║     Bootstrap Complete              ║"
-echo "╚══════════════════════════════════════╝"
+echo "╔══════════════════════════════════════════╗"
+echo "║           Ready — run the MCP            ║"
+echo "╚══════════════════════════════════════════╝"
 echo ""
-echo "Services:"
 docker compose ps --format "table {{.Service}}\t{{.Status}}" 2>/dev/null
 echo ""
-echo "  Run MCP:  uv run memex"
+echo "  make dev && uv run memex"
 echo ""
+
+## ── Undocumented Features ──────────────────────────────────────────────────
+## These need qwen2:0.5b (pulled above):
+##   ENABLE_QUERY_EXPANSION=true  ENABLE_HYDE=true
+##   ENABLE_CONTEXTUAL_RETRIEVAL=true
+##   ENABLE_METADATA_EXTRACTION=true
+## See .env.example for all options."

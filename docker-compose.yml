@@ -195,6 +195,6 @@ networks:
     driver: bridge
 
 volumes:
-  qdrant_data:
-  ollama_data:
-  redis_data:
+  qdrant_data:   # persists vector database (all indexed documents)
+  ollama_data:   # persists downloaded models (multi-GB, avoid re-download)
+  redis_data:    # persists cache (avoid cold-start on restart)

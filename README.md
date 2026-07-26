@@ -81,7 +81,7 @@ uv run memex
 uv run pytest tests/ -v
 
 # Lint
-uv run ruff check src/ memex/
+uv run ruff check rag/ memex/
 ```
 
 ## MCP Tools
@@ -135,7 +135,7 @@ For local uv mode (recommended):
     "personal_rag": {
       "command": "uv",
       "args": ["run", "memex"],
-      "cwd": "/path/to/mcp/rag"
+      "cwd": "/path/to/project"
     }
   }
 }
@@ -170,33 +170,38 @@ For local python mode:
 
 ```
 memex/
-├── src/                    # Core MCP server code
-│   ├── __init__.py        # Package exports
-│   ├── config.py          # Central configuration (env vars)
-│   ├── server.py          # MCP server tool definitions
-│   ├── pipeline.py        # RAG engine: embeddings, Qdrant, search
-│   ├── docling_client.py  # Docling document conversion client
-│   ├── cli/               # CLI entry point
-│   │   └── __init__.py    # Main entry point (stdio/HTTP mode)
-│   ├── models/            # Data models (Pydantic/dataclass)
-│   ├── services/          # Business logic services
-│   │   ├── cache.py       # Redis caching layer
+├── memex/                  # MCP server (thin — HTTP orchestration only)
+│   ├── __init__.py         # v0.4.0
+│   ├── cli.py              # Entry point (uv run memex)
+│   ├── server.py           # MCP tool definitions (8 tools)
+│   └── status.py           # Service health checker
+├── rag/                    # RAG engine (backend logic)
+│   ├── __init__.py
+│   ├── config.py           # Env-driven central configuration
+│   ├── pipeline.py         # RAGEngine: embeddings, Qdrant, search
+│   ├── docling_client.py   # Docling document conversion client
+│   ├── ml_server.py        # ML services (runs in Docker)
+│   ├── models/             # Data models
+│   ├── services/           # Business logic
+│   │   ├── cache.py        # Redis caching layer
 │   │   ├── contextual_retrieval.py  # Context prefixes for chunks
-│   │   ├── evaluation.py  # RAGAS evaluation framework
+│   │   ├── evaluation.py   # RAGAS evaluation framework
 │   │   ├── metadata_extractor.py  # Entity extraction
 │   │   └── query_expansion.py  # HyDE + Multi-Query
-│   └── utils/             # Shared utilities
-├── memex/              # Local MCP package (runs outside Docker)
-│   ├── __init__.py        # Package version
-│   └── __main__.py        # Entry point for local execution
+│   └── utils/              # Shared utilities
+├── Dockerfile              # ML services container (multi-stage)
+├── docker-compose.yml      # Backend services (5 containers)
+├── setup.sh                # One-command bootstrap
+├── Makefile                # Development commands
 ├── tests/
-│   ├── unit/              # Unit tests
-│   ├── integration/       # Integration tests
-│   └── fixtures/          # Test fixtures and sample data
-├── scripts/               # Utility scripts
-│   └── evaluate.py        # Evaluation CLI tool
+│   ├── unit/               # 181 unit tests
+│   ├── integration/        # 53 integration tests
+│   └── fixtures/           # Test data
+├── scripts/
+│   ├── evaluate.py         # Evaluation CLI tool
+│   └── test_e2e.py         # End-to-end verification
 ├── docs/
-│   └── superpowers/specs/ # Design specifications
+│   └── superpowers/specs/  # Design specifications
 ├── .github/               # CI/CD workflows
 ├── Dockerfile             # Multi-stage: MCP server + File server
 ├── docker-compose.yml     # Full stack orchestration
