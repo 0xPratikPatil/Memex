@@ -43,7 +43,6 @@ RUN groupadd -g 10001 -r appgroup && \
     mkdir -p /app/.cache && chown -R appuser:appgroup /app/.cache
 
 # Copy application code with proper ownership
-COPY --chown=appuser:appgroup run.py ./
 COPY --chown=appuser:appgroup src/ src/
 
 # Switch to non-root user
@@ -65,5 +64,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-ENTRYPOINT ["python", "run.py"]
+ENTRYPOINT ["python", "-m", "src.cli"]
 CMD ["--http"]

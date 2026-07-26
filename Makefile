@@ -1,4 +1,4 @@
-.PHONY: lint fmt test build up down logs clean
+.PHONY: lint fmt test build up down logs clean run
 
 lint:
 	ruff check .
@@ -20,6 +20,12 @@ down:
 
 logs:
 	docker compose logs -f
+
+run:
+	python -m src.cli
+
+run-http:
+	python -m src.cli --http
 
 clean:
 	rm -rf build/ dist/ *.egg-info .pytest_cache .ruff_cache .mypy_cache htmlcov/

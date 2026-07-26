@@ -99,7 +99,7 @@ For local stdio mode:
   "mcpServers": {
     "personal_rag": {
       "command": "python",
-      "args": ["run.py"],
+      "args": ["-m", "src.cli"],
       "cwd": "/path/to/mcp/rag"
     }
   }
@@ -119,27 +119,40 @@ For local stdio mode:
 ## Project Structure
 
 ```
-.
+memex/
 ├── src/
+│   ├── __init__.py        # Package exports
 │   ├── config.py          # Central configuration (env vars)
 │   ├── server.py          # MCP server tool definitions
 │   ├── pipeline.py        # RAG engine: embeddings, Qdrant, search
 │   ├── docling_client.py  # Docling document conversion client
+│   ├── cli/               # CLI entry point
+│   │   └── __init__.py    # Main entry point (stdio/HTTP mode)
 │   ├── models/            # Data models (Pydantic/dataclass)
 │   ├── services/          # Business logic services
+│   │   ├── cache.py       # Redis caching layer
+│   │   ├── contextual_retrieval.py  # Context prefixes for chunks
+│   │   ├── evaluation.py  # RAGAS evaluation framework
+│   │   ├── file_server.py # Lightweight host file server
+│   │   ├── metadata_extractor.py  # Entity extraction
+│   │   └── query_expansion.py  # HyDE + Multi-Query
 │   └── utils/             # Shared utilities
 ├── tests/
 │   ├── unit/              # Unit tests
 │   ├── integration/       # Integration tests
 │   └── fixtures/          # Test fixtures and sample data
 ├── scripts/               # Utility scripts
-├── run.py                 # Entry point (stdio/HTTP mode)
-├── file_server.py         # Lightweight host file server
+│   └── evaluate.py        # Evaluation CLI tool
+├── docs/
+│   └── superpowers/specs/ # Design specifications
+├── .github/               # CI/CD workflows
 ├── Dockerfile             # MCP server container
 ├── Dockerfile.fileserver  # File server container
 ├── docker-compose.yml     # Full stack orchestration
 ├── Makefile               # Common development tasks
-└── pyproject.toml         # Project metadata and tooling config
+├── pyproject.toml         # Project metadata and tooling config
+├── LICENSE                # MIT license
+└── README.md              # Project documentation
 ```
 
 ## Development
@@ -178,10 +191,14 @@ docker compose up -d qdrant ollama docling fileserver
 docker compose exec ollama ollama pull bge-m3
 
 # Run MCP server in stdio mode
-python run.py
+python -m src.cli
 
 # Run MCP server in HTTP mode
-python run.py --http --port 8080
+python -m src.cli --http --port 8080
+
+# Or use Makefile
+make run        # stdio mode
+make run-http   # HTTP mode
 ```
 
 ### Common Tasks
