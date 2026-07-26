@@ -104,29 +104,27 @@ def _truncate(text: str) -> str:
     )
 
 
-def _format_error(exc: Exception, context: str) -> str:
-    """Produce actionable error messages."""
-    exc_type = type(exc).__name__
-    msg = str(exc)
+def _friendly_error(exc: Exception) -> str:
+    """Translate common backend exceptions into user-friendly messages."""
+    msg = str(exc).lower()
 
-    if "Cannot reach Docling server" in msg or "ConnectError" in exc_type:
-        return (
-            f"Error: {context} failed — Docling server is unreachable. "
-            f"Ensure Docling is running at {config.DOCLING_URL}. "
-            "In Docker: check 'docker compose ps docling'. Locally: check the server process."
-        )
-    if "Cannot reach Qdrant" in msg or "Qdrant" in msg:
-        return (
-            f"Error: {context} failed — Qdrant is unreachable. "
-            f"Ensure Qdrant is running at {config.QDRANT_URL}. "
-            "In Docker: check 'docker compose ps qdrant'."
-        )
-    if "Cannot reach" in msg or "ConnectionRefused" in exc_type:
-        return (
-            f"Error: {context} failed — service unreachable. Check that all services are running (docker compose ps)."
-        )
+    if "cannot reach docling" in msg:
+        return "Docling service is unreachable (port 5001). Run: docker compose up -d docling"
+    if "cannot reach ollama" in msg:
+        return "Ollama service is unreachable (port 11434). Run: docker compose up -d ollama"
+    if "cannot reach" in msg:
+        service = msg.split("cannot reach")[-1].strip().rstrip(".")
+        return f"Service unreachable: {service}. Check docker compose ps"
+    if "connection refused" in msg:
+        return "Connection refused. Is the backend service running? Run: docker compose ps"
+    if "collection" in msg and "doesn't exist" in msg:
+        return "Qdrant collection not found. The server will auto-create it on next connection."
+    if "qdrant" in msg:
+        return f"Qdrant is unreachable at {config.QDRANT_URL}. Check: docker compose ps qdrant"
+    if "ollama" in msg and "failed" in msg:
+        return f"Ollama request failed. Is Ollama running at {config.OLLAMA_EMBED_URL}?"
 
-    return f"Error: {context} failed: {exc_type}: {msg}"
+    return f"Error: {exc}"
 
 
 # ── Tools ──────────────────────────────────────────────────────────────────────
@@ -208,7 +206,7 @@ async def rag_ingest_file(file_path_or_url: str) -> str:
         )
     except Exception as exc:
         logger.exception("rag_ingest_file failed")
-        return _format_error(exc, f"ingestion of '{file_path_or_url}'")
+        return _friendly_error(exc)
 
 
 @mcp.tool(
@@ -272,7 +270,7 @@ async def rag_ingest_url(url: str) -> str:
         )
     except Exception as exc:
         logger.exception("rag_ingest_url failed")
-        return _format_error(exc, f"ingestion of '{url}'")
+        return _friendly_error(exc)
 
 
 @mcp.tool(
@@ -502,7 +500,7 @@ async def rag_query(
         return _truncate("\n".join(lines))
     except Exception as exc:
         logger.exception("rag_query failed")
-        return _format_error(exc, "search")
+        return _friendly_error(exc)
 
 
 @mcp.tool(
@@ -538,7 +536,7 @@ async def rag_delete_document(source_identifier: str) -> str:
         return f"Successfully deleted all chunks for '{source_identifier}'."
     except Exception as exc:
         logger.exception("rag_delete_document failed")
-        return _format_error(exc, f"deletion of '{source_identifier}'")
+        return _friendly_error(exc)
 
 
 @mcp.tool(
@@ -616,7 +614,7 @@ async def rag_list_documents(
         return "\n".join(lines)
     except Exception as exc:
         logger.exception("rag_list_documents failed")
-        return _format_error(exc, "listing documents")
+        return _friendly_error(exc)
 
 
 @mcp.tool(
@@ -648,7 +646,7 @@ async def rag_collection_stats() -> str:
         return json.dumps(stats, indent=2)
     except Exception as exc:
         logger.exception("rag_collection_stats failed")
-        return _format_error(exc, "fetching collection stats")
+        return _friendly_error(exc)
 
 
 @mcp.tool(
@@ -726,8 +724,29 @@ async def rag_service_status() -> str:
                 "error": str(e),
             }
 
-    return json.dumps(statuses, indent=2)
+    try:
+        return json.dumps(statuses, indent=2)
+    except Exception as exc:
+        logger.exception("rag_service_status failed")
+        return _friendly_error(exc)
 
 
 # ── Pre-warm models on import (background thread) ─────────────────────────────
 _prewarm_models()
+_features = []
+if config.ENABLE_QUERY_EXPANSION:
+    _features.append("query-expansion")
+if config.ENABLE_HYDE:
+    _features.append("hyde")
+if config.ENABLE_MULTI_QUERY:
+    _features.append("multi-query")
+if config.ENABLE_QUERY_REWRITE:
+    _features.append("query-rewrite")
+if config.ENABLE_CONTEXTUAL_RETRIEVAL:
+    _features.append("contextual-retrieval")
+if config.ENABLE_METADATA_EXTRACTION:
+    _features.append("metadata-extraction")
+if config.ENABLE_CACHE:
+    _features.append("cache")
+_features.append(f"chunk-strategy={config.CHUNK_STRATEGY}")
+logger.info("startup complete — %d features enabled: %s", len(_features), ", ".join(_features))
