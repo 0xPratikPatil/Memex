@@ -10,10 +10,7 @@ __version__ = "0.3.0"
 __author__ = "Pratik"
 
 # Core modules
-from . import config
-from . import pipeline
-from . import server
-from . import docling_client
+from . import config, docling_client, pipeline, server
 
 # Services
 from .services import (
@@ -25,13 +22,13 @@ from .services import (
 )
 
 __all__ = [
-    "config",
-    "pipeline",
-    "server",
-    "docling_client",
     "cache",
+    "config",
     "contextual_retrieval",
+    "docling_client",
     "evaluation",
     "metadata_extractor",
+    "pipeline",
     "query_expansion",
+    "server",
 ]
