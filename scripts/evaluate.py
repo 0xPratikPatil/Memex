@@ -14,18 +14,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
-
-# Ensure src is importable
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def cmd_run(args: argparse.Namespace) -> None:
     """Run evaluation against the RAG pipeline."""
-    from src import config as eval_config
-    from src.pipeline import RAGEngine
-    from src.services.evaluation import EvalRunner
+    from rag import config as eval_config
+    from rag.pipeline import RAGEngine
+    from rag.services.evaluation import EvalRunner
 
     engine = RAGEngine()
     try:
@@ -58,8 +54,8 @@ def cmd_run(args: argparse.Namespace) -> None:
 
 def cmd_single(args: argparse.Namespace) -> None:
     """Evaluate a single query."""
-    from src.pipeline import RAGEngine
-    from src.services.evaluation import EvalRunner
+    from rag.pipeline import RAGEngine
+    from rag.services.evaluation import EvalRunner
 
     engine = RAGEngine()
     try:
@@ -86,7 +82,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
     with open(args.report_b) as f:
         report_b = json.load(f)
 
-    from src.services.evaluation import EvalRunner
+    from rag.services.evaluation import EvalRunner
 
     label_a = args.label_a or Path(args.report_a).stem
     label_b = args.label_b or Path(args.report_b).stem
@@ -101,7 +97,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
 
 def cmd_add_query(args: argparse.Namespace) -> None:
     """Interactively add queries to the evaluation dataset."""
-    from src.services.evaluation import EvalDataset
+    from rag.services.evaluation import EvalDataset
 
     dataset = EvalDataset(args.dataset)
     dataset.load()
@@ -136,7 +132,7 @@ def cmd_add_query(args: argparse.Namespace) -> None:
 
 def cmd_stats(args: argparse.Namespace) -> None:
     """Show statistics about the evaluation dataset."""
-    from src.services.evaluation import EvalDataset
+    from rag.services.evaluation import EvalDataset
 
     dataset = EvalDataset(args.dataset)
     dataset.load()
@@ -205,7 +201,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # Apply defaults from config
-    from src import config
+    from rag import config
 
     if hasattr(args, "dataset") and not args.dataset:
         args.dataset = config.EVAL_DATASET_PATH

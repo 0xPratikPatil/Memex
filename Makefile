@@ -22,10 +22,10 @@ logs:
 	docker compose logs -f
 
 run:
-	python -m src.cli
+	uv run memex
 
 run-http:
-	python -m src.cli --http
+	uv run memex --http
 
 clean:
 	rm -rf build/ dist/ *.egg-info .pytest_cache .ruff_cache .mypy_cache htmlcov/

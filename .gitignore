@@ -38,3 +38,7 @@ Thumbs.db
 # Docker volumes (local data)
 qdrant_data/
 ollama_data/
+redis_data/
+
+# Tool metadata
+.opencode/

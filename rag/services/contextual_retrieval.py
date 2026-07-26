@@ -139,7 +139,7 @@ class ContextGenerator:
         resp = self._ollama.post(
             chat_url,
             json={
-                "model": config.CONTEXT_MODEL or config.EMBED_MODEL,
+                "model": config.CONTEXT_MODEL or config.CHAT_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
             },

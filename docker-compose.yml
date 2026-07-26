@@ -4,19 +4,20 @@
 # See: uv run memex
 #
 # Usage:
-#   docker compose up -d          # Start backend services
-#   docker compose down           # Stop everything
+#   ./setup.sh                    # one-command bootstrap
+#   docker compose up -d          # start backend services
+#   docker compose down           # stop everything
 #
-# First run: pull Ollama model
-#   docker compose exec ollama ollama pull bge-m3
+# Custom models via env:
+#   EMBED_MODEL=bge-m3 CHAT_MODEL=qwen2:0.5b docker compose up -d
 
 services:
   # ── Qdrant vector database ──────────────────────────────────────────────
   qdrant:
-    image: qdrant/qdrant:v1.13.4
+    image: qdrant/qdrant:v1.18
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
       - qdrant_data:/qdrant/storage
     environment:
@@ -44,15 +45,17 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # ── Ollama (embedding server) ──────────────────────────────────────────
+  # ── Ollama (embeddings + chat LLM) ──────────────────────────────────────
   ollama:
-    image: ollama/ollama:0.9.6
+    image: ollama/ollama:0.32.4
     ports:
-      - "11434:11434"
+      - "${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama_data:/root/.ollama
     environment:
       NVIDIA_VISIBLE_DEVICES: all
+      OLLAMA_KEEP_ALIVE: 24h
+      OLLAMA_HOST: 0.0.0.0
     networks:
       - backend
     healthcheck:
@@ -64,11 +67,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2.0"
-          memory: 4G
+          cpus: "4.0"
+          memory: 6G
         reservations:
-          cpus: "0.5"
-          memory: 512M
+          cpus: "1.0"
+          memory: 2G
           devices:
             - driver: nvidia
               count: all
@@ -80,11 +83,11 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # ── Docling document conversion server ─────────────────────────────────
+  # ── Docling document conversion ─────────────────────────────────────────
   docling:
     image: ghcr.io/docling-project/docling-serve-cu130:v1.27.0
     ports:
-      - "5001:5001"
+      - "${DOCLING_PORT:-5001}:5001"
     environment:
       DOCLING_SERVE_HOST: "0.0.0.0"
       DOCLING_SERVE_PORT: "5001"
@@ -93,18 +96,18 @@ services:
       - backend
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:5001/health || exit 1"]
-      interval: 15s
+      interval: 30s
       timeout: 10s
       retries: 5
       start_period: 30s
     deploy:
       resources:
         limits:
-          cpus: "2.0"
-          memory: 4G
+          cpus: "4.0"
+          memory: 6G
         reservations:
           cpus: "0.5"
-          memory: 512M
+          memory: 2G
           devices:
             - driver: nvidia
               count: all
@@ -119,17 +122,17 @@ services:
   # ── MCP Server runs locally (not in Docker) ────────────────────────────
   #   uv run memex        # start MCP server locally
 
-  # ── ML Services (sparse embeddings + reranker) ─────────────────────────
+  # ── ML Services (sparse BM25 + cross-encoder reranker) ──────────────────
   ml-services:
     build:
       context: .
       dockerfile: Dockerfile
       target: ml
     ports:
-      - "5002:5002"
+      - "${ML_SERVICES_PORT:-5002}:5002"
     environment:
-      SPARSE_MODEL: "Qdrant/bm25"
-      RERANK_MODEL: "BAAI/bge-reranker-base"
+      SPARSE_MODEL: "${SPARSE_MODEL:-Qdrant/bm25}"
+      RERANK_MODEL: "${RERANK_MODEL:-BAAI/bge-reranker-base}"
       NVIDIA_VISIBLE_DEVICES: all
     networks:
       - backend
@@ -138,11 +141,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 120s
+      start_period: 90s
     deploy:
       resources:
         limits:
-          cpus: "2.0"
+          cpus: "4.0"
           memory: 4G
         reservations:
           cpus: "0.5"
@@ -157,14 +160,12 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    volumes:
-      - ./rag/ml_server.py:/app/server.py:ro  # dev mount
 
   # ── Redis (caching layer) ──────────────────────────────────────────────
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.10-alpine
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     networks:
       - backend
     volumes:
@@ -179,6 +180,9 @@ services:
         limits:
           cpus: "0.5"
           memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
     restart: unless-stopped
     logging:
       driver: json-file

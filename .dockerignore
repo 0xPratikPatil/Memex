@@ -47,4 +47,15 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
+.opencode/
 pre-commit-config.yaml
+
+# Misc
+*.log
+.DS_Store
+Thumbs.db
+scripts/
+test_document.md
+test_files/
+uv.lock
+Makefile

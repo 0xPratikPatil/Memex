@@ -290,7 +290,7 @@ Error Handling:
     ),
 )
 async def rag_ingest_batch(items: list[str]) -> dict[str, str]:
-    from src.docling_client import parse_file
+    from rag.docling_client import parse_file
 
     engine = _get_engine()
     summary: dict[str, str] = {}

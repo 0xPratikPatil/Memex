@@ -1,13 +1,23 @@
-"""Central configuration — all values are overridable via environment variables.
+"""Central configuration — all values overridable via environment variables.
 
-Docker-friendly defaults use service names (e.g. "http://qdrant:6333") so the
-MCP server works inside Docker Compose without any changes.  When run locally
-the defaults fall back to localhost.
+Priority: env var > .env file > hardcoded default.
+
+Loads .env automatically so ``uv run memex`` picks up your settings.
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
+
+# ── Auto-load .env ──────────────────────────────────────────────────────────
+try:
+    from dotenv import load_dotenv
+    _env_file = Path(__file__).resolve().parent.parent / ".env"
+    if _env_file.exists():
+        load_dotenv(_env_file, override=False)  # don't override existing env vars
+except ImportError:
+    pass
 
 
 def _env(key: str, default: str) -> str:
@@ -33,23 +43,20 @@ def _env_bool(key: str, default: bool) -> bool:
     return val in ("1", "true", "yes")
 
 
-# ── Service URLs ──────────────────────────────────────────────────────────────
-# Docker Compose uses service names; local dev uses localhost.
-DOCLING_URL: str = _env(
-    "DOCLING_URL",
-    _env("DOCLING_SERVER_URL", "http://localhost:5001/v1/convert/source"),
-)
-OLLAMA_EMBED_URL: str = _env(
-    "OLLAMA_EMBED_URL",
-    _env("OLLAMA_SERVER_URL", "http://localhost:11434/api/embeddings"),
-)
-QDRANT_URL: str = _env(
-    "QDRANT_URL",
-    _env("QDRANT_SERVER_URL", "http://localhost:6333"),
-)
-ML_SERVICES_URL: str = _env(
-    "ML_SERVICES_URL", "http://localhost:5002",
-)
+# ── Service ports (single source of truth) ──────────────────────────────────
+QDRANT_PORT: int = _env_int("QDRANT_PORT", 6333)
+OLLAMA_PORT: int = _env_int("OLLAMA_PORT", 11434)
+DOCLING_PORT: int = _env_int("DOCLING_PORT", 5001)
+ML_SERVICES_PORT: int = _env_int("ML_SERVICES_PORT", 5002)
+REDIS_PORT: int = _env_int("REDIS_PORT", 6379)
+MCP_PORT: int = _env_int("MCP_PORT", 8080)
+
+# ── Service URLs (constructed from ports, overridable via explicit *_URL env) ─
+DOCLING_URL: str = _env("DOCLING_URL", f"http://localhost:{DOCLING_PORT}/v1/convert/source")
+OLLAMA_EMBED_URL: str = _env("OLLAMA_EMBED_URL", f"http://localhost:{OLLAMA_PORT}/api/embeddings")
+QDRANT_URL: str = _env("QDRANT_URL", f"http://localhost:{QDRANT_PORT}")
+ML_SERVICES_URL: str = _env("ML_SERVICES_URL", f"http://localhost:{ML_SERVICES_PORT}")
+REDIS_URL: str = _env("REDIS_URL", f"redis://localhost:{REDIS_PORT}/0")
 
 
 # ── API Keys ──────────────────────────────────────────────────────────────────
@@ -60,12 +67,11 @@ COLLECTION_NAME: str = _env("COLLECTION_NAME", "personal_rag")
 EMBED_MODEL: str = _env("EMBED_MODEL", "bge-m3")
 RERANK_MODEL: str = _env("RERANK_MODEL", "BAAI/bge-reranker-base")
 SPARSE_MODEL: str = _env("SPARSE_MODEL", "Qdrant/bm25")
+CHAT_MODEL: str = _env("CHAT_MODEL", "qwen2:0.5b")  # for context/query/metadata generation
 
 # Provider: "http" (Docker ML service) or "local" (load in-process)
 SPARSE_PROVIDER: str = _env("SPARSE_PROVIDER", "http")
 RERANK_PROVIDER: str = _env("RERANK_PROVIDER", "http")
-RERANK_MODEL: str = _env("RERANK_MODEL", "BAAI/bge-reranker-base")
-SPARSE_MODEL: str = _env("SPARSE_MODEL", "Qdrant/bm25")
 DENSE_DIM: int = _env_int("DENSE_DIM", 1024)
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
@@ -106,15 +112,15 @@ ENABLE_HYDE: bool = _env_bool("ENABLE_HYDE", False)
 ENABLE_MULTI_QUERY: bool = _env_bool("ENABLE_MULTI_QUERY", False)
 ENABLE_QUERY_REWRITE: bool = _env_bool("ENABLE_QUERY_REWRITE", False)
 
-HYDE_MODEL: str = _env("HYDE_MODEL", "")  # empty = use EMBED_MODEL
+HYDE_MODEL: str = _env("HYDE_MODEL", "")  # empty = use CHAT_MODEL
 MULTI_QUERY_COUNT: int = _env_int("MULTI_QUERY_COUNT", 3)
-MULTI_QUERY_MODEL: str = _env("MULTI_QUERY_MODEL", "")  # empty = use Ollama chat
-QUERY_REWRITE_MODEL: str = _env("QUERY_REWRITE_MODEL", "")
+MULTI_QUERY_MODEL: str = _env("MULTI_QUERY_MODEL", "")  # empty = use CHAT_MODEL
+QUERY_REWRITE_MODEL: str = _env("QUERY_REWRITE_MODEL", "")  # empty = use CHAT_MODEL
 
 # ── Contextual Retrieval ────────────────────────────────────────────────────
 ENABLE_CONTEXTUAL_RETRIEVAL: bool = _env_bool("ENABLE_CONTEXTUAL_RETRIEVAL", False)
 CONTEXT_STRATEGY: str = _env("CONTEXT_STRATEGY", "header")  # header | summary | surrounding
-CONTEXT_MODEL: str = _env("CONTEXT_MODEL", "")  # empty = use EMBED_MODEL
+CONTEXT_MODEL: str = _env("CONTEXT_MODEL", "")  # empty = use CHAT_MODEL
 CONTEXT_PREFIX_MAX_TOKENS: int = _env_int("CONTEXT_PREFIX_MAX_TOKENS", 50)
 CONTEXT_BATCH_SIZE: int = _env_int("CONTEXT_BATCH_SIZE", 10)
 
@@ -123,7 +129,6 @@ EMBED_BATCH_SIZE: int = _env_int("EMBED_BATCH_SIZE", 32)
 
 # ── Cache Settings ──────────────────────────────────────────────────────────
 ENABLE_CACHE: bool = _env_bool("ENABLE_CACHE", False)
-REDIS_URL: str = _env("REDIS_URL", "redis://localhost:6379/0")
 
 CACHE_TTL_EMBEDDING: int = _env_int("CACHE_TTL_EMBEDDING", 86400)  # 24h
 CACHE_TTL_SEARCH: int = _env_int("CACHE_TTL_SEARCH", 3600)  # 1h
@@ -140,7 +145,7 @@ ENABLE_DOC_CLASSIFICATION: bool = _env_bool("ENABLE_DOC_CLASSIFICATION", False)
 ENABLE_TOPIC_TAGGING: bool = _env_bool("ENABLE_TOPIC_TAGGING", False)
 ENABLE_LANGUAGE_DETECTION: bool = _env_bool("ENABLE_LANGUAGE_DETECTION", True)
 
-METADATA_MODEL: str = _env("METADATA_MODEL", "")  # empty = use EMBED_MODEL via Ollama
+METADATA_MODEL: str = _env("METADATA_MODEL", "")  # empty = use CHAT_MODEL
 MAX_ENTITIES_PER_CHUNK: int = _env_int("MAX_ENTITIES_PER_CHUNK", 10)
 MAX_TOPICS_PER_CHUNK: int = _env_int("MAX_TOPICS_PER_CHUNK", 5)
 

@@ -114,7 +114,7 @@ class QueryExpander:
     def _chat(self, prompt: str) -> str:
         """Call Ollama chat API and return the assistant message content."""
         chat_url = config.OLLAMA_EMBED_URL.replace("/api/embeddings", "/api/chat")
-        model = config.HYDE_MODEL or config.MULTI_QUERY_MODEL or config.QUERY_REWRITE_MODEL or config.EMBED_MODEL
+        model = config.HYDE_MODEL or config.MULTI_QUERY_MODEL or config.QUERY_REWRITE_MODEL or config.CHAT_MODEL
         resp = self._ollama.post(
             chat_url,
             json={
