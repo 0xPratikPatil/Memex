@@ -47,12 +47,8 @@ class CacheMetrics:
             "sets": self.sets,
             "invalidations": self.invalidations,
             "hit_rate": round(self.hit_rate, 4),
-            "avg_get_latency_ms": round(
-                self.total_get_latency_ms / max(self.hits + self.misses, 1), 2
-            ),
-            "avg_set_latency_ms": round(
-                self.total_set_latency_ms / max(self.sets, 1), 2
-            ),
+            "avg_get_latency_ms": round(self.total_get_latency_ms / max(self.hits + self.misses, 1), 2),
+            "avg_set_latency_ms": round(self.total_set_latency_ms / max(self.sets, 1), 2),
         }
 
 

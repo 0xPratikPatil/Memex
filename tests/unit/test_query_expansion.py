@@ -38,14 +38,8 @@ def mock_ollama() -> httpx.Client:
 
 @pytest.fixture
 def expander(mock_ollama: httpx.Client) -> QueryExpander:
-    """Return a QueryExpander with all features disabled by default."""
-    with patch.multiple(
-        config,
-        ENABLE_QUERY_REWRITE=False,
-        ENABLE_HYDE=False,
-        ENABLE_MULTI_QUERY=False,
-    ):
-        return QueryExpander(mock_ollama)
+    """Return a QueryExpander with mock client. Tests must patch config flags."""
+    return QueryExpander(mock_ollama)
 
 
 # ── ExpandedQuery dataclass ──────────────────────────────────────────────────
@@ -76,14 +70,25 @@ class TestExpandedQuery:
 
 class TestExpansionDisabled:
     def test_expand_returns_original_only(self, expander: QueryExpander) -> None:
-        result = expander.expand("hello world")
-        assert result.original == "hello world"
-        assert result.rewritten is None
-        assert result.hyde_vector is None
-        assert result.paraphrases is None
+        with patch.multiple(
+            config,
+            ENABLE_QUERY_REWRITE=False,
+            ENABLE_HYDE=False,
+            ENABLE_MULTI_QUERY=False,
+        ):
+            result = expander.expand("hello world")
+            assert result.original == "hello world"
+            assert result.rewritten is None
+            assert result.hyde_vector is None
+            assert result.paraphrases is None
 
     def test_expand_with_single_flag(self, expander: QueryExpander) -> None:
-        with patch.object(config, "ENABLE_QUERY_REWRITE", True):
+        with patch.multiple(
+            config,
+            ENABLE_QUERY_REWRITE=True,
+            ENABLE_HYDE=False,
+            ENABLE_MULTI_QUERY=False,
+        ):
             result = expander.expand("test")
             assert result.rewritten == "mocked response from the LLM"
             assert result.hyde_vector is None
@@ -95,15 +100,24 @@ class TestExpansionDisabled:
 
 class TestQueryRewrite:
     def test_rewrite_calls_chat(self, expander: QueryExpander) -> None:
-        with patch.object(config, "ENABLE_QUERY_REWRITE", True):
+        with patch.multiple(
+            config,
+            ENABLE_QUERY_REWRITE=True,
+            ENABLE_HYDE=False,
+            ENABLE_MULTI_QUERY=False,
+        ):
             result = expander.expand("rev")
             assert result.rewritten is not None
             assert len(result.rewritten) > 0
 
     def test_rewrite_prompt_contains_query(self, expander: QueryExpander) -> None:
-        with patch.object(config, "ENABLE_QUERY_REWRITE", True):
+        with patch.multiple(
+            config,
+            ENABLE_QUERY_REWRITE=True,
+            ENABLE_HYDE=False,
+            ENABLE_MULTI_QUERY=False,
+        ):
             expander.expand("my specific query")
-            # Verify the chat was called with a prompt containing the query
             call_args = expander._ollama.post.call_args
             assert call_args is not None
             prompt_content = call_args[1]["json"]["messages"][0]["content"]

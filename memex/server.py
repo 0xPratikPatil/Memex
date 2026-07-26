@@ -190,6 +190,7 @@ async def rag_ingest_file(file_path_or_url: str) -> str:
                 "content_hash": content_hash,
             },
             content_hash=content_hash,
+            docling_json=result.json_content or None,
             progress_cb=_progress,
         )
         return (
@@ -254,6 +255,7 @@ async def rag_ingest_url(url: str) -> str:
             source_identifier=url,
             metadata={},
             content_hash=content_hash,
+            docling_json=result.json_content or None,
         )
         return (
             f"Successfully ingested '{url}'. "
@@ -314,6 +316,7 @@ async def rag_ingest_batch(items: list[str]) -> dict[str, str]:
                 source_identifier=item,
                 metadata={"content_type": item.rsplit(".", 1)[-1] if "." in item else ""},
                 content_hash=content_hash,
+                docling_json=result.json_content or None,
             )
             summary[item] = f"Success ({count} chunks, {result.processing_time:.1f}s conversion)"
         except Exception as exc:

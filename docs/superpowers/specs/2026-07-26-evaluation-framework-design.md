@@ -143,9 +143,7 @@ def hit_at_k(retrieved_sources: list[str], expected_sources: list[str], k: int =
     return 1.0 if any(s in top_k for s in expected_sources) else 0.0
 
 
-def mean_reciprocal_rank(
-    retrieved_sources: list[str], expected_sources: list[str]
-) -> float:
+def mean_reciprocal_rank(retrieved_sources: list[str], expected_sources: list[str]) -> float:
     """Reciprocal rank of first relevant result, averaged over queries."""
     for i, source in enumerate(retrieved_sources):
         if source in expected_sources:
@@ -159,6 +157,7 @@ def ndcg_at_k(
     k: int = 10,
 ) -> float:
     """Normalized Discounted Cumulative Gain at K."""
+
     def dcg(scores: list[float]) -> float:
         return sum(s / math.log2(i + 2) for i, s in enumerate(scores))
 
@@ -189,9 +188,7 @@ def recall_at_k(retrieved_sources: list[str], expected_sources: list[str], k: in
     return found / len(expected_sources) if expected_sources else 0.0
 
 
-def keyword_coverage(
-    retrieved_content: str, expected_keywords: list[str]
-) -> float:
+def keyword_coverage(retrieved_content: str, expected_keywords: list[str]) -> float:
     """Fraction of expected keywords found in retrieved content."""
     if not expected_keywords:
         return 1.0
@@ -346,12 +343,14 @@ class EvalDataset:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """Add a query to the dataset."""
-        self.queries.append({
-            "query": query,
-            "expected_sources": expected_sources,
-            "expected_content_keywords": expected_keywords or [],
-            "metadata": metadata or {},
-        })
+        self.queries.append(
+            {
+                "query": query,
+                "expected_sources": expected_sources,
+                "expected_content_keywords": expected_keywords or [],
+                "metadata": metadata or {},
+            }
+        )
 
     def save(self) -> None:
         """Save dataset to JSONL."""

@@ -28,9 +28,7 @@ class TestCacheIntegration:
         import rag.services.cache as cache_mod
 
         try:
-            self._redis_client = redis.Redis(
-                host="localhost", port=6379, socket_connect_timeout=2
-            )
+            self._redis_client = redis.Redis(host="localhost", port=6379, socket_connect_timeout=2)
             self._redis_client.ping()
         except Exception:
             pytest.skip("Redis not available")

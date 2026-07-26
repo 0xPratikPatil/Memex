@@ -13,6 +13,7 @@ from pathlib import Path
 # ── Auto-load .env ──────────────────────────────────────────────────────────
 try:
     from dotenv import load_dotenv
+
     _env_file = Path(__file__).resolve().parent.parent / ".env"
     if _env_file.exists():
         load_dotenv(_env_file, override=False)  # don't override existing env vars
@@ -21,25 +22,35 @@ except ImportError:
 
 
 def _env(key: str, default: str) -> str:
-    return os.getenv(key, default)
+    val = os.getenv(key, default)
+    if val:
+        val = val.split("#", 1)[0].rstrip()
+    return val or default
 
 
 def _env_int(key: str, default: int) -> int:
     try:
-        return int(os.getenv(key, str(default)))  # type: ignore[return-value]
+        val = os.getenv(key, str(default))
+        if val:
+            val = val.split("#", 1)[0].strip()
+        return int(val)  # type: ignore[return-value]
     except (TypeError, ValueError):
         return default
 
 
 def _env_float(key: str, default: float) -> float:
     try:
-        return float(os.getenv(key, str(default)))  # type: ignore[return-value]
+        val = os.getenv(key, str(default))
+        if val:
+            val = val.split("#", 1)[0].strip()
+        return float(val)  # type: ignore[return-value]
     except (TypeError, ValueError):
         return default
 
 
 def _env_bool(key: str, default: bool) -> bool:
     val = os.getenv(key, str(default)).lower()
+    val = val.split("#", 1)[0].strip()
     return val in ("1", "true", "yes")
 
 
@@ -75,10 +86,13 @@ RERANK_PROVIDER: str = _env("RERANK_PROVIDER", "http")
 DENSE_DIM: int = _env_int("DENSE_DIM", 1024)
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
-CHUNK_SIZE: int = _env_int("CHUNK_SIZE", 512)  # tokens (target)
-CHUNK_OVERLAP: int = _env_int("CHUNK_OVERLAP", 50)  # tokens (overlap)
-MIN_CHUNK_LEN: int = _env_int("MIN_CHUNK_LEN", 30)  # min chars to keep
-CHUNK_STRATEGY: str = _env("CHUNK_STRATEGY", "recursive")  # recursive | paragraph | fixed
+CHUNK_SIZE: int = _env_int("CHUNK_SIZE", 1024)
+CHUNK_OVERLAP: int = _env_int("CHUNK_OVERLAP", 128)
+MIN_CHUNK_LEN: int = _env_int("MIN_CHUNK_LEN", 30)
+CHUNK_STRATEGY: str = _env("CHUNK_STRATEGY", "hybrid")
+CHUNK_MERGE_PEERS: bool = _env_bool("CHUNK_MERGE_PEERS", True)
+CHUNK_REPEAT_TABLE_HEADER: bool = _env_bool("CHUNK_REPEAT_TABLE_HEADER", True)
+CHUNK_TYPE_FORMAT: bool = _env_bool("CHUNK_TYPE_FORMAT", True)
 
 # ── HTTP client settings ──────────────────────────────────────────────────────
 HTTP_TIMEOUT: float = _env_float("HTTP_TIMEOUT", 60.0)  # seconds per request
@@ -93,7 +107,7 @@ QDRANT_MAX_RETRIES: int = _env_int("QDRANT_MAX_RETRIES", 3)
 # ── Search settings ──────────────────────────────────────────────────────────
 SEARCH_FUSION: str = _env("SEARCH_FUSION", "rrf")  # rrf | weighted
 RERANK_ENABLED: bool = _env_bool("RERANK_ENABLED", True)
-SEARCH_TOP_K: int = _env_int("SEARCH_TOP_K", 20)  # candidates before rerank
+SEARCH_TOP_K: int = _env_int("SEARCH_TOP_K", 30)
 
 # ── MCP server settings ───────────────────────────────────────────────────────
 MCP_HOST: str = _env("MCP_HOST", "0.0.0.0")
@@ -105,11 +119,19 @@ CHARACTER_LIMIT: int = _env_int("CHARACTER_LIMIT", 25000)
 ENABLE_OCR: bool = _env_bool("ENABLE_OCR", True)
 ENABLE_RERANKING: bool = _env_bool("ENABLE_RERANKING", True)
 
+# ── Docling enrichment ───────────────────────────────────────────────────────
+DOCLING_ENRICH_CODE: bool = _env_bool("DOCLING_ENRICH_CODE", False)  # needs CodeFormula model in serve
+DOCLING_ENRICH_FORMULA: bool = _env_bool("DOCLING_ENRICH_FORMULA", False)  # needs CodeFormula model in serve
+DOCLING_PICTURE_CLASSIFY: bool = _env_bool("DOCLING_PICTURE_CLASSIFY", True)
+DOCLING_CHART_EXTRACT: bool = _env_bool("DOCLING_CHART_EXTRACT", False)  # needs chart model in serve
+DOCLING_IMAGE_EXPORT: str = _env("DOCLING_IMAGE_EXPORT", "embedded")
+DOCLING_PDF_BACKEND: str = _env("DOCLING_PDF_BACKEND", "")
+
 # ── Query Expansion ──────────────────────────────────────────────────────────
-ENABLE_QUERY_EXPANSION: bool = _env_bool("ENABLE_QUERY_EXPANSION", False)
-ENABLE_HYDE: bool = _env_bool("ENABLE_HYDE", False)
-ENABLE_MULTI_QUERY: bool = _env_bool("ENABLE_MULTI_QUERY", False)
-ENABLE_QUERY_REWRITE: bool = _env_bool("ENABLE_QUERY_REWRITE", False)
+ENABLE_QUERY_EXPANSION: bool = _env_bool("ENABLE_QUERY_EXPANSION", True)
+ENABLE_HYDE: bool = _env_bool("ENABLE_HYDE", True)
+ENABLE_MULTI_QUERY: bool = _env_bool("ENABLE_MULTI_QUERY", True)
+ENABLE_QUERY_REWRITE: bool = _env_bool("ENABLE_QUERY_REWRITE", True)
 
 HYDE_MODEL: str = _env("HYDE_MODEL", "")  # empty = use CHAT_MODEL
 MULTI_QUERY_COUNT: int = _env_int("MULTI_QUERY_COUNT", 3)
@@ -117,17 +139,17 @@ MULTI_QUERY_MODEL: str = _env("MULTI_QUERY_MODEL", "")  # empty = use CHAT_MODEL
 QUERY_REWRITE_MODEL: str = _env("QUERY_REWRITE_MODEL", "")  # empty = use CHAT_MODEL
 
 # ── Contextual Retrieval ────────────────────────────────────────────────────
-ENABLE_CONTEXTUAL_RETRIEVAL: bool = _env_bool("ENABLE_CONTEXTUAL_RETRIEVAL", False)
-CONTEXT_STRATEGY: str = _env("CONTEXT_STRATEGY", "header")  # header | summary | surrounding
+ENABLE_CONTEXTUAL_RETRIEVAL: bool = _env_bool("ENABLE_CONTEXTUAL_RETRIEVAL", True)
+CONTEXT_STRATEGY: str = _env("CONTEXT_STRATEGY", "summary")
 CONTEXT_MODEL: str = _env("CONTEXT_MODEL", "")  # empty = use CHAT_MODEL
 CONTEXT_PREFIX_MAX_TOKENS: int = _env_int("CONTEXT_PREFIX_MAX_TOKENS", 50)
 CONTEXT_BATCH_SIZE: int = _env_int("CONTEXT_BATCH_SIZE", 10)
 
 # ── Embedding batch size ─────────────────────────────────────────────────────
-EMBED_BATCH_SIZE: int = _env_int("EMBED_BATCH_SIZE", 32)
+EMBED_BATCH_SIZE: int = _env_int("EMBED_BATCH_SIZE", 64)
 
 # ── Cache Settings ──────────────────────────────────────────────────────────
-ENABLE_CACHE: bool = _env_bool("ENABLE_CACHE", False)
+ENABLE_CACHE: bool = _env_bool("ENABLE_CACHE", True)
 
 CACHE_TTL_EMBEDDING: int = _env_int("CACHE_TTL_EMBEDDING", 86400)  # 24h
 CACHE_TTL_SEARCH: int = _env_int("CACHE_TTL_SEARCH", 3600)  # 1h
@@ -138,10 +160,10 @@ CACHE_MAX_MEMORY_MB: int = _env_int("CACHE_MAX_MEMORY_MB", 256)
 CACHE_EVICTION_POLICY: str = _env("CACHE_EVICTION_POLICY", "allkeys-lru")
 
 # ── Metadata Enhancement ──────────────────────────────────────────────────────
-ENABLE_METADATA_EXTRACTION: bool = _env_bool("ENABLE_METADATA_EXTRACTION", False)
-ENABLE_ENTITY_EXTRACTION: bool = _env_bool("ENABLE_ENTITY_EXTRACTION", False)
-ENABLE_DOC_CLASSIFICATION: bool = _env_bool("ENABLE_DOC_CLASSIFICATION", False)
-ENABLE_TOPIC_TAGGING: bool = _env_bool("ENABLE_TOPIC_TAGGING", False)
+ENABLE_METADATA_EXTRACTION: bool = _env_bool("ENABLE_METADATA_EXTRACTION", True)
+ENABLE_ENTITY_EXTRACTION: bool = _env_bool("ENABLE_ENTITY_EXTRACTION", True)
+ENABLE_DOC_CLASSIFICATION: bool = _env_bool("ENABLE_DOC_CLASSIFICATION", True)
+ENABLE_TOPIC_TAGGING: bool = _env_bool("ENABLE_TOPIC_TAGGING", True)
 ENABLE_LANGUAGE_DETECTION: bool = _env_bool("ENABLE_LANGUAGE_DETECTION", True)
 
 METADATA_MODEL: str = _env("METADATA_MODEL", "")  # empty = use CHAT_MODEL

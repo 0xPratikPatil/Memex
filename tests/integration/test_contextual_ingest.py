@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import httpx
 import pytest
 
@@ -56,11 +58,12 @@ class TestGenerateDocumentSummary:
 @pytest.mark.integration
 class TestGenerateContextHeader:
     def test_header_returns_context_string(self, context_generator: ContextGenerator) -> None:
-        ctx = context_generator.generate_context(
-            chunk="Revenue grew 20% YoY.",
-            section_header="## Q3 Financial Results",
-        )
-        assert ctx == "[Context: ## Q3 Financial Results]"
+        with patch.object(config, "CONTEXT_STRATEGY", "header"):
+            ctx = context_generator.generate_context(
+                chunk="Revenue grew 20% YoY.",
+                section_header="## Q3 Financial Results",
+            )
+            assert ctx == "[Context: ## Q3 Financial Results]"
 
     def test_empty_header_returns_empty(self, context_generator: ContextGenerator) -> None:
         ctx = context_generator.generate_context(
@@ -75,18 +78,17 @@ class TestGenerateContextHeader:
 
 @pytest.mark.integration
 class TestEnrichChunks:
-    def test_adds_context_prefix_and_modifies_content(
-        self, context_generator: ContextGenerator
-    ) -> None:
+    def test_adds_context_prefix_and_modifies_content(self, context_generator: ContextGenerator) -> None:
         chunks = [
             {"content": "Introduction to the system.", "section_header": "## Overview"},
             {"content": "Technical architecture details.", "section_header": "## Architecture"},
         ]
-        enriched = context_generator.enrich_chunks(chunks)
-        assert len(enriched) == 2
-        assert enriched[0]["context_prefix"] == "[Context: ## Overview]"
-        assert enriched[0]["content"].startswith("[Context: ## Overview]")
-        assert enriched[1]["context_prefix"] == "[Context: ## Architecture]"
+        with patch.object(config, "CONTEXT_STRATEGY", "header"):
+            enriched = context_generator.enrich_chunks(chunks)
+            assert len(enriched) == 2
+            assert enriched[0]["context_prefix"] == "[Context: ## Overview]"
+            assert enriched[0]["content"].startswith("[Context: ## Overview]")
+            assert enriched[1]["context_prefix"] == "[Context: ## Architecture]"
 
     def test_empty_list(self, context_generator: ContextGenerator) -> None:
         assert context_generator.enrich_chunks([]) == []

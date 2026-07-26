@@ -186,7 +186,7 @@ class MetadataExtractor:
             response = self._chat(prompt)
             entities = json.loads(response)
             # Limit entity count
-            return {k: v[:config.MAX_ENTITIES_PER_CHUNK] for k, v in entities.items()}
+            return {k: v[: config.MAX_ENTITIES_PER_CHUNK] for k, v in entities.items()}
         except (json.JSONDecodeError, Exception) as exc:
             logger.debug("Entity extraction failed: %s", exc)
             return {}
@@ -216,7 +216,7 @@ class MetadataExtractor:
         try:
             response = self._chat(prompt)
             topics = json.loads(response)
-            return topics[:config.MAX_TOPICS_PER_CHUNK]
+            return topics[: config.MAX_TOPICS_PER_CHUNK]
         except (json.JSONDecodeError, Exception) as exc:
             logger.debug("Topic extraction failed: %s", exc)
             return []
@@ -226,6 +226,7 @@ class MetadataExtractor:
         try:
             if self._lang_detector is None:
                 from langdetect import detect
+
                 self._lang_detector = detect
             return self._lang_detector(text[:500])
         except Exception:
@@ -290,6 +291,7 @@ def ingest_text(self, text, source_identifier, metadata=None, content_hash="", p
     # NEW: Metadata extraction
     if config.ENABLE_METADATA_EXTRACTION:
         from src.metadata_extractor import MetadataExtractor
+
         extractor = MetadataExtractor(self._get_ollama())
 
         _progress("Extracting metadata...", 73)
@@ -333,20 +335,14 @@ def hybrid_search(
     # Build filter conditions
     filter_conditions = []
     if source_filter:
-        filter_conditions.append(
-            FieldCondition(key="source", match=MatchValue(value=source_filter))
-        )
+        filter_conditions.append(FieldCondition(key="source", match=MatchValue(value=source_filter)))
     if metadata_filter:
         for key, value in metadata_filter.items():
             if isinstance(value, list):
                 # Multi-value match
-                filter_conditions.append(
-                    FieldCondition(key=f"metadata.{key}", match=MatchAny(values=value))
-                )
+                filter_conditions.append(FieldCondition(key=f"metadata.{key}", match=MatchAny(values=value)))
             else:
-                filter_conditions.append(
-                    FieldCondition(key=f"metadata.{key}", match=MatchValue(value=value))
-                )
+                filter_conditions.append(FieldCondition(key=f"metadata.{key}", match=MatchValue(value=value)))
 
     qdrant_filter = Filter(must=filter_conditions) if filter_conditions else None
     # ... rest of search logic

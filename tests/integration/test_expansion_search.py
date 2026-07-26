@@ -21,7 +21,6 @@ def _check_ollama(host: str = "localhost", port: int = 11434) -> bool:
 
 @pytest.mark.integration
 class TestQueryExpanderIntegration:
-
     @pytest.fixture(autouse=True)
     def _skip_if_no_ollama(self) -> None:
         if not _check_ollama():

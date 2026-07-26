@@ -119,6 +119,7 @@ from . import config
 
 logger = logging.getLogger("contextual-retrieval")
 
+
 class ContextGenerator:
     """Generates contextual prefixes for document chunks."""
 
@@ -186,7 +187,8 @@ class ContextGenerator:
         prompt = (
             "Given the surrounding content of a text chunk, write a short contextual "
             "prefix (under 30 words) that situates the chunk. Only output the prefix.\n\n"
-            + "\n".join(context_parts) + f"\n\nChunk: {chunk[:300]}"
+            + "\n".join(context_parts)
+            + f"\n\nChunk: {chunk[:300]}"
         )
         response = self._chat(prompt)
         return f"[Context: {response.strip()}]"
@@ -246,6 +248,7 @@ def ingest_text(self, text, source_identifier, metadata=None, content_hash="", p
     # NEW: Contextual retrieval
     if config.ENABLE_CONTEXTUAL_RETRIEVAL:
         from src.contextual_retrieval import ContextGenerator
+
         ctx_gen = ContextGenerator(self._get_ollama())
 
         _progress("Generating document context...", 72)
@@ -283,6 +286,7 @@ The context prefix is embedded in the content, so it naturally improves dense re
 def strip_context_prefix(content: str) -> str:
     """Remove [Context: ...] prefix from content for clean display."""
     import re
+
     return re.sub(r"^\[Context:.*?\]\s*", "", content)
 ```
 

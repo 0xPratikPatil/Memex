@@ -36,13 +36,15 @@ def mock_ollama() -> httpx.Client:
                 resp.json.return_value = {
                     "message": {
                         "role": "assistant",
-                        "content": json.dumps({
-                            "people": ["Alice Smith"],
-                            "organizations": ["Acme Corp"],
-                            "dates": ["2026-01-15"],
-                            "locations": ["New York"],
-                            "products": ["Widget Pro"],
-                        }),
+                        "content": json.dumps(
+                            {
+                                "people": ["Alice Smith"],
+                                "organizations": ["Acme Corp"],
+                                "dates": ["2026-01-15"],
+                                "locations": ["New York"],
+                                "products": ["Widget Pro"],
+                            }
+                        ),
                     }
                 }
             elif "topic labels" in msg_content:
@@ -92,20 +94,12 @@ def minimal_extractor() -> MetadataExtractor:
 
 
 class TestEntityExtraction:
-    def test_extract_entities_returns_dict(
-        self, extractor: MetadataExtractor
-    ) -> None:
-        entities = extractor.extract_entities(
-            "Alice Smith from Acme Corp reported revenue of $10M."
-        )
+    def test_extract_entities_returns_dict(self, extractor: MetadataExtractor) -> None:
+        entities = extractor.extract_entities("Alice Smith from Acme Corp reported revenue of $10M.")
         assert isinstance(entities, dict)
 
-    def test_extract_entities_returns_expected_keys(
-        self, extractor: MetadataExtractor
-    ) -> None:
-        entities = extractor.extract_entities(
-            "Alice Smith from Acme Corp reported revenue of $10M."
-        )
+    def test_extract_entities_returns_expected_keys(self, extractor: MetadataExtractor) -> None:
+        entities = extractor.extract_entities("Alice Smith from Acme Corp reported revenue of $10M.")
         # All five entity types should be present
         for key in ("people", "organizations", "dates", "locations", "products"):
             assert key in entities
@@ -143,25 +137,26 @@ class TestEntityExtraction:
 
 
 class TestDocumentClassification:
-    def test_classify_returns_string(
-        self, extractor: MetadataExtractor
-    ) -> None:
-        doc_type = extractor.classify_document(
-            "This quarterly report presents financial results for Q3 2026."
-        )
+    def test_classify_returns_string(self, extractor: MetadataExtractor) -> None:
+        doc_type = extractor.classify_document("This quarterly report presents financial results for Q3 2026.")
         assert isinstance(doc_type, str)
 
-    def test_classify_returns_valid_type(
-        self, extractor: MetadataExtractor
-    ) -> None:
+    def test_classify_returns_valid_type(self, extractor: MetadataExtractor) -> None:
         valid = {
-            "report", "email", "article", "code", "documentation",
-            "presentation", "resume", "contract", "invoice",
-            "meeting_notes", "other", "unknown",
+            "report",
+            "email",
+            "article",
+            "code",
+            "documentation",
+            "presentation",
+            "resume",
+            "contract",
+            "invoice",
+            "meeting_notes",
+            "other",
+            "unknown",
         }
-        doc_type = extractor.classify_document(
-            "This quarterly report presents financial results."
-        )
+        doc_type = extractor.classify_document("This quarterly report presents financial results.")
         assert doc_type in valid
 
     def test_classify_no_client_returns_unknown(self) -> None:
@@ -188,20 +183,12 @@ class TestDocumentClassification:
 
 
 class TestTopicExtraction:
-    def test_extract_topics_returns_list(
-        self, extractor: MetadataExtractor
-    ) -> None:
-        topics = extractor.extract_topics(
-            "This document covers quarterly financial analysis and revenue forecasting."
-        )
+    def test_extract_topics_returns_list(self, extractor: MetadataExtractor) -> None:
+        topics = extractor.extract_topics("This document covers quarterly financial analysis and revenue forecasting.")
         assert isinstance(topics, list)
 
-    def test_extract_topics_limits_count(
-        self, extractor: MetadataExtractor
-    ) -> None:
-        topics = extractor.extract_topics(
-            "This document covers quarterly financial analysis and revenue forecasting."
-        )
+    def test_extract_topics_limits_count(self, extractor: MetadataExtractor) -> None:
+        topics = extractor.extract_topics("This document covers quarterly financial analysis and revenue forecasting.")
         assert len(topics) <= config.MAX_TOPICS_PER_CHUNK
 
     def test_extract_topics_no_client_returns_empty(self) -> None:
@@ -222,20 +209,12 @@ class TestTopicExtraction:
 
 
 class TestLanguageDetection:
-    def test_detect_language_returns_string(
-        self, extractor: MetadataExtractor
-    ) -> None:
-        lang = extractor.detect_language(
-            "This is a test document in English with enough words for detection."
-        )
+    def test_detect_language_returns_string(self, extractor: MetadataExtractor) -> None:
+        lang = extractor.detect_language("This is a test document in English with enough words for detection.")
         assert isinstance(lang, str)
 
-    def test_detect_language_returns_iso_code(
-        self, extractor: MetadataExtractor
-    ) -> None:
-        lang = extractor.detect_language(
-            "This is a test document in English with enough words for detection."
-        )
+    def test_detect_language_returns_iso_code(self, extractor: MetadataExtractor) -> None:
+        lang = extractor.detect_language("This is a test document in English with enough words for detection.")
         # Should be a 2-letter code or empty
         assert len(lang) <= 3
 
@@ -250,9 +229,7 @@ class TestLanguageDetection:
     def test_detect_language_handles_import_error(self) -> None:
         ext = MetadataExtractor(None)
         with patch.dict("sys.modules", {"langdetect": None}):
-            lang = ext.detect_language(
-                "This is a test document with enough text for detection."
-            )
+            lang = ext.detect_language("This is a test document with enough text for detection.")
             assert lang == ""
 
 
@@ -261,9 +238,7 @@ class TestLanguageDetection:
 
 class TestDateExtraction:
     def test_extract_dates_returns_list(self, extractor: MetadataExtractor) -> None:
-        dates = extractor.extract_dates(
-            "Report published on 2026-01-15 and updated on March 5, 2026."
-        )
+        dates = extractor.extract_dates("Report published on 2026-01-15 and updated on March 5, 2026.")
         assert isinstance(dates, list)
 
     def test_extract_dates_finds_iso_dates(self) -> None:
@@ -301,9 +276,7 @@ class TestDateExtraction:
 
 
 class TestKeywordExtraction:
-    def test_extract_keywords_returns_list(
-        self, extractor: MetadataExtractor
-    ) -> None:
+    def test_extract_keywords_returns_list(self, extractor: MetadataExtractor) -> None:
         keywords = extractor.extract_keywords(
             "Revenue analysis shows significant growth in quarterly financial reports."
         )
@@ -311,41 +284,31 @@ class TestKeywordExtraction:
 
     def test_extract_keywords_returns_lowercase(self) -> None:
         ext = MetadataExtractor(None)
-        keywords = ext.extract_keywords(
-            "Revenue ANALYSIS shows significant growth in QUARTERLY financial reports."
-        )
+        keywords = ext.extract_keywords("Revenue ANALYSIS shows significant growth in QUARTERLY financial reports.")
         for kw in keywords:
             assert kw == kw.lower()
 
     def test_extract_keywords_finds_relevant_words(self) -> None:
         ext = MetadataExtractor(None)
-        keywords = ext.extract_keywords(
-            "Revenue analysis shows significant growth in quarterly financial reports."
-        )
+        keywords = ext.extract_keywords("Revenue analysis shows significant growth in quarterly financial reports.")
         assert "revenue" in keywords or "analysis" in keywords
 
     def test_extract_keywords_filters_stopwords(self) -> None:
         ext = MetadataExtractor(None)
-        keywords = ext.extract_keywords(
-            "This is the analysis that shows growth and revenue."
-        )
+        keywords = ext.extract_keywords("This is the analysis that shows growth and revenue.")
         # Common stopwords should be filtered
         assert "this" not in keywords
         assert "that" not in keywords
 
     def test_extract_keywords_limits_to_ten(self) -> None:
         ext = MetadataExtractor(None)
-        long_text = " ".join(
-            f"word{i!s} " * 3 for i in range(20)
-        )
+        long_text = " ".join(f"word{i!s} " * 3 for i in range(20))
         keywords = ext.extract_keywords(long_text)
         assert len(keywords) <= 10
 
     def test_extract_keywords_handles_code_blocks(self) -> None:
         ext = MetadataExtractor(None)
-        keywords = ext.extract_keywords(
-            "Revenue analysis ```def foo(): pass``` shows growth."
-        )
+        keywords = ext.extract_keywords("Revenue analysis ```def foo(): pass``` shows growth.")
         assert isinstance(keywords, list)
 
 
@@ -425,9 +388,7 @@ class TestStructuralMetadata:
 
 
 class TestExtractAll:
-    def test_extract_all_merges_metadata(
-        self, extractor: MetadataExtractor
-    ) -> None:
+    def test_extract_all_merges_metadata(self, extractor: MetadataExtractor) -> None:
         chunk = {
             "content": "Alice Smith from Acme Corp reported revenue of $10M on 2026-01-15.",
             "section_header": "## Revenue",
@@ -461,9 +422,7 @@ class TestExtractAll:
             # Structural and keywords always run
             assert "structural" in metadata
 
-    def test_extract_all_first_chunk_gets_doc_type(
-        self, extractor: MetadataExtractor
-    ) -> None:
+    def test_extract_all_first_chunk_gets_doc_type(self, extractor: MetadataExtractor) -> None:
         chunk = {
             "content": "This is a quarterly report about financial results.",
             "section_header": "",
@@ -476,9 +435,7 @@ class TestExtractAll:
         )
         assert "doc_type" in metadata
 
-    def test_extract_all_non_first_chunk_skips_doc_type(
-        self, extractor: MetadataExtractor
-    ) -> None:
+    def test_extract_all_non_first_chunk_skips_doc_type(self, extractor: MetadataExtractor) -> None:
         chunk = {
             "content": "This section discusses revenue.",
             "section_header": "## Revenue",

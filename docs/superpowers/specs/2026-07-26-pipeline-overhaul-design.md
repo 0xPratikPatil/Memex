@@ -197,6 +197,7 @@ def _build_options() -> dict[str, Any]:
 from docling_core.transforms.chunker import HybridChunker
 from docling_core.transforms.chunker.base import BaseChunk
 
+
 def chunk_docling_document(
     docling_json: dict[str, Any],
     chunk_size: int = 1024,
@@ -204,8 +205,7 @@ def chunk_docling_document(
     merge_peers: bool = True,
     repeat_table_header: bool = True,
     tokenizer_name: str = "BAAI/bge-m3",
-) -> list[dict[str, Any]]:
-    ...
+) -> list[dict[str, Any]]: ...
 ```
 
 **Design decisions**:

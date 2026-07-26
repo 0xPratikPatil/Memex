@@ -116,13 +116,16 @@ from typing import Any
 import httpx
 from . import config
 
+
 @dataclass
 class ExpandedQuery:
     """Result of query expansion."""
+
     original: str
-    rewritten: str | None = None          # after rewrite
-    hyde_vector: list[float] | None = None # hypothetical doc embedding
-    paraphrases: list[str] | None = None   # multi-query paraphrases
+    rewritten: str | None = None  # after rewrite
+    hyde_vector: list[float] | None = None  # hypothetical doc embedding
+    paraphrases: list[str] | None = None  # multi-query paraphrases
+
 
 class QueryExpander:
     """Orchestrates query expansion techniques."""
@@ -148,27 +151,33 @@ class QueryExpander:
 
     def _rewrite(self, query: str) -> str:
         """Rewrite query using LLM to expand abbreviations, fix phrasing."""
-        prompt = f"Rewrite this search query to be more specific and clear. " \
-                 f"Keep it under 50 words. Only output the rewritten query.\n\n" \
-                 f"Query: {query}"
+        prompt = (
+            f"Rewrite this search query to be more specific and clear. "
+            f"Keep it under 50 words. Only output the rewritten query.\n\n"
+            f"Query: {query}"
+        )
         return self._chat(prompt)
 
     def _hyde_embed(self, query: str) -> list[float]:
         """Generate hypothetical document and return its embedding."""
-        prompt = f"Write a short paragraph that would be a perfect answer to this query. " \
-                 f"Be factual and specific. 3-5 sentences.\n\n" \
-                 f"Query: {query}"
+        prompt = (
+            f"Write a short paragraph that would be a perfect answer to this query. "
+            f"Be factual and specific. 3-5 sentences.\n\n"
+            f"Query: {query}"
+        )
         hypothetical = self._chat(prompt)
         return self._embed(hypothetical)
 
     def _multi_query(self, query: str) -> list[str]:
         """Generate N paraphrases of the query."""
-        prompt = f"Generate {config.MULTI_QUERY_COUNT} diverse paraphrases of this search query. " \
-                 f"Each on a new line. Only the paraphrases, no numbering.\n\n" \
-                 f"Query: {query}"
+        prompt = (
+            f"Generate {config.MULTI_QUERY_COUNT} diverse paraphrases of this search query. "
+            f"Each on a new line. Only the paraphrases, no numbering.\n\n"
+            f"Query: {query}"
+        )
         response = self._chat(prompt)
         lines = [l.strip() for l in response.strip().split("\n") if l.strip()]
-        return lines[:config.MULTI_QUERY_COUNT]
+        return lines[: config.MULTI_QUERY_COUNT]
 
     def _chat(self, prompt: str) -> str:
         """Call Ollama chat API."""

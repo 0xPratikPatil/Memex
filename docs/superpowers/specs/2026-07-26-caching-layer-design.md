@@ -125,10 +125,10 @@ Return results
 ENABLE_CACHE: bool = _env_bool("ENABLE_CACHE", False)
 REDIS_URL: str = _env("REDIS_URL", "redis://localhost:6379/0")
 
-CACHE_TTL_EMBEDDING: int = _env_int("CACHE_TTL_EMBEDDING", 86400)     # 24h
-CACHE_TTL_SEARCH: int = _env_int("CACHE_TTL_SEARCH", 3600)            # 1h
-CACHE_TTL_PARSE: int = _env_int("CACHE_TTL_PARSE", 604800)            # 7d
-CACHE_TTL_EXPANSION: int = _env_int("CACHE_TTL_EXPANSION", 21600)     # 6h
+CACHE_TTL_EMBEDDING: int = _env_int("CACHE_TTL_EMBEDDING", 86400)  # 24h
+CACHE_TTL_SEARCH: int = _env_int("CACHE_TTL_SEARCH", 3600)  # 1h
+CACHE_TTL_PARSE: int = _env_int("CACHE_TTL_PARSE", 604800)  # 7d
+CACHE_TTL_EXPANSION: int = _env_int("CACHE_TTL_EXPANSION", 21600)  # 6h
 
 CACHE_MAX_MEMORY_MB: int = _env_int("CACHE_MAX_MEMORY_MB", 256)
 CACHE_EVICTION_POLICY: str = _env("CACHE_EVICTION_POLICY", "allkeys-lru")
@@ -159,6 +159,7 @@ def _get_redis():
     if _redis is None:
         try:
             import redis
+
             _redis = redis.Redis.from_url(
                 config.REDIS_URL,
                 decode_responses=True,
@@ -334,12 +335,15 @@ def parse_file(file_path_or_url: str) -> ConversionResult:
     result = parse_url(file_path_or_url) if is_url else parse_local_file(file_path_or_url)
 
     # Cache serialized result
-    cache_parse_result(file_hash, {
-        "markdown": result.markdown,
-        "status": result.status,
-        "processing_time": result.processing_time,
-        "errors": result.errors,
-    })
+    cache_parse_result(
+        file_hash,
+        {
+            "markdown": result.markdown,
+            "status": result.status,
+            "processing_time": result.processing_time,
+            "errors": result.errors,
+        },
+    )
     return result
 ```
 

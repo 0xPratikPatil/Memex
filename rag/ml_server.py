@@ -100,7 +100,7 @@ def rerank(req: RerankRequest):
     scores = _reranker.predict(pairs)
     # Sort by score descending
     indexed = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
-    top = indexed[:req.top_k]
+    top = indexed[: req.top_k]
     return RerankResponse(
         scores=[float(s) for _, s in top],
         indices=[int(i) for i, _ in top],

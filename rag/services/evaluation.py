@@ -32,9 +32,7 @@ def hit_at_k(retrieved_sources: list[str], expected_sources: list[str], k: int =
     return 1.0 if any(s in top_k for s in expected_sources) else 0.0
 
 
-def mean_reciprocal_rank(
-    retrieved_sources: list[str], expected_sources: list[str]
-) -> float:
+def mean_reciprocal_rank(retrieved_sources: list[str], expected_sources: list[str]) -> float:
     """Reciprocal rank of the first relevant result."""
     for i, source in enumerate(retrieved_sources):
         if source in expected_sources:
@@ -59,18 +57,14 @@ def ndcg_at_k(
     return actual_dcg / ideal_dcg if ideal_dcg > 0 else 0.0
 
 
-def precision_at_k(
-    retrieved_sources: list[str], expected_sources: list[str], k: int = 5
-) -> float:
+def precision_at_k(retrieved_sources: list[str], expected_sources: list[str], k: int = 5) -> float:
     """Fraction of top-K results that are relevant."""
     top_k = retrieved_sources[:k]
     relevant = sum(1 for s in top_k if s in expected_sources)
     return relevant / k if k > 0 else 0.0
 
 
-def recall_at_k(
-    retrieved_sources: list[str], expected_sources: list[str], k: int = 10
-) -> float:
+def recall_at_k(retrieved_sources: list[str], expected_sources: list[str], k: int = 10) -> float:
     """Fraction of expected sources found in top-K results."""
     top_k = retrieved_sources[:k]
     found = sum(1 for s in expected_sources if s in top_k)
@@ -467,8 +461,7 @@ class EvalRunner:
             )
         query_metrics["results_count"] = len(results)
         query_metrics["results"] = [
-            {"source": r.get("source", ""), "rrf_score": r.get("rrf_score", 0.0)}
-            for r in results
+            {"source": r.get("source", ""), "rrf_score": r.get("rrf_score", 0.0)} for r in results
         ]
         return query_metrics
 
@@ -505,9 +498,7 @@ class EvalRunner:
         if not all_metrics:
             return {}
 
-        numeric_keys = [
-            k for k in all_metrics[0] if k != "query" and isinstance(all_metrics[0].get(k), (int, float))
-        ]
+        numeric_keys = [k for k in all_metrics[0] if k != "query" and isinstance(all_metrics[0].get(k), (int, float))]
         aggregated: dict[str, float] = {}
         for key in numeric_keys:
             values = [m[key] for m in all_metrics if key in m and isinstance(m[key], (int, float))]

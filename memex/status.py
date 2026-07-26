@@ -37,6 +37,7 @@ class ServiceChecker:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 # Extract base URL (scheme + host + port only)
                 from urllib.parse import urlparse
+
                 parsed = urlparse(url)
                 base = f"{parsed.scheme}://{parsed.netloc}"
 
@@ -46,7 +47,9 @@ class ServiceChecker:
                     health_url = f"{base}/"
                 elif name == "redis":
                     return ServiceStatus(
-                        name=name, url=url, healthy=True,
+                        name=name,
+                        url=url,
+                        healthy=True,
                         error="Redis HTTP health check not available",
                     )
                 else:

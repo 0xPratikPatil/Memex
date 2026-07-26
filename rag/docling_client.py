@@ -87,14 +87,27 @@ def _post(payload: dict) -> dict:
 
 def _build_options() -> dict[str, Any]:
     """Build Docling v1 conversion options from config."""
-    return {
+    opts: dict[str, Any] = {
         "from_formats": ["docx", "pptx", "html", "image", "pdf", "md", "csv", "xlsx"],
-        "to_formats": ["md", "json"],
+        "to_formats": ["md", "json", "html", "text"],
         "do_ocr": config.ENABLE_OCR,
         "table_mode": "accurate",
         "do_table_structure": True,
-        "include_images": False,
+        "image_export_mode": config.DOCLING_IMAGE_EXPORT,
     }
+
+    if config.DOCLING_ENRICH_CODE:
+        opts["do_code_enrichment"] = True
+    if config.DOCLING_ENRICH_FORMULA:
+        opts["do_formula_enrichment"] = True
+    if config.DOCLING_PICTURE_CLASSIFY:
+        opts["do_picture_classification"] = True
+    if config.DOCLING_CHART_EXTRACT:
+        opts["do_chart_extraction"] = True
+    if config.DOCLING_PDF_BACKEND:
+        opts["pdf_backend"] = config.DOCLING_PDF_BACKEND
+
+    return opts
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -110,6 +123,9 @@ def parse_url(url: str) -> ConversionResult:
         logger.info("Docling cache hit for URL: %s", url)
         return ConversionResult(
             markdown=cached["markdown"],
+            json_content=cached.get("json_content", {}),
+            html_content=cached.get("html_content", ""),
+            text_content=cached.get("text_content", ""),
             status=cached.get("status", "success"),
             processing_time=cached.get("processing_time", 0.0),
             errors=cached.get("errors", []),
@@ -130,12 +146,18 @@ def parse_url(url: str) -> ConversionResult:
         raise RuntimeError(f"Cannot reach Docling server at {config.DOCLING_URL}: {exc}") from exc
 
     result = _parse_response(data)
-    cache_parse_result(file_hash, {
-        "markdown": result.markdown,
-        "status": result.status,
-        "processing_time": result.processing_time,
-        "errors": result.errors,
-    })
+    cache_parse_result(
+        file_hash,
+        {
+            "markdown": result.markdown,
+            "json_content": result.json_content,
+            "html_content": result.html_content,
+            "text_content": result.text_content,
+            "status": result.status,
+            "processing_time": result.processing_time,
+            "errors": result.errors,
+        },
+    )
     return result
 
 
@@ -156,6 +178,9 @@ def parse_local_file(file_path: str) -> ConversionResult:
         logger.info("Docling cache hit for local file: %s", file_path)
         return ConversionResult(
             markdown=cached["markdown"],
+            json_content=cached.get("json_content", {}),
+            html_content=cached.get("html_content", ""),
+            text_content=cached.get("text_content", ""),
             status=cached.get("status", "success"),
             processing_time=cached.get("processing_time", 0.0),
             errors=cached.get("errors", []),
@@ -189,12 +214,18 @@ def parse_local_file(file_path: str) -> ConversionResult:
         raise RuntimeError(f"Cannot reach Docling server at {config.DOCLING_URL}: {exc}") from exc
 
     result = _parse_response(data)
-    cache_parse_result(file_hash, {
-        "markdown": result.markdown,
-        "status": result.status,
-        "processing_time": result.processing_time,
-        "errors": result.errors,
-    })
+    cache_parse_result(
+        file_hash,
+        {
+            "markdown": result.markdown,
+            "json_content": result.json_content,
+            "html_content": result.html_content,
+            "text_content": result.text_content,
+            "status": result.status,
+            "processing_time": result.processing_time,
+            "errors": result.errors,
+        },
+    )
     return result
 
 

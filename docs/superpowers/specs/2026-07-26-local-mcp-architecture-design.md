@@ -87,9 +87,12 @@ REDIS_URL = "redis://localhost:6379/0"
 ```python
 #!/usr/bin/env python3
 """Run MCP server locally."""
+
 import sys
+
 sys.path.insert(0, "src")
 from src.server import mcp
+
 mcp.run()
 ```
 

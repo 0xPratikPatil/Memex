@@ -38,9 +38,8 @@ def mock_ollama() -> httpx.Client:
 
 @pytest.fixture
 def generator(mock_ollama: httpx.Client) -> ContextGenerator:
-    """Return a ContextGenerator with header strategy (default)."""
-    with patch.multiple(config, CONTEXT_STRATEGY="header"):
-        return ContextGenerator(mock_ollama)
+    """Return a ContextGenerator — caller must patch CONTEXT_STRATEGY."""
+    return ContextGenerator(mock_ollama)
 
 
 # ── Header strategy ─────────────────────────────────────────────────────────
@@ -48,28 +47,31 @@ def generator(mock_ollama: httpx.Client) -> ContextGenerator:
 
 class TestHeaderStrategy:
     def test_header_returns_context_string(self, generator: ContextGenerator) -> None:
-        ctx = generator.generate_context(
-            chunk="Revenue increased 15%",
-            section_header="## Revenue",
-        )
-        assert ctx == "[Context: ## Revenue]"
+        with patch.object(config, "CONTEXT_STRATEGY", "header"):
+            ctx = generator.generate_context(
+                chunk="Revenue increased 15%",
+                section_header="## Revenue",
+            )
+            assert ctx == "[Context: ## Revenue]"
 
     def test_empty_header_returns_empty(self, generator: ContextGenerator) -> None:
-        ctx = generator.generate_context(
-            chunk="Revenue increased 15%",
-            section_header="",
-        )
-        assert ctx == ""
+        with patch.object(config, "CONTEXT_STRATEGY", "header"):
+            ctx = generator.generate_context(
+                chunk="Revenue increased 15%",
+                section_header="",
+            )
+            assert ctx == ""
 
     def test_header_with_other_params_ignored(self, generator: ContextGenerator) -> None:
-        ctx = generator.generate_context(
-            chunk="Revenue increased 15%",
-            section_header="## Revenue",
-            document_summary="A financial report.",
-            prev_chunk="Previous section.",
-            next_chunk="Next section.",
-        )
-        assert ctx == "[Context: ## Revenue]"
+        with patch.object(config, "CONTEXT_STRATEGY", "header"):
+            ctx = generator.generate_context(
+                chunk="Revenue increased 15%",
+                section_header="## Revenue",
+                document_summary="A financial report.",
+                prev_chunk="Previous section.",
+                next_chunk="Next section.",
+            )
+            assert ctx == "[Context: ## Revenue]"
 
 
 # ── Summary strategy ────────────────────────────────────────────────────────
@@ -149,9 +151,10 @@ class TestEnrichChunks:
         chunks = [
             {"content": "Revenue increased.", "section_header": "## Revenue"},
         ]
-        enriched = generator.enrich_chunks(chunks)
-        assert enriched[0]["content"].startswith("[Context: ## Revenue]")
-        assert "Revenue increased." in enriched[0]["content"]
+        with patch.object(config, "CONTEXT_STRATEGY", "header"):
+            enriched = generator.enrich_chunks(chunks)
+            assert enriched[0]["content"].startswith("[Context: ## Revenue]")
+            assert "Revenue increased." in enriched[0]["content"]
 
     def test_enrich_chunks_empty_list(self, generator: ContextGenerator) -> None:
         enriched = generator.enrich_chunks([])

@@ -59,9 +59,7 @@ class TestMeanReciprocalRank:
         assert mean_reciprocal_rank(["a.pdf", "b.pdf"], ["b.pdf"]) == 0.5
 
     def test_mrr_third_rank(self) -> None:
-        assert mean_reciprocal_rank(["a.pdf", "b.pdf", "c.pdf"], ["c.pdf"]) == pytest.approx(
-            1.0 / 3.0
-        )
+        assert mean_reciprocal_rank(["a.pdf", "b.pdf", "c.pdf"], ["c.pdf"]) == pytest.approx(1.0 / 3.0)
 
     def test_mrr_no_match(self) -> None:
         assert mean_reciprocal_rank(["a.pdf", "b.pdf"], ["z.pdf"]) == 0.0
@@ -203,7 +201,7 @@ class TestEvalDataset:
     def test_load_xml(self, tmp_path: Path) -> None:
         xml_file = tmp_path / "test.xml"
         xml_file.write_text(
-            '<evaluation><qa_pair><question>What is X?</question><answer>42</answer></qa_pair></evaluation>'
+            "<evaluation><qa_pair><question>What is X?</question><answer>42</answer></qa_pair></evaluation>"
         )
         dataset = EvalDataset(str(xml_file))
         dataset.load()
@@ -327,9 +325,7 @@ class TestEvalRunner:
         )
 
         mock_engine = MagicMock()
-        mock_engine.hybrid_search.return_value = [
-            {"source": "a.pdf", "content": "test content", "rrf_score": 0.9}
-        ]
+        mock_engine.hybrid_search.return_value = [{"source": "a.pdf", "content": "test content", "rrf_score": 0.9}]
 
         runner = EvalRunner.__new__(EvalRunner)
         runner.engine = mock_engine
@@ -353,9 +349,7 @@ class TestEvalRunner:
         mock_config.EVAL_OUTPUT_DIR = "/tmp"
 
         mock_engine = MagicMock()
-        mock_engine.hybrid_search.return_value = [
-            {"source": "a.pdf", "content": "data", "rrf_score": 0.9}
-        ]
+        mock_engine.hybrid_search.return_value = [{"source": "a.pdf", "content": "data", "rrf_score": 0.9}]
 
         runner = EvalRunner.__new__(EvalRunner)
         runner.engine = mock_engine

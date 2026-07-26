@@ -112,11 +112,7 @@ class MetadataExtractor:
         try:
             response = self._chat(prompt)
             entities = json.loads(response)
-            return {
-                k: v[: config.MAX_ENTITIES_PER_CHUNK]
-                for k, v in entities.items()
-                if isinstance(v, list)
-            }
+            return {k: v[: config.MAX_ENTITIES_PER_CHUNK] for k, v in entities.items() if isinstance(v, list)}
         except (json.JSONDecodeError, Exception) as exc:
             logger.debug("Entity extraction failed: %s", exc)
             return {}
@@ -143,9 +139,17 @@ class MetadataExtractor:
             doc_type = self._chat(prompt).strip().lower()
             # Normalize: extract first word if LLM returns extra text
             valid = {
-                "report", "email", "article", "code", "documentation",
-                "presentation", "resume", "contract", "invoice",
-                "meeting_notes", "other",
+                "report",
+                "email",
+                "article",
+                "code",
+                "documentation",
+                "presentation",
+                "resume",
+                "contract",
+                "invoice",
+                "meeting_notes",
+                "other",
             }
             if doc_type in valid:
                 return doc_type
@@ -232,13 +236,58 @@ class MetadataExtractor:
 
         # Simple frequency filter: skip very common words
         stopwords = {
-            "this", "that", "with", "from", "have", "been", "were", "they",
-            "their", "which", "about", "would", "could", "should", "there",
-            "also", "more", "than", "some", "only", "into", "over", "such",
-            "very", "does", "will", "each", "made", "when", "what", "your",
-            "then", "them", "other", "most", "can", "but", "not", "for",
-            "the", "and", "are", "was", "one", "our", "out", "all", "its",
-            "use", "may", "how", "any",
+            "this",
+            "that",
+            "with",
+            "from",
+            "have",
+            "been",
+            "were",
+            "they",
+            "their",
+            "which",
+            "about",
+            "would",
+            "could",
+            "should",
+            "there",
+            "also",
+            "more",
+            "than",
+            "some",
+            "only",
+            "into",
+            "over",
+            "such",
+            "very",
+            "does",
+            "will",
+            "each",
+            "made",
+            "when",
+            "what",
+            "your",
+            "then",
+            "them",
+            "other",
+            "most",
+            "can",
+            "but",
+            "not",
+            "for",
+            "the",
+            "and",
+            "are",
+            "was",
+            "one",
+            "our",
+            "out",
+            "all",
+            "its",
+            "use",
+            "may",
+            "how",
+            "any",
         }
         freq: dict[str, int] = {}
         for w in words:

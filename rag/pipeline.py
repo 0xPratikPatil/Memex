@@ -248,23 +248,42 @@ def _fixed_chunk(
     return chunks
 
 
-def create_chunks(text: str) -> list[dict[str, Any]]:
-    """Create chunks from markdown text using configured strategy."""
+def create_chunks(
+    text: str = "",
+    docling_json: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Create chunks from markdown text or a DoclingDocument JSON.
+
+    When *docling_json* is provided and ``CHUNK_STRATEGY`` is ``hybrid``,
+    uses Docling's HybridChunker for structure-aware chunking.  Falls back
+    to legacy recursive/fixed chunking otherwise.
+    """
+    strategy = config.CHUNK_STRATEGY.lower()
+
+    if strategy == "hybrid" and docling_json:
+        try:
+            from rag.chunking import chunk_docling_document
+
+            chunks = chunk_docling_document(docling_json)
+            return [c for c in chunks if len(c["content"].strip()) >= config.MIN_CHUNK_LEN]
+        except ImportError:
+            pass
+        except Exception:
+            logger.warning("HybridChunker failed, falling back to recursive", exc_info=True)
+
     if not text.strip():
         return []
 
-    strategy = config.CHUNK_STRATEGY.lower()
     max_tokens = config.CHUNK_SIZE
     overlap_tokens = config.CHUNK_OVERLAP
 
-    if strategy == "recursive":
+    if strategy == "recursive" or strategy == "hybrid":
         raw = _recursive_chunk(text, max_tokens, overlap_tokens)
     elif strategy == "fixed":
         raw = _fixed_chunk(text, max_tokens, overlap_tokens)
     else:
         raw = _recursive_chunk(text, max_tokens, overlap_tokens)
 
-    # Filter trivial chunks
     return [c for c in raw if len(c["content"].strip()) >= config.MIN_CHUNK_LEN]
 
 
@@ -311,7 +330,8 @@ class RAGEngine:
             }
             if config.ENABLE_CONTEXTUAL_RETRIEVAL:
                 vectors_config["contextual_dense"] = VectorParams(
-                    size=config.DENSE_DIM, distance=Distance.COSINE,
+                    size=config.DENSE_DIM,
+                    distance=Distance.COSINE,
                 )
             qdrant.create_collection(
                 collection_name=config.COLLECTION_NAME,
@@ -460,8 +480,13 @@ class RAGEngine:
         metadata: dict[str, Any] | None = None,
         content_hash: str = "",
         progress_cb: Callable[[str, int], None] | None = None,
+        docling_json: dict[str, Any] | None = None,
     ) -> int:
-        """Chunk, embed, and upsert into Qdrant. Returns number of chunks."""
+        """Chunk, embed, and upsert into Qdrant. Returns number of chunks.
+
+        When *docling_json* is provided, it is passed to the chunker for
+        structure-aware HybridChunker chunking.
+        """
 
         def _progress(msg: str, pct: int) -> None:
             if progress_cb:
@@ -469,7 +494,7 @@ class RAGEngine:
             logger.info("ingest [%d%%] %s", pct, msg)
 
         _progress("Chunking document...", 70)
-        raw_chunks = create_chunks(text)
+        raw_chunks = create_chunks(text=text, docling_json=docling_json)
         if not raw_chunks:
             raise ValueError("No valid text chunks to ingest.")
 
@@ -516,9 +541,7 @@ class RAGEngine:
         base_meta = metadata or {}
 
         points: list[PointStruct] = []
-        for idx, (chunk, dense_vec, sparse_dict) in enumerate(
-            zip(raw_chunks, dense_vecs, sparse_vecs, strict=True)
-        ):
+        for idx, (chunk, dense_vec, sparse_dict) in enumerate(zip(raw_chunks, dense_vecs, sparse_vecs, strict=True)):
             point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{source_identifier}_{idx}"))
             point_meta = {
                 "source": source_identifier,
@@ -616,19 +639,13 @@ class RAGEngine:
         # Build optional filter
         filter_conditions: list[FieldCondition] = []
         if source_filter:
-            filter_conditions.append(
-                FieldCondition(key="source", match=MatchValue(value=source_filter))
-            )
+            filter_conditions.append(FieldCondition(key="source", match=MatchValue(value=source_filter)))
         if metadata_filter:
             for key, value in metadata_filter.items():
                 if isinstance(value, list):
-                    filter_conditions.append(
-                        FieldCondition(key=key, match=MatchAny(values=value))
-                    )
+                    filter_conditions.append(FieldCondition(key=key, match=MatchAny(values=value)))
                 else:
-                    filter_conditions.append(
-                        FieldCondition(key=key, match=MatchValue(value=str(value)))
-                    )
+                    filter_conditions.append(FieldCondition(key=key, match=MatchValue(value=str(value))))
         qdrant_filter = Filter(must=filter_conditions) if filter_conditions else None
 
         # ── Dense search (original / rewritten query) ──────────────────────
@@ -756,8 +773,15 @@ class RAGEngine:
                 limit=100,
                 offset=offset,
                 with_payload=[
-                    "source", "chunk_index", "total_chunks", "ingested_at",
-                    "section_header", "doc_type", "topics", "language", "keywords",
+                    "source",
+                    "chunk_index",
+                    "total_chunks",
+                    "ingested_at",
+                    "section_header",
+                    "doc_type",
+                    "topics",
+                    "language",
+                    "keywords",
                 ],
                 with_vectors=False,
             )
@@ -808,9 +832,16 @@ class RAGEngine:
             limit=1000,
             scroll_filter=Filter(must=[FieldCondition(key="source", match=MatchValue(value=source_identifier))]),
             with_payload=[
-                "source", "chunk_index", "total_chunks", "ingested_at",
-                "section_header", "content", "doc_type", "topics",
-                "language", "keywords",
+                "source",
+                "chunk_index",
+                "total_chunks",
+                "ingested_at",
+                "section_header",
+                "content",
+                "doc_type",
+                "topics",
+                "language",
+                "keywords",
             ],
             with_vectors=False,
         )

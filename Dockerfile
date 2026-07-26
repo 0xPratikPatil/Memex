@@ -11,24 +11,24 @@ FROM pytorch/pytorch:2.6.0-cuda12.6-cudnn9-runtime AS deps
 
 WORKDIR /app
 
-# System deps — apt cache mount for fast rebuilds
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends curl && \
-    rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Python deps — pip cache mount, loose pins for compatibility
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir \
-        "fastembed>=0.4,<1" \
-        "sentence-transformers>=3,<5" \
-        "fastapi[standard]>=0.115,<1" \
-        "uvicorn[standard]>=0.30,<1" \
-        "pydantic>=2,<3" \
-        "httpx>=0.27,<1"
+RUN uv venv /opt/venv
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+RUN uv pip install --no-cache \
+    "fastembed>=0.4,<1" \
+    "sentence-transformers>=3,<5" \
+    "fastapi[standard]>=0.115,<1" \
+    "uvicorn[standard]>=0.30,<1" \
+    "pydantic>=2,<3" \
+    "httpx>=0.27,<1"
 
 # ── Stage 2: Model pre-caching (optional, build-time speedup) ────────────────
 FROM deps AS preload
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 ARG SPARSE_MODEL=Qdrant/bm25
 ARG RERANK_MODEL=BAAI/bge-reranker-base
 ENV HF_HOME=/app/.cache/huggingface
@@ -47,19 +47,17 @@ print('Reranker model cached')"
 
 # ── Stage 3: Runtime (minimal) ───────────────────────────────────────────────
 FROM deps AS ml
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Security: create non-root user
 RUN groupadd -g 1001 -r appgroup && \
     useradd -u 1001 -r -g appgroup -d /app -s /sbin/nologin appuser && \
     mkdir -p /app/.cache && chown -R appuser:appgroup /app
 
-# Copy cached models from preload stage
 COPY --from=preload --chown=appuser:appgroup /app/.cache /app/.cache
 
-# Copy application code (last for layer caching)
 COPY --chown=appuser:appgroup rag/ml_server.py /app/server.py
 
-# Model configuration via env vars (override with docker compose or -e)
 ARG SPARSE_MODEL=Qdrant/bm25
 ARG RERANK_MODEL=BAAI/bge-reranker-base
 ENV SPARSE_MODEL=${SPARSE_MODEL}
@@ -69,9 +67,12 @@ ENV TRANSFORMERS_CACHE=/app/.cache/huggingface
 
 USER 1001
 
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
     CMD curl -f http://localhost:5002/health || exit 1
 
 EXPOSE 5002
 
-CMD ["python", "/app/server.py"]
+CMD ["/opt/venv/bin/python", "/app/server.py"]

@@ -48,6 +48,9 @@ eval = [
     "datasets>=3,<4",
     "langdetect>=1.0.9",
 ]
+chunking = [
+    "docling>=2",
+]
 
 [project.scripts]
 memex = "memex.cli:main"

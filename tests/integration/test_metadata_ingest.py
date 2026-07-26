@@ -20,6 +20,7 @@ def _ollama_reachable() -> bool:
 def _langdetect_available() -> bool:
     try:
         import langdetect  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -109,9 +110,18 @@ class TestStructuralMetadata:
         chunk = {"content": "Test.", "section_header": ""}
         structural = extractor.extract_structural(chunk, "")
         required = {
-            "chunk_index", "total_chunks", "heading_level", "section_header",
-            "is_list", "is_code", "is_table", "char_count", "word_count",
-            "link_count", "email_count", "phone_count",
+            "chunk_index",
+            "total_chunks",
+            "heading_level",
+            "section_header",
+            "is_list",
+            "is_code",
+            "is_table",
+            "char_count",
+            "word_count",
+            "link_count",
+            "email_count",
+            "phone_count",
         }
         assert required.issubset(structural.keys())
 
@@ -145,9 +155,7 @@ class TestDateExtraction:
 
     def test_multiple_formats_in_one_text(self) -> None:
         extractor = MetadataExtractor(None)
-        dates = extractor.extract_dates(
-            "Published January 15, 2026. Deadline: 2026-07-26. Q1 2026 review."
-        )
+        dates = extractor.extract_dates("Published January 15, 2026. Deadline: 2026-07-26. Q1 2026 review.")
         formats = {d["format"] for d in dates}
         assert "iso" in formats
         assert "written" in formats
@@ -178,9 +186,7 @@ class TestKeywordExtraction:
 
     def test_filters_common_stopwords(self) -> None:
         extractor = MetadataExtractor(None)
-        keywords = extractor.extract_keywords(
-            "This is the analysis that shows growth and revenue with more data."
-        )
+        keywords = extractor.extract_keywords("This is the analysis that shows growth and revenue with more data.")
         assert "this" not in keywords
         assert "that" not in keywords
         assert "with" not in keywords
@@ -201,9 +207,7 @@ class TestKeywordExtraction:
 
     def test_handles_code_blocks(self) -> None:
         extractor = MetadataExtractor(None)
-        keywords = extractor.extract_keywords(
-            "Revenue analysis ```python\ndef analyze():\n    pass\n``` shows growth."
-        )
+        keywords = extractor.extract_keywords("Revenue analysis ```python\ndef analyze():\n    pass\n``` shows growth.")
         assert isinstance(keywords, list)
 
 
@@ -218,17 +222,13 @@ class TestEntityExtractionLLM:
             pytest.skip("Ollama not reachable")
         return httpx.Client(timeout=60.0)
 
-    def test_extract_entities_returns_dict(
-        self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_extract_entities_returns_dict(self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("rag.config.ENABLE_METADATA_EXTRACTION", True)
         monkeypatch.setattr("rag.config.ENABLE_ENTITY_EXTRACTION", True)
         monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2.5:0.5b")
 
         extractor = MetadataExtractor(ollama_client)
-        entities = extractor.extract_entities(
-            "Alice Smith from Acme Corp reported revenue of $10M in New York."
-        )
+        entities = extractor.extract_entities("Alice Smith from Acme Corp reported revenue of $10M in New York.")
         assert isinstance(entities, dict)
 
     def test_extract_entities_returns_valid_structure(
@@ -257,17 +257,13 @@ class TestTopicExtractionLLM:
             pytest.skip("Ollama not reachable")
         return httpx.Client(timeout=60.0)
 
-    def test_extract_topics_returns_list(
-        self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_extract_topics_returns_list(self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("rag.config.ENABLE_METADATA_EXTRACTION", True)
         monkeypatch.setattr("rag.config.ENABLE_TOPIC_TAGGING", True)
         monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2.5:0.5b")
 
         extractor = MetadataExtractor(ollama_client)
-        topics = extractor.extract_topics(
-            "This document covers quarterly financial analysis and revenue forecasting."
-        )
+        topics = extractor.extract_topics("This document covers quarterly financial analysis and revenue forecasting.")
         assert isinstance(topics, list)
 
 
@@ -287,22 +283,27 @@ class TestDocumentClassificationLLM:
         monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2.5:0.5b")
 
         valid = {
-            "report", "email", "article", "code", "documentation",
-            "presentation", "resume", "contract", "invoice",
-            "meeting_notes", "other", "unknown",
+            "report",
+            "email",
+            "article",
+            "code",
+            "documentation",
+            "presentation",
+            "resume",
+            "contract",
+            "invoice",
+            "meeting_notes",
+            "other",
+            "unknown",
         }
         extractor = MetadataExtractor(ollama_client)
-        doc_type = extractor.classify_document(
-            "This quarterly report presents financial results for Q3 2026."
-        )
+        doc_type = extractor.classify_document("This quarterly report presents financial results for Q3 2026.")
         assert doc_type in valid
 
 
 @pytest.mark.integration
 class TestExtractAllIntegration:
-    def test_extract_all_non_llm_features(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_extract_all_non_llm_features(self, monkeypatch: pytest.MonkeyPatch) -> None:
         if not _langdetect_available():
             pytest.skip("langdetect not installed")
 
@@ -339,9 +340,7 @@ class TestExtractAllIntegration:
             pytest.skip("Ollama not reachable")
         return httpx.Client(timeout=60.0)
 
-    def test_extract_all_with_llm_features(
-        self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_extract_all_with_llm_features(self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch) -> None:
         if not _langdetect_available():
             pytest.skip("langdetect not installed")
 
