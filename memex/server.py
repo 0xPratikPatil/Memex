@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import atexit
 import contextlib
-import enum
 import json
 import logging
 import threading
@@ -19,6 +18,19 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
+from memex.schemas import (
+    DeleteDocumentInput,
+    DocumentInfo,
+    IngestBatchInput,
+    IngestFileInput,
+    IngestUrlInput,
+    ListDocumentsInput,
+    ListDocumentsOutput,
+    QueryInput,
+    QueryOutput,
+    ResponseFormat,
+    SearchResult,
+)
 from rag import config
 
 logging.basicConfig(
@@ -29,7 +41,7 @@ logger = logging.getLogger("mcp-server")
 
 CHARACTER_LIMIT = config.CHARACTER_LIMIT
 
-mcp = FastMCP("memex_rag")
+mcp = FastMCP("memex-rag")
 
 _engine = None
 
@@ -81,14 +93,6 @@ def _shutdown():
 
 
 atexit.register(_shutdown)
-
-
-# ── Input schemas ──────────────────────────────────────────────────────────────
-
-
-class ResponseFormat(enum.Enum):
-    MARKDOWN = "markdown"
-    JSON = "json"
 
 
 # ── Helper ─────────────────────────────────────────────────────────────────────
@@ -161,7 +165,8 @@ Error Handling:
         openWorldHint=True,
     ),
 )
-async def rag_ingest_file(file_path_or_url: str) -> str:
+async def rag_ingest_file(input: IngestFileInput) -> str:
+    file_path_or_url = input.file_path_or_url
     try:
         from rag.docling_client import parse_file
 
@@ -236,7 +241,8 @@ Error Handling:
         openWorldHint=True,
     ),
 )
-async def rag_ingest_url(url: str) -> str:
+async def rag_ingest_url(input: IngestUrlInput) -> str:
+    url = input.url
     try:
         from rag.docling_client import parse_url
 
@@ -296,13 +302,13 @@ Error Handling:
         openWorldHint=True,
     ),
 )
-async def rag_ingest_batch(items: list[str]) -> dict[str, str]:
+async def rag_ingest_batch(input: IngestBatchInput) -> dict[str, str]:
     from rag.docling_client import parse_file
 
     engine = _get_engine()
     summary: dict[str, str] = {}
 
-    for item in items:
+    for item in input.items:
         try:
             result = parse_file(item)
 
@@ -353,7 +359,7 @@ Returns relevant document chunks ranked by relevance.
 
 Args:
   - query (string): Natural language search query (2-500 chars).
-  - top_k (number): Max results to return, 1-50 (default: 5).
+  - top_k (number): Max results to fetch from backend, 1-50 (default: 5).
   - use_reranking (boolean): Apply cross-encoder reranking (default: true).
   - source_filter (string, optional): Filter results to a specific document source.
   - use_query_expansion (boolean, optional): Override server default for expansion (default: null).
@@ -364,28 +370,11 @@ Args:
     payload field names (e.g. "doc_type", "topics", "language", "keywords",
     "entities.people", "dates"). Values are strings or lists of strings.
     Example: {"doc_type": "report", "topics": ["finance", "revenue"]}.
+  - offset (number): Pagination offset, skip first N results (default: 0).
+  - limit (number): Max results per page, 1-50 (default: 10).
 
 Returns:
-  For JSON format:
-  {
-    "total": number,
-    "count": number,
-    "results": [
-      {
-        "id": string,
-        "rrf_score": number,
-        "rerank_score": number | null,
-        "source": string,
-        "content": string,
-        "section_header": string,
-        "context_prefix": string,
-        "doc_type": string,
-        "topics": [string],
-        "language": string,
-        "keywords": [string]
-      }
-    ]
-  }
+  For JSON format: structured QueryOutput object.
   For Markdown format: Formatted list of results with source and content.
 
 Examples:
@@ -403,69 +392,65 @@ Error Handling:
         openWorldHint=True,
     ),
 )
-async def rag_query(
-    query: str,
-    top_k: int = 5,
-    use_reranking: bool = True,
-    source_filter: str | None = None,
-    use_query_expansion: bool | None = None,
-    use_contextual_search: bool | None = None,
-    response_format: ResponseFormat = ResponseFormat.MARKDOWN,
-    metadata_filter: dict[str, str | list[str]] | None = None,
-) -> Any:
+async def rag_query(input: QueryInput) -> str | QueryOutput:
     try:
         engine = _get_engine()
 
-        # Determine whether to use query expansion
-        expansion_enabled = use_query_expansion if use_query_expansion is not None else config.ENABLE_QUERY_EXPANSION
+        expansion_enabled = (
+            input.use_query_expansion if input.use_query_expansion is not None else config.ENABLE_QUERY_EXPANSION
+        )
 
         expanded = None
         if expansion_enabled:
             from rag.services.query_expansion import QueryExpander
 
             expander = QueryExpander(engine._get_ollama())
-            expanded = expander.expand(query)
+            expanded = expander.expand(input.query)
 
         results = engine.hybrid_search(
-            query=query,
-            top_k=top_k,
-            rerank=use_reranking,
-            source_filter=source_filter,
-            metadata_filter=metadata_filter,
+            query=input.query,
+            top_k=input.top_k,
+            rerank=input.use_reranking,
+            source_filter=input.source_filter,
+            metadata_filter=input.metadata_filter,
             expanded_query=expanded,
-            use_contextual_search=use_contextual_search,
+            use_contextual_search=input.use_contextual_search,
         )
 
         if not results:
-            if response_format == ResponseFormat.JSON:
-                return json.dumps({"total": 0, "count": 0, "results": []})
-            return f"No results found for '{query}'."
+            if input.response_format == ResponseFormat.JSON:
+                return QueryOutput(total=0, count=0, results=[])
+            return f"No results found for '{input.query}'."
 
-        if response_format == ResponseFormat.JSON:
-            output = {
-                "total": len(results),
-                "count": len(results),
-                "results": [
-                    {
-                        "id": r["id"],
-                        "rrf_score": r.get("rrf_score"),
-                        "rerank_score": r.get("rerank_score"),
-                        "source": r["source"],
-                        "content": r["content"],
-                        "section_header": r.get("section_header", ""),
-                        "context_prefix": r.get("context_prefix", ""),
-                        "doc_type": r.get("doc_type", ""),
-                        "topics": r.get("topics", []),
-                        "language": r.get("language", ""),
-                        "keywords": r.get("keywords", []),
-                    }
-                    for r in results
-                ],
-            }
-            return _truncate(json.dumps(output, indent=2))
+        total = len(results)
+        paged = results[input.offset : input.offset + input.limit]
 
-        lines = [f"# Search Results for '{query}'", ""]
-        for i, r in enumerate(results, 1):
+        if not paged:
+            if input.response_format == ResponseFormat.JSON:
+                return QueryOutput(total=total, count=0, results=[])
+            return f"No results found for page (offset={input.offset}, limit={input.limit})."
+
+        if input.response_format == ResponseFormat.JSON:
+            search_results = [
+                SearchResult(
+                    id=r["id"],
+                    rrf_score=r.get("rrf_score"),
+                    rerank_score=r.get("rerank_score"),
+                    source=r["source"],
+                    content=r["content"],
+                    section_header=r.get("section_header", ""),
+                    context_prefix=r.get("context_prefix", ""),
+                    doc_type=r.get("doc_type", ""),
+                    topics=r.get("topics", []),
+                    language=r.get("language", ""),
+                    keywords=r.get("keywords", []),
+                )
+                for r in paged
+            ]
+            return QueryOutput(total=total, count=len(paged), results=search_results)
+
+        lines = [f"# Search Results for '{input.query}'", ""]
+        for i, r in enumerate(paged, 1):
             score_parts = []
             if "rrf_score" in r:
                 score_parts.append(f"RRF: {r['rrf_score']:.4f}")
@@ -481,7 +466,6 @@ async def rag_query(
             lines.append(f"## {i}. {source_label}")
             lines.append(f"**Score**: {score_str}")
 
-            # Show metadata when available
             meta_parts = []
             if r.get("doc_type"):
                 meta_parts.append(f"Type: {r['doc_type']}")
@@ -529,7 +513,8 @@ Error Handling:
         openWorldHint=True,
     ),
 )
-async def rag_delete_document(source_identifier: str) -> str:
+async def rag_delete_document(input: DeleteDocumentInput) -> str:
+    source_identifier = input.source_identifier
     try:
         engine = _get_engine()
         engine.delete_by_source(source_identifier)
@@ -549,25 +534,12 @@ metadata (doc type, topics, language, keywords) when metadata extraction
 is enabled.
 
 Args:
-  - (none)
+  - response_format ('markdown' | 'json'): Output format (default: 'markdown').
+  - offset (number): Pagination offset, skip first N documents (default: 0).
+  - limit (number): Max documents per page, 1-100 (default: 20).
 
 Returns:
-  For JSON format:
-  {
-    "total": number,
-    "documents": [
-      {
-        "source": string,
-        "chunk_count": number,
-        "ingested_at": string,
-        "sections": [string],
-        "doc_type": string,
-        "topics": [string],
-        "language": string,
-        "keywords": [string]
-      }
-    ]
-  }
+  For JSON format: structured ListDocumentsOutput object.
   For Markdown format: Formatted table of documents.
 
 Error Handling:
@@ -579,23 +551,42 @@ Error Handling:
         openWorldHint=True,
     ),
 )
-async def rag_list_documents(
-    response_format: ResponseFormat = ResponseFormat.MARKDOWN,
-) -> str:
+async def rag_list_documents(input: ListDocumentsInput) -> str | ListDocumentsOutput:
     try:
         engine = _get_engine()
         docs = engine.list_documents()
 
         if not docs:
-            if response_format == ResponseFormat.JSON:
-                return json.dumps({"total": 0, "documents": []})
+            if input.response_format == ResponseFormat.JSON:
+                return ListDocumentsOutput(total=0, documents=[])
             return "No documents ingested yet."
 
-        if response_format == ResponseFormat.JSON:
-            return json.dumps({"total": len(docs), "documents": docs}, indent=2)
+        total = len(docs)
+        paged = docs[input.offset : input.offset + input.limit]
+
+        if not paged:
+            if input.response_format == ResponseFormat.JSON:
+                return ListDocumentsOutput(total=total, documents=[])
+            return f"No documents found for page (offset={input.offset}, limit={input.limit})."
+
+        if input.response_format == ResponseFormat.JSON:
+            doc_infos = [
+                DocumentInfo(
+                    source=d["source"],
+                    chunk_count=d["chunk_count"],
+                    ingested_at=d.get("ingested_at", ""),
+                    sections=d.get("sections", []),
+                    doc_type=d.get("doc_type", ""),
+                    topics=d.get("topics", []),
+                    language=d.get("language", ""),
+                    keywords=d.get("keywords", []),
+                )
+                for d in paged
+            ]
+            return ListDocumentsOutput(total=total, documents=doc_infos)
 
         lines = ["# Ingested Documents", ""]
-        for doc in docs:
+        for doc in paged:
             lines.append(f"## {doc['source']}")
             lines.append(f"- **Chunks**: {doc['chunk_count']}")
             if doc.get("ingested_at"):
@@ -658,6 +649,7 @@ Returns health status and latency for each service:
 - Qdrant (vector database)
 - Ollama (embedding server)
 - Docling (document conversion)
+- ML Services (sparse BM25 + reranker)
 - Redis (caching layer)
 
 Args:
@@ -684,23 +676,40 @@ async def rag_service_status() -> str:
         "qdrant": config.QDRANT_URL,
         "ollama": config.OLLAMA_EMBED_URL,
         "docling": config.DOCLING_URL,
+        "ml-services": config.ML_SERVICES_URL,
         "redis": config.REDIS_URL,
     }
 
-    statuses = {}
+    statuses: dict[str, dict[str, Any]] = {}
     for name, url in services.items():
         try:
             parsed = urlparse(url)
             base = f"{parsed.scheme}://{parsed.netloc}"
+
+            if name == "redis":
+                try:
+                    import redis
+
+                    r = redis.Redis.from_url(url)
+                    r.ping()
+                    statuses[name] = {
+                        "healthy": True,
+                        "url": url,
+                        "latency_ms": 0.0,
+                    }
+                except Exception as e:
+                    statuses[name] = {
+                        "healthy": False,
+                        "url": url,
+                        "error": str(e),
+                    }
+                continue
 
             async with httpx.AsyncClient(timeout=5.0) as client:
                 if name == "ollama":
                     health_url = f"{base}/api/tags"
                 elif name == "qdrant":
                     health_url = f"{base}/"
-                elif name == "redis":
-                    statuses[name] = {"healthy": True, "url": url, "note": "Redis HTTP health check not available"}
-                    continue
                 else:
                     health_url = f"{base}/health"
 

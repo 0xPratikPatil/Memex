@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from memex.schemas import IngestFileInput
 from memex.server import rag_ingest_file
 
 # ── rag_ingest_file tests ──────────────────────────────────────────────────
@@ -33,7 +34,7 @@ class TestRagIngestFile:
                 mock_engine.return_value.is_already_ingested.return_value = (False, 0)
                 mock_engine.return_value.ingest_text.return_value = 5
 
-                result = await rag_ingest_file(str(test_file))
+                result = await rag_ingest_file(IngestFileInput(file_path_or_url=str(test_file)))
 
                 assert "Successfully ingested" in result
                 assert str(test_file) in result
@@ -53,7 +54,7 @@ class TestRagIngestFile:
             mock_result.errors = ["Conversion failed"]
             mock_parse.return_value = mock_result
 
-            result = await rag_ingest_file(str(test_file))
+            result = await rag_ingest_file(IngestFileInput(file_path_or_url=str(test_file)))
 
             assert "Error" in result
             assert "failure" in result
@@ -76,7 +77,7 @@ class TestRagIngestFile:
                 mock_engine.return_value.compute_file_hash.return_value = "abc123def456"
                 mock_engine.return_value.is_already_ingested.return_value = (True, 10)
 
-                result = await rag_ingest_file(str(test_file))
+                result = await rag_ingest_file(IngestFileInput(file_path_or_url=str(test_file)))
 
                 assert "Already ingested" in result
                 assert "10 chunks" in result
@@ -88,7 +89,7 @@ class TestRagIngestFile:
         with patch("rag.docling_client.parse_file") as mock_parse:
             mock_parse.side_effect = FileNotFoundError("File not found: /nonexistent/file.txt")
 
-            result = await rag_ingest_file("/nonexistent/file.txt")
+            result = await rag_ingest_file(IngestFileInput(file_path_or_url="/nonexistent/file.txt"))
 
             assert "Error" in result
             assert "File not found" in result
@@ -102,7 +103,7 @@ class TestRagIngestFile:
         with patch("rag.docling_client.parse_file") as mock_parse:
             mock_parse.side_effect = RuntimeError("Unexpected error")
 
-            result = await rag_ingest_file(str(test_file))
+            result = await rag_ingest_file(IngestFileInput(file_path_or_url=str(test_file)))
 
             assert "Error" in result
             assert "Unexpected error" in result
@@ -125,7 +126,7 @@ class TestRagIngestFile:
                 mock_engine.return_value.is_already_ingested.return_value = (False, 0)
                 mock_engine.return_value.ingest_text.return_value = 3
 
-                await rag_ingest_file(str(test_file))
+                await rag_ingest_file(IngestFileInput(file_path_or_url=str(test_file)))
 
                 # Verify metadata was passed with content_type
                 call_kwargs = mock_engine.return_value.ingest_text.call_args[1]

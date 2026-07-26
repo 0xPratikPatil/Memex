@@ -90,9 +90,10 @@ async def main():
     # ── 3. rag_ingest_file ─────────────────────────────────────
     print("\n=== 3. rag_ingest_file ===")
     try:
+        from memex.schemas import IngestFileInput
         from memex.server import rag_ingest_file
 
-        r = await rag_ingest_file(str(TEST_FILE))
+        r = await rag_ingest_file(IngestFileInput(file_path_or_url=str(TEST_FILE)))
         print(f"  {r[:120]}...")
         ok = "Successfully ingested" in r or "Already ingested" in r
         results["ingest_file"] = ok
@@ -104,9 +105,16 @@ async def main():
     # ── 4. rag_query ───────────────────────────────────────────
     print("\n=== 4. rag_query ===")
     try:
+        from memex.schemas import QueryInput
         from memex.server import rag_query
 
-        r = await rag_query("what is the answer to the ultimate question?", top_k=3, use_reranking=False)
+        r = await rag_query(
+            QueryInput(
+                query="what is the answer to the ultimate question?",
+                top_k=3,
+                use_reranking=False,
+            )
+        )
         ok = "42" in r
         print(f"  {'Found 42!' if ok else '42 not found'}")
         results["query"] = ok
@@ -118,9 +126,10 @@ async def main():
     # ── 5. rag_list_documents ──────────────────────────────────
     print("\n=== 5. rag_list_documents ===")
     try:
+        from memex.schemas import ListDocumentsInput
         from memex.server import rag_list_documents
 
-        r = await rag_list_documents()
+        r = await rag_list_documents(ListDocumentsInput())
         ok = str(TEST_FILE) in r
         print(f"  {'Found test doc' if ok else 'Test doc missing'}")
         results["list_docs"] = ok
@@ -147,9 +156,10 @@ async def main():
     # ── 7. rag_delete_document ─────────────────────────────────
     print("\n=== 7. rag_delete_document ===")
     try:
+        from memex.schemas import DeleteDocumentInput
         from memex.server import rag_delete_document
 
-        r = await rag_delete_document(str(TEST_FILE))
+        r = await rag_delete_document(DeleteDocumentInput(source_identifier=str(TEST_FILE)))
         print(f"  {r[:120]}")
         ok = "Successfully deleted" in r
         results["delete_doc"] = ok
