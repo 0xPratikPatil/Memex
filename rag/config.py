@@ -47,10 +47,10 @@ QDRANT_URL: str = _env(
     "QDRANT_URL",
     _env("QDRANT_SERVER_URL", "http://localhost:6333"),
 )
-FILE_SERVER_URL: str = _env(
-    "FILE_SERVER_URL",
-    "http://localhost:9900",
+ML_SERVICES_URL: str = _env(
+    "ML_SERVICES_URL", "http://localhost:5002",
 )
+
 
 # ── API Keys ──────────────────────────────────────────────────────────────────
 DOCLING_API_KEY: str = _env("DOCLING_API_KEY", "")
@@ -58,6 +58,12 @@ DOCLING_API_KEY: str = _env("DOCLING_API_KEY", "")
 # ── Model / collection names ──────────────────────────────────────────────────
 COLLECTION_NAME: str = _env("COLLECTION_NAME", "personal_rag")
 EMBED_MODEL: str = _env("EMBED_MODEL", "bge-m3")
+RERANK_MODEL: str = _env("RERANK_MODEL", "BAAI/bge-reranker-base")
+SPARSE_MODEL: str = _env("SPARSE_MODEL", "Qdrant/bm25")
+
+# Provider: "http" (Docker ML service) or "local" (load in-process)
+SPARSE_PROVIDER: str = _env("SPARSE_PROVIDER", "http")
+RERANK_PROVIDER: str = _env("RERANK_PROVIDER", "http")
 RERANK_MODEL: str = _env("RERANK_MODEL", "BAAI/bge-reranker-base")
 SPARSE_MODEL: str = _env("SPARSE_MODEL", "Qdrant/bm25")
 DENSE_DIM: int = _env_int("DENSE_DIM", 1024)

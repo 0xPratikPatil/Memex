@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src import config
-from src.services.cache import (
+from rag import config
+from rag.services.cache import (
     CacheMetrics,
     _hash_key,
     cache_embedding,
@@ -124,7 +124,7 @@ class TestWithMockRedis:
     @patch.object(config, "ENABLE_CACHE", True)
     @patch.object(config, "REDIS_URL", "redis://localhost:6379/0")
     def test_set_and_get(self, mock_redis: MagicMock) -> None:
-        import src.services.cache as cache_mod
+        import rag.services.cache as cache_mod
 
         cache_mod._redis = mock_redis
 
@@ -140,7 +140,7 @@ class TestWithMockRedis:
 
     @patch.object(config, "ENABLE_CACHE", True)
     def test_cache_miss_returns_none(self, mock_redis: MagicMock) -> None:
-        import src.services.cache as cache_mod
+        import rag.services.cache as cache_mod
 
         cache_mod._redis = mock_redis
         mock_redis.get.return_value = None
@@ -152,7 +152,7 @@ class TestWithMockRedis:
 
     @patch.object(config, "ENABLE_CACHE", True)
     def test_invalidate_namespace(self, mock_redis: MagicMock) -> None:
-        import src.services.cache as cache_mod
+        import rag.services.cache as cache_mod
 
         cache_mod._redis = mock_redis
         mock_redis.scan_iter.return_value = iter(["rag:test:k1", "rag:test:k2"])
@@ -165,7 +165,7 @@ class TestWithMockRedis:
 
     @patch.object(config, "ENABLE_CACHE", True)
     def test_invalidate_for_document(self, mock_redis: MagicMock) -> None:
-        import src.services.cache as cache_mod
+        import rag.services.cache as cache_mod
 
         cache_mod._redis = mock_redis
         mock_redis.scan_iter.return_value = iter([])
@@ -182,7 +182,7 @@ class TestWithMockRedis:
 class TestDomainHelpers:
     @patch.object(config, "ENABLE_CACHE", True)
     def test_cache_embedding_roundtrip(self, mock_redis: MagicMock) -> None:
-        import src.services.cache as cache_mod
+        import rag.services.cache as cache_mod
 
         cache_mod._redis = mock_redis
 
@@ -199,7 +199,7 @@ class TestDomainHelpers:
 
     @patch.object(config, "ENABLE_CACHE", True)
     def test_cache_search_results_roundtrip(self, mock_redis: MagicMock) -> None:
-        import src.services.cache as cache_mod
+        import rag.services.cache as cache_mod
 
         cache_mod._redis = mock_redis
 
@@ -214,7 +214,7 @@ class TestDomainHelpers:
 
     @patch.object(config, "ENABLE_CACHE", True)
     def test_cache_parse_result_roundtrip(self, mock_redis: MagicMock) -> None:
-        import src.services.cache as cache_mod
+        import rag.services.cache as cache_mod
 
         cache_mod._redis = mock_redis
 
@@ -229,7 +229,7 @@ class TestDomainHelpers:
 
     @patch.object(config, "ENABLE_CACHE", True)
     def test_search_cache_key_includes_source_filter(self, mock_redis: MagicMock) -> None:
-        import src.services.cache as cache_mod
+        import rag.services.cache as cache_mod
 
         cache_mod._redis = mock_redis
 
@@ -250,17 +250,17 @@ class TestDomainHelpers:
 class TestErrorHandling:
     @patch.object(config, "ENABLE_CACHE", True)
     def test_redis_unavailable_graceful(self) -> None:
-        import src.services.cache as cache_mod
+        import rag.services.cache as cache_mod
 
         cache_mod._redis = None
         # Force _get_redis to attempt connection and fail
-        with patch("src.services.cache._get_redis", return_value=None):
+        with patch("rag.services.cache._get_redis", return_value=None):
             result = get_cached("test", "key")
             assert result is None
 
     @patch.object(config, "ENABLE_CACHE", True)
     def test_redis_get_error_returns_none(self, mock_redis: MagicMock) -> None:
-        import src.services.cache as cache_mod
+        import rag.services.cache as cache_mod
 
         cache_mod._redis = mock_redis
         mock_redis.get.side_effect = Exception("connection lost")
@@ -272,7 +272,7 @@ class TestErrorHandling:
 
     @patch.object(config, "ENABLE_CACHE", True)
     def test_redis_set_error_no_raise(self, mock_redis: MagicMock) -> None:
-        import src.services.cache as cache_mod
+        import rag.services.cache as cache_mod
 
         cache_mod._redis = mock_redis
         mock_redis.setex.side_effect = Exception("connection lost")
@@ -284,10 +284,10 @@ class TestErrorHandling:
 
     @patch.object(config, "ENABLE_CACHE", True)
     def test_close(self, mock_redis: MagicMock) -> None:
-        import src.services.cache as cache_mod
+        import rag.services.cache as cache_mod
 
         cache_mod._redis = mock_redis
-        from src.services.cache import close
+        from rag.services.cache import close
 
         close()
         mock_redis.close.assert_called_once()

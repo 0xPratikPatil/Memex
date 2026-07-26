@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from .. import config
+from rag import config
 
 logger = logging.getLogger("query-expansion")
 

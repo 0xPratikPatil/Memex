@@ -22,7 +22,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from . import config
+from rag import config
 
 logger = logging.getLogger("docling-client")
 
@@ -82,38 +82,6 @@ def _post(payload: dict) -> dict:
     return resp.json()
 
 
-def fetch_file_from_server(file_path: str) -> tuple[bytes, str]:
-    """Fetch a file from the host file server.
-
-    Args:
-        file_path: Absolute path on the host (e.g., /mnt/docs/report.pdf)
-
-    Returns:
-        Tuple of (file_bytes, filename)
-
-    Raises:
-        FileNotFoundError: If file not found on server
-        RuntimeError: If server unreachable
-    """
-    # Strip leading slash for the URL path
-    path = file_path.lstrip("/")
-    url = f"{config.FILE_SERVER_URL}/{path}"
-
-    try:
-        client = _get_client()
-        resp = client.get(url)
-        resp.raise_for_status()
-        data = resp.content
-        filename = Path(file_path).name
-        return data, filename
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 404:
-            raise FileNotFoundError(f"File not found on server: {file_path}") from None
-        raise RuntimeError(f"File server returned HTTP {exc.response.status_code}") from exc
-    except httpx.TransportError as exc:
-        raise RuntimeError(f"Cannot reach file server at {config.FILE_SERVER_URL}: {exc}") from exc
-
-
 # ── Conversion options ───────────────────────────────────────────────────────
 
 
@@ -134,7 +102,7 @@ def _build_options() -> dict[str, Any]:
 
 def parse_url(url: str) -> ConversionResult:
     """Fetch a URL via Docling and return structured conversion result."""
-    from .services.cache import cache_parse_result, get_cached_parse_result
+    from rag.services.cache import cache_parse_result, get_cached_parse_result
 
     file_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
     cached = get_cached_parse_result(file_hash)
@@ -172,12 +140,15 @@ def parse_url(url: str) -> ConversionResult:
 
 
 def parse_local_file(file_path: str) -> ConversionResult:
-    """Fetch a local file from the file server and convert via Docling.
+    """Read a local file directly and convert via Docling.
 
     Args:
-        file_path: Absolute path on the host (e.g., /mnt/docs/report.pdf)
+        file_path: Absolute path to the file (e.g., /mnt/docs/report.pdf)
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
     """
-    from .services.cache import cache_parse_result, get_cached_parse_result
+    from rag.services.cache import cache_parse_result, get_cached_parse_result
 
     file_hash = hashlib.sha256(file_path.encode()).hexdigest()[:16]
     cached = get_cached_parse_result(file_hash)
@@ -190,7 +161,11 @@ def parse_local_file(file_path: str) -> ConversionResult:
             errors=cached.get("errors", []),
         )
 
-    file_bytes, filename = fetch_file_from_server(file_path)
+    p = Path(file_path)
+    if not p.is_file():
+        raise FileNotFoundError(f"File not found: {file_path}")
+    file_bytes = p.read_bytes()
+    filename = p.name
     b64 = base64.b64encode(file_bytes).decode("ascii")
 
     payload = {

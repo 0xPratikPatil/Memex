@@ -55,7 +55,7 @@ Peak during ingestion: ~6.3GB (Ollama + Docling). Peak during search: ~2.4GB (Ol
 
 **Flow on ingest:**
 
-1. Fetch file bytes from file server
+1. Read file bytes directly from filesystem (using pathlib)
 2. Compute SHA256 of bytes
 3. Query Qdrant: does source exist with matching `content_hash`?
 4. If match → return "Already ingested (22 chunks, hash: abc123...)"

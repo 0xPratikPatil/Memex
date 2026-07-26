@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from .. import config
+from rag import config
 
 logger = logging.getLogger("metadata-extractor")
 

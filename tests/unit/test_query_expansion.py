@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from src import config
-from src.services.query_expansion import ExpandedQuery, QueryExpander
+from rag import config
+from rag.services.query_expansion import ExpandedQuery, QueryExpander
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 

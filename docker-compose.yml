@@ -1,9 +1,11 @@
-# docker-compose.yml — Personal RAG MCP stack
+# docker-compose.yml — Memex: Personal RAG backend services
+#
+# MCP server runs locally (not in Docker) for direct file access.
+# See: uv run memex
 #
 # Usage:
-#   docker compose up -d
-#   docker compose logs -f mcp
-#   docker compose down
+#   docker compose up -d          # Start backend services
+#   docker compose down           # Stop everything
 #
 # First run: pull Ollama model
 #   docker compose exec ollama ollama pull bge-m3
@@ -114,53 +116,29 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # ── Personal RAG MCP Server ────────────────────────────────────────────
-  mcp:
+  # ── MCP Server runs locally (not in Docker) ────────────────────────────
+  #   uv run memex        # start MCP server locally
+
+  # ── ML Services (sparse embeddings + reranker) ─────────────────────────
+  ml-services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: mcp
+      target: ml
     ports:
-      - "8080:8080"
+      - "5002:5002"
     environment:
-      DOCLING_URL: "http://docling:5001/v1/convert/source"
-      OLLAMA_EMBED_URL: "http://ollama:11434/api/embeddings"
-      QDRANT_URL: "http://qdrant:6333"
-      FILE_SERVER_URL: "http://fileserver:9900"
-      REDIS_URL: "redis://redis:6379/0"
-      ENABLE_CACHE: "true"
-      MCP_HOST: "0.0.0.0"
-      MCP_PORT: "8080"
-      MCP_TRANSPORT: "http"
-      CHUNK_SIZE: "512"
-      CHUNK_OVERLAP: "50"
-      CHUNK_STRATEGY: "recursive"
-      SEARCH_FUSION: "rrf"
-      RERANK_ENABLED: "true"
-      ENABLE_OCR: "true"
-      ENABLE_CONTEXTUAL_RETRIEVAL: "false"
-      CONTEXT_STRATEGY: "header"
-      CONTEXT_MODEL: ""
+      SPARSE_MODEL: "Qdrant/bm25"
+      RERANK_MODEL: "BAAI/bge-reranker-base"
       NVIDIA_VISIBLE_DEVICES: all
     networks:
       - backend
-    depends_on:
-      qdrant:
-        condition: service_healthy
-      ollama:
-        condition: service_healthy
-      docling:
-        condition: service_healthy
-      fileserver:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
+      test: ["CMD-SHELL", "curl -f http://localhost:5002/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
     deploy:
       resources:
         limits:
@@ -179,35 +157,8 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-  # ── File server (serves host files to MCP container) ────────────────────
-  fileserver:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: fileserver
     volumes:
-      - /mnt:/mnt:ro
-      - /home:/home:ro
-    networks:
-      - backend
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9900/health || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 256M
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+      - ./rag/ml_server.py:/app/server.py:ro  # dev mount
 
   # ── Redis (caching layer) ──────────────────────────────────────────────
   redis:

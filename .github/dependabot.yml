@@ -22,15 +22,3 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "ci"
-
-  - package-ecosystem: docker
-    directory: /
-    schedule:
-      interval: weekly
-      day: monday
-    labels:
-      - dependencies
-      - docker
-    open-pull-requests-limit: 5
-    commit-message:
-      prefix: "docker"

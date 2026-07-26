@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Architecture: MCP runs locally, services in Docker**
+  - MCP server now runs directly on host machine (not in Docker)
+  - Backend services (Qdrant, Ollama, Docling, Redis) remain in Docker
+  - Eliminates Docker permission issues for file access
+  - Faster development cycle (no Docker rebuild for MCP changes)
+  - Added `memex_cli` package for local MCP execution
+
+- **Simplified file handling**: Removed file server dependency, MCP now reads files directly from filesystem
+  - Removed `fileserver` service from Docker Compose
+  - Removed `FILE_SERVER_URL` configuration
+  - Updated `rag_ingest_file` tool to read files directly
+  - Improved performance by eliminating HTTP overhead for file reads
+
+- **MCP now lightweight**: Moved ML models (BM25 sparse, cross-encoder reranker) into Docker ML services container
+  - MCP only does HTTP orchestration — no model loading at startup
+  - ML services run on GPU inside Docker with HTTP API endpoints
+  - Added `setup.sh` bootstrap script for one-command setup
+  - MCP install drops fastembed and sentence-transformers dependencies (~2GB savings)
+
 ### Added
 - Query Expansion (HyDE + Multi-Query + Query Rewriting)
 - Contextual Retrieval (document context prefixes for chunks)

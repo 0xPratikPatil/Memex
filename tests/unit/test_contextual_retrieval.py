@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from src import config
-from src.services.contextual_retrieval import ContextGenerator, strip_context_prefix
+from rag import config
+from rag.services.contextual_retrieval import ContextGenerator, strip_context_prefix
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 

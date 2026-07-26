@@ -19,7 +19,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-from . import config
+from rag import config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,7 +29,7 @@ logger = logging.getLogger("mcp-server")
 
 CHARACTER_LIMIT = config.CHARACTER_LIMIT
 
-mcp = FastMCP("personal_rag_mcp")
+mcp = FastMCP("memex_rag")
 
 _engine = None
 
@@ -38,7 +38,7 @@ def _get_engine():
     """Return the RAGEngine singleton, creating it on first call."""
     global _engine
     if _engine is None:
-        from src.pipeline import RAGEngine
+        from rag.pipeline import RAGEngine
 
         _engine = RAGEngine()
     return _engine
@@ -65,7 +65,7 @@ def _shutdown():
     """Best-effort cleanup on process exit."""
     global _engine
     with contextlib.suppress(Exception):
-        from src import docling_client
+        from rag import docling_client
 
         if _engine is not None:
             _engine.close()
@@ -130,8 +130,8 @@ def _format_error(exc: Exception, context: str) -> str:
     title="Ingest Document",
     description="""Parse and index a document into the RAG vector database.
 
-Accepts a file path or URL. For local files, the server fetches them via the
-file server (no base64 encoding needed). For URLs, fetches directly.
+Accepts a file path or URL. For local files, the server reads them directly
+from disk. For URLs, fetches directly.
 
 Supports PDF, Word (docx), Markdown, HTML, and images (via OCR).
 Documents are chunked recursively (respecting paragraphs, sentences, headers),
@@ -158,14 +158,14 @@ Error Handling:
 )
 async def rag_ingest_file(file_path_or_url: str) -> str:
     try:
-        from src.docling_client import parse_file
+        from rag.docling_client import parse_file
 
         engine = _get_engine()
 
         def _progress(msg: str, pct: int) -> None:
             logger.info("ingest [%d%%] %s", pct, msg)
 
-        _progress("Fetching file from server...", 5)
+        _progress("Reading file from disk...", 5)
         result = parse_file(file_path_or_url)
 
         if not result.ok:
@@ -232,7 +232,7 @@ Error Handling:
 )
 async def rag_ingest_url(url: str) -> str:
     try:
-        from src.docling_client import parse_url
+        from rag.docling_client import parse_url
 
         engine = _get_engine()
         result = parse_url(url)
@@ -413,7 +413,7 @@ async def rag_query(
 
         expanded = None
         if expansion_enabled:
-            from src.services.query_expansion import QueryExpander
+            from rag.services.query_expansion import QueryExpander
 
             expander = QueryExpander(engine._get_ollama())
             expanded = expander.expand(query)
@@ -639,6 +639,84 @@ async def rag_collection_stats() -> str:
     except Exception as exc:
         logger.exception("rag_collection_stats failed")
         return _format_error(exc, "fetching collection stats")
+
+
+@mcp.tool(
+    name="rag_service_status",
+    title="Service Status",
+    description="""Check the status of all backend services.
+
+Returns health status and latency for each service:
+- Qdrant (vector database)
+- Ollama (embedding server)
+- Docling (document conversion)
+- Redis (caching layer)
+
+Args:
+  - (none)
+
+Returns:
+  JSON object with service status information.
+
+Error Handling:
+  - Returns status for each service individually.""",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
+async def rag_service_status() -> str:
+    from urllib.parse import urlparse
+
+    import httpx
+
+    services = {
+        "qdrant": config.QDRANT_URL,
+        "ollama": config.OLLAMA_EMBED_URL,
+        "docling": config.DOCLING_URL,
+        "redis": config.REDIS_URL,
+    }
+
+    statuses = {}
+    for name, url in services.items():
+        try:
+            parsed = urlparse(url)
+            base = f"{parsed.scheme}://{parsed.netloc}"
+
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                if name == "ollama":
+                    health_url = f"{base}/api/tags"
+                elif name == "qdrant":
+                    health_url = f"{base}/"
+                elif name == "redis":
+                    statuses[name] = {"healthy": True, "url": url, "note": "Redis HTTP health check not available"}
+                    continue
+                else:
+                    health_url = f"{base}/health"
+
+                response = await client.get(health_url)
+                latency_ms = response.elapsed.total_seconds() * 1000
+                statuses[name] = {
+                    "healthy": response.status_code == 200,
+                    "url": url,
+                    "latency_ms": round(latency_ms, 2),
+                }
+        except httpx.RequestError as e:
+            statuses[name] = {
+                "healthy": False,
+                "url": url,
+                "error": str(e),
+            }
+        except Exception as e:
+            statuses[name] = {
+                "healthy": False,
+                "url": url,
+                "error": str(e),
+            }
+
+    return json.dumps(statuses, indent=2)
 
 
 # ── Pre-warm models on import (background thread) ─────────────────────────────

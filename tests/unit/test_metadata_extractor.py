@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from src import config
-from src.services.metadata_extractor import MetadataExtractor
+from rag import config
+from rag.services.metadata_extractor import MetadataExtractor
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 

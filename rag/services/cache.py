@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from .. import config
+from rag import config
 
 logger = logging.getLogger("cache")
 

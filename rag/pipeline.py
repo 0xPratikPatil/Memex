@@ -24,7 +24,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from fastembed import SparseTextEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
@@ -46,10 +45,10 @@ from tenacity import (
     wait_exponential,
 )
 
-from . import config
-from .services.contextual_retrieval import ContextGenerator, strip_context_prefix
-from .services.metadata_extractor import MetadataExtractor
-from .services.query_expansion import ExpandedQuery
+from rag import config
+from rag.services.contextual_retrieval import ContextGenerator, strip_context_prefix
+from rag.services.metadata_extractor import MetadataExtractor
+from rag.services.query_expansion import ExpandedQuery
 
 logger = logging.getLogger("rag-pipeline")
 
@@ -278,8 +277,6 @@ class RAGEngine:
     def __init__(self) -> None:
         self._qdrant: QdrantClient | None = None
         self._ollama: httpx.Client | None = None
-        self._sparse_model: SparseTextEmbedding | None = None
-        self._reranker = None  # lazy CrossEncoder
 
     # ── Lazy singletons ───────────────────────────────────────────────────
 
@@ -303,23 +300,6 @@ class RAGEngine:
                 ),
             )
         return self._ollama
-
-    def _get_sparse_model(self) -> SparseTextEmbedding:
-        if self._sparse_model is None:
-            logger.info("Loading sparse model: %s", config.SPARSE_MODEL)
-            self._sparse_model = SparseTextEmbedding(model_name=config.SPARSE_MODEL)
-        return self._sparse_model
-
-    def _get_reranker(self):
-        if self._reranker is None:
-            if config.ENABLE_RERANKING:
-                from sentence_transformers import CrossEncoder
-
-                logger.info("Loading reranker: %s", config.RERANK_MODEL)
-                self._reranker = CrossEncoder(config.RERANK_MODEL)
-            else:
-                return None
-        return self._reranker
 
     # ── Collection setup ──────────────────────────────────────────────────
 
@@ -355,7 +335,7 @@ class RAGEngine:
     )
     def _dense_embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Embed a batch of texts via Ollama."""
-        from .services.cache import cache_embedding, get_cached_embedding
+        from rag.services.cache import cache_embedding, get_cached_embedding
 
         client = self._get_ollama()
 
@@ -384,7 +364,7 @@ class RAGEngine:
 
     def _dense_embed(self, text: str) -> list[float]:
         """Embed a single text."""
-        from .services.cache import cache_embedding, get_cached_embedding
+        from rag.services.cache import cache_embedding, get_cached_embedding
 
         cached = get_cached_embedding(text)
         if cached is not None:
@@ -394,15 +374,55 @@ class RAGEngine:
         cache_embedding(text, embedding)
         return embedding
 
-    def _sparse_embed(self, text: str) -> tuple[list[int], list[float]]:
-        model = self._get_sparse_model()
-        emb = list(model.embed([text]))[0]
-        return emb.indices.tolist(), emb.values.tolist()
+    def _sparse_embed(self, texts: list[str]) -> list[dict[str, float]]:
+        """Get sparse embeddings via configured provider (http or local)."""
+        if config.SPARSE_PROVIDER == "http":
+            client = httpx.Client(timeout=30.0)
+            resp = client.post(
+                f"{config.ML_SERVICES_URL}/sparse/embed",
+                json={"texts": texts},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            client.close()
+            return data["vectors"]
+        else:
+            # Local provider — import fastembed on demand
+            from fastembed import SparseTextEmbedding
 
-    def _sparse_embed_batch(self, texts: list[str]) -> list[tuple[list[int], list[float]]]:
-        model = self._get_sparse_model()
-        embs = list(model.embed(texts))
-        return [(e.indices.tolist(), e.values.tolist()) for e in embs]
+            if not hasattr(self, "_sparse_model_local"):
+                logger.info("Loading sparse model locally: %s", config.SPARSE_MODEL)
+                self._sparse_model_local = SparseTextEmbedding(model_name=config.SPARSE_MODEL)
+            return [dict(emb) for emb in self._sparse_model_local.embed(texts)]
+
+    def _rerank(self, query: str, documents: list[str], top_k: int = 10) -> tuple[list[float], list[int]]:
+        """Rerank documents via configured provider (http, local, or ollama)."""
+        if config.RERANK_PROVIDER == "http":
+            client = httpx.Client(timeout=30.0)
+            resp = client.post(
+                f"{config.ML_SERVICES_URL}/rerank",
+                json={"query": query, "documents": documents, "top_k": top_k},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            client.close()
+            return data["scores"], data["indices"]
+        elif config.RERANK_PROVIDER == "local":
+            from sentence_transformers import CrossEncoder
+
+            if not hasattr(self, "_reranker_local"):
+                logger.info("Loading reranker locally: %s", config.RERANK_MODEL)
+                self._reranker_local = CrossEncoder(config.RERANK_MODEL)
+            pairs = [(query, doc) for doc in documents]
+            scores = self._reranker_local.predict(pairs)
+            indexed = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
+            top = indexed[:top_k]
+            return [float(s) for _, s in top], [int(i) for i, _ in top]
+        else:
+            # Unknown provider — return unsorted (identity rerank)
+            logger.warning("Unknown rerank provider '%s', returning unsorted", config.RERANK_PROVIDER)
+            n = min(top_k, len(documents))
+            return [0.0] * n, list(range(n))
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -483,7 +503,7 @@ class RAGEngine:
         _progress(f"Generating embeddings ({len(raw_chunks)} chunks)...", 75)
         chunk_texts = [c["content"] for c in raw_chunks]
         dense_vecs = self._dense_embed_batch(chunk_texts)
-        sparse_vecs = self._sparse_embed_batch(chunk_texts)
+        sparse_vecs = self._sparse_embed(chunk_texts)
 
         # Generate contextual embeddings (enriched content) if enabled
         contextual_vecs: list[list[float]] | None = None
@@ -496,7 +516,7 @@ class RAGEngine:
         base_meta = metadata or {}
 
         points: list[PointStruct] = []
-        for idx, (chunk, dense_vec, (sparse_idx, sparse_vals)) in enumerate(
+        for idx, (chunk, dense_vec, sparse_dict) in enumerate(
             zip(raw_chunks, dense_vecs, sparse_vecs, strict=True)
         ):
             point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{source_identifier}_{idx}"))
@@ -516,8 +536,8 @@ class RAGEngine:
             vectors: dict[str, Any] = {
                 "dense": dense_vec,
                 "sparse": SparseVector(
-                    indices=sparse_idx,
-                    values=sparse_vals,
+                    indices=[int(k) for k in sparse_dict],
+                    values=list(sparse_dict.values()),
                 ),
             }
             if contextual_vecs is not None:
@@ -563,7 +583,7 @@ class RAGEngine:
         *metadata_filter* is a dict of key→value constraints applied to the
         Qdrant payload. Lists are treated as multi-value (MatchAny).
         """
-        from .services.cache import cache_search_results, get_cached_search_results
+        from rag.services.cache import cache_search_results, get_cached_search_results
 
         cached = get_cached_search_results(query, top_k, source_filter)
         if cached is not None:
@@ -578,7 +598,9 @@ class RAGEngine:
 
         t_embed = time.monotonic()
         query_dense = self._dense_embed(dense_query)
-        q_indices, q_values = self._sparse_embed(query)
+        sparse_vec = self._sparse_embed([query])[0]
+        q_indices = [int(k) for k in sparse_vec]
+        q_values = list(sparse_vec.values())
         _record_eval_timing("embed_query", (time.monotonic() - t_embed) * 1000)
 
         qdrant = self._get_qdrant()
@@ -706,15 +728,14 @@ class RAGEngine:
         # ── Reranking ─────────────────────────────────────────────────────
         if rerank and results:
             t_rerank = time.monotonic()
-            reranker = self._get_reranker()
-            if reranker is not None:
-                pairs = [[query, item["content"]] for item in results]
-                scores = reranker.predict(pairs)
+            contents = [item["content"] for item in results]
+            try:
+                scores, _ = self._rerank(query, contents, top_k=min(top_k, len(contents)))
                 for i, score in enumerate(scores):
                     results[i]["rerank_score"] = float(score)
                 results.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)
-            else:
-                logger.warning("Reranker not available, skipping rerank step")
+            except Exception:
+                logger.warning("Reranking failed, skipping rerank step", exc_info=True)
             _record_eval_timing("rerank", (time.monotonic() - t_rerank) * 1000)
 
         final_results = results[:top_k]
@@ -853,7 +874,7 @@ class RAGEngine:
 
     def delete_by_source(self, source_identifier: str) -> bool:
         """Delete all chunks whose source matches source_identifier."""
-        from .services.cache import invalidate_for_document
+        from rag.services.cache import invalidate_for_document
 
         qdrant = self._get_qdrant()
         qdrant.delete(
