@@ -97,7 +97,7 @@ Key settings:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `EMBED_MODEL` | `bge-m3` | Embedding model (Ollama) |
-| `CHAT_MODEL` | `qwen2:5.5b` | Chat/LLM model for advanced features |
+| `CHAT_MODEL` | `qwen2.5:0.5b` | Chat/LLM model for advanced features |
 | `CHUNK_SIZE` | `512` | Target chunk size (tokens) |
 | `ENABLE_CACHE` | `false` | Enable Redis caching |
 | `ENABLE_QUERY_EXPANSION` | `false` | Enable HyDE + Multi-Query |

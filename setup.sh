@@ -4,7 +4,7 @@
 #
 #   ./setup.sh                      # use defaults
 #   EMBED_MODEL=llama3.2:1b ./setup.sh   # custom embedding model
-#   CHAT_MODEL=qwen2:5.5b ./setup.sh     # custom chat model
+#   CHAT_MODEL=qwen2.5:0.5b ./setup.sh     # custom chat model
 #
 # What it does:
 #   1. Checks Docker is running
@@ -21,7 +21,7 @@ if [ -f .env ]; then set -a; source .env; set +a; fi
 
 # ── Models (env var > .env > default) ───────────────────────────────────────
 EMBED="${EMBED_MODEL:-bge-m3}"
-CHAT="${CHAT_MODEL:-qwen2:5.5b}"
+CHAT="${CHAT_MODEL:-qwen2.5:0.5b}"
 RERANK="${RERANK_MODEL:-BAAI/bge-reranker-base}"
 SPARSE="${SPARSE_MODEL:-Qdrant/bm25}"
 

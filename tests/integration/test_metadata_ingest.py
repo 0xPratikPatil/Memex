@@ -36,7 +36,7 @@ class TestLanguageDetection:
 
         monkeypatch.setattr("rag.config.ENABLE_METADATA_EXTRACTION", True)
         monkeypatch.setattr("rag.config.ENABLE_LANGUAGE_DETECTION", True)
-        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2:5.5b")
+        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2.5:0.5b")
 
         extractor = MetadataExtractor(None)
         lang = extractor.detect_language(
@@ -223,7 +223,7 @@ class TestEntityExtractionLLM:
     ) -> None:
         monkeypatch.setattr("rag.config.ENABLE_METADATA_EXTRACTION", True)
         monkeypatch.setattr("rag.config.ENABLE_ENTITY_EXTRACTION", True)
-        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2:5.5b")
+        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2.5:0.5b")
 
         extractor = MetadataExtractor(ollama_client)
         entities = extractor.extract_entities(
@@ -236,14 +236,14 @@ class TestEntityExtractionLLM:
     ) -> None:
         monkeypatch.setattr("rag.config.ENABLE_METADATA_EXTRACTION", True)
         monkeypatch.setattr("rag.config.ENABLE_ENTITY_EXTRACTION", True)
-        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2:5.5b")
+        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2.5:0.5b")
 
         extractor = MetadataExtractor(ollama_client)
         entities = extractor.extract_entities(
             "Alice Smith from Acme Corp launched Widget Pro in New York on 2026-01-15."
         )
         assert isinstance(entities, dict)
-        # qwen2:5.5b may return empty dict — acceptable for a tiny model
+        # qwen2.5:0.5b may return empty dict — acceptable for a tiny model
         if entities:
             for key in ("people", "organizations", "dates", "locations", "products"):
                 assert key in entities
@@ -262,7 +262,7 @@ class TestTopicExtractionLLM:
     ) -> None:
         monkeypatch.setattr("rag.config.ENABLE_METADATA_EXTRACTION", True)
         monkeypatch.setattr("rag.config.ENABLE_TOPIC_TAGGING", True)
-        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2:5.5b")
+        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2.5:0.5b")
 
         extractor = MetadataExtractor(ollama_client)
         topics = extractor.extract_topics(
@@ -284,7 +284,7 @@ class TestDocumentClassificationLLM:
     ) -> None:
         monkeypatch.setattr("rag.config.ENABLE_METADATA_EXTRACTION", True)
         monkeypatch.setattr("rag.config.ENABLE_DOC_CLASSIFICATION", True)
-        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2:5.5b")
+        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2.5:0.5b")
 
         valid = {
             "report", "email", "article", "code", "documentation",
@@ -311,7 +311,7 @@ class TestExtractAllIntegration:
         monkeypatch.setattr("rag.config.ENABLE_DOC_CLASSIFICATION", False)
         monkeypatch.setattr("rag.config.ENABLE_TOPIC_TAGGING", False)
         monkeypatch.setattr("rag.config.ENABLE_LANGUAGE_DETECTION", True)
-        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2:5.5b")
+        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2.5:0.5b")
 
         extractor = MetadataExtractor(None)
         chunk = {
@@ -350,7 +350,7 @@ class TestExtractAllIntegration:
         monkeypatch.setattr("rag.config.ENABLE_DOC_CLASSIFICATION", True)
         monkeypatch.setattr("rag.config.ENABLE_TOPIC_TAGGING", True)
         monkeypatch.setattr("rag.config.ENABLE_LANGUAGE_DETECTION", True)
-        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2:5.5b")
+        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen2.5:0.5b")
 
         extractor = MetadataExtractor(ollama_client)
         chunk = {

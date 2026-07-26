@@ -67,7 +67,7 @@ COLLECTION_NAME: str = _env("COLLECTION_NAME", "memex")
 EMBED_MODEL: str = _env("EMBED_MODEL", "bge-m3")
 RERANK_MODEL: str = _env("RERANK_MODEL", "BAAI/bge-reranker-base")
 SPARSE_MODEL: str = _env("SPARSE_MODEL", "Qdrant/bm25")
-CHAT_MODEL: str = _env("CHAT_MODEL", "qwen2:5.5b")  # for context/query/metadata generation
+CHAT_MODEL: str = _env("CHAT_MODEL", "qwen2.5:0.5b")  # for context/query/metadata generation
 
 # Provider: "http" (Docker ML service) or "local" (load in-process)
 SPARSE_PROVIDER: str = _env("SPARSE_PROVIDER", "http")
