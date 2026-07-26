@@ -1,0 +1,50 @@
+# Version control
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# Environment & secrets
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes (local data)
+qdrant_data/
+ollama_data/
+
+# Documentation
+*.md
+LICENSE
+docs/
+
+# Testing
+tests/
+pytest.ini
+.coverage
+htmlcov/
+
+# Dev tools
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+pre-commit-config.yaml
