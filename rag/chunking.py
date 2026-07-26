@@ -30,7 +30,7 @@ def _get_hybrid_chunker():
         return None
 
     chunker = HybridChunker(
-        tokenizer=config.EMBED_MODEL,
+        tokenizer=config.CHUNK_TOKENIZER,
         max_tokens=config.CHUNK_SIZE,
         overlap=config.CHUNK_OVERLAP,
         merge_peers=config.CHUNK_MERGE_PEERS,

@@ -86,6 +86,7 @@ RERANK_PROVIDER: str = _env("RERANK_PROVIDER", "http")
 DENSE_DIM: int = _env_int("DENSE_DIM", 1024)
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
+CHUNK_TOKENIZER: str = _env("CHUNK_TOKENIZER", "BAAI/bge-m3")
 CHUNK_SIZE: int = _env_int("CHUNK_SIZE", 1024)
 CHUNK_OVERLAP: int = _env_int("CHUNK_OVERLAP", 128)
 MIN_CHUNK_LEN: int = _env_int("MIN_CHUNK_LEN", 30)
