@@ -19,7 +19,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-import config
+from . import config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,6 +46,7 @@ def _get_engine():
 
 def _prewarm_models():
     """Load sparse model and reranker in background thread to avoid first-search cold start."""
+
     def _load():
         try:
             engine = _get_engine()
@@ -115,8 +116,7 @@ def _format_error(exc: Exception, context: str) -> str:
         )
     if "Cannot reach" in msg or "ConnectionRefused" in exc_type:
         return (
-            f"Error: {context} failed — service unreachable. "
-            "Check that all services are running (docker compose ps)."
+            f"Error: {context} failed — service unreachable. Check that all services are running (docker compose ps)."
         )
 
     return f"Error: {context} failed: {exc_type}: {msg}"
@@ -169,10 +169,7 @@ async def rag_ingest_file(file_path_or_url: str) -> str:
         result = parse_file(file_path_or_url)
 
         if not result.ok:
-            return (
-                f"Error: Docling conversion returned status '{result.status}' "
-                f"with errors: {result.errors}"
-            )
+            return f"Error: Docling conversion returned status '{result.status}' with errors: {result.errors}"
 
         _progress("Checking if already ingested...", 10)
         content_hash = engine.compute_file_hash(result.markdown.encode())
@@ -241,10 +238,7 @@ async def rag_ingest_url(url: str) -> str:
         result = parse_url(url)
 
         if not result.ok:
-            return (
-                f"Error: Docling conversion returned status '{result.status}' "
-                f"with errors: {result.errors}"
-            )
+            return f"Error: Docling conversion returned status '{result.status}' with errors: {result.errors}"
 
         content_hash = engine.compute_file_hash(result.markdown.encode())
         already, chunk_count = engine.is_already_ingested(url, content_hash)
@@ -306,9 +300,7 @@ async def rag_ingest_batch(items: list[str]) -> dict[str, str]:
             result = parse_file(item)
 
             if not result.ok:
-                summary[item] = (
-                    f"Failed: Docling status '{result.status}', errors: {result.errors}"
-                )
+                summary[item] = f"Failed: Docling status '{result.status}', errors: {result.errors}"
                 continue
 
             content_hash = engine.compute_file_hash(result.markdown.encode())
@@ -337,6 +329,18 @@ async def rag_ingest_batch(items: list[str]) -> dict[str, str]:
     description="""Search personal documents using hybrid vector search (Dense + BM25 Sparse)
 with Reciprocal Rank Fusion and optional cross-encoder reranking.
 
+Optionally applies query expansion (HyDE, Multi-Query, Query Rewriting) to
+improve recall for complex or ambiguous queries. Expansion techniques are
+controlled by server-side feature flags (ENABLE_QUERY_EXPANSION, ENABLE_HYDE,
+ENABLE_MULTI_QUERY, ENABLE_QUERY_REWRITE).
+
+When contextual retrieval is enabled, the search can use context-enriched
+embeddings for better retrieval of ambiguous chunks.
+
+Supports metadata filtering when metadata extraction is enabled. Filter by
+document type, topics, language, keywords, entities, or dates stored in the
+Qdrant payload.
+
 Returns relevant document chunks ranked by relevance.
 
 Args:
@@ -344,7 +348,14 @@ Args:
   - top_k (number): Max results to return, 1-50 (default: 5).
   - use_reranking (boolean): Apply cross-encoder reranking (default: true).
   - source_filter (string, optional): Filter results to a specific document source.
+  - use_query_expansion (boolean, optional): Override server default for expansion (default: null).
+  - use_contextual_search (boolean, optional): Use contextual embeddings for search
+    (default: null, uses server setting).
   - response_format ('markdown' | 'json'): Output format (default: 'markdown').
+  - metadata_filter (object, optional): Filter by metadata fields. Keys are
+    payload field names (e.g. "doc_type", "topics", "language", "keywords",
+    "entities.people", "dates"). Values are strings or lists of strings.
+    Example: {"doc_type": "report", "topics": ["finance", "revenue"]}.
 
 Returns:
   For JSON format:
@@ -358,7 +369,12 @@ Returns:
         "rerank_score": number | null,
         "source": string,
         "content": string,
-        "section_header": string
+        "section_header": string,
+        "context_prefix": string,
+        "doc_type": string,
+        "topics": [string],
+        "language": string,
+        "keywords": [string]
       }
     ]
   }
@@ -368,6 +384,7 @@ Examples:
   - Use when: "Find revenue data" -> query="quarterly revenue figures"
   - Use when: "What did the contract say about termination?" -> query="contract termination clauses"
   - Use when: "Search only in report.pdf" -> query="revenue", source_filter="/docs/report.pdf"
+  - Use when: "Find reports about finance" -> query="revenue", metadata_filter={"doc_type": "report"}
 
 Error Handling:
   - Returns error message if search fails or Qdrant is unavailable.""",
@@ -383,15 +400,32 @@ async def rag_query(
     top_k: int = 5,
     use_reranking: bool = True,
     source_filter: str | None = None,
+    use_query_expansion: bool | None = None,
+    use_contextual_search: bool | None = None,
     response_format: ResponseFormat = ResponseFormat.MARKDOWN,
+    metadata_filter: dict[str, str | list[str]] | None = None,
 ) -> Any:
     try:
         engine = _get_engine()
+
+        # Determine whether to use query expansion
+        expansion_enabled = use_query_expansion if use_query_expansion is not None else config.ENABLE_QUERY_EXPANSION
+
+        expanded = None
+        if expansion_enabled:
+            from src.services.query_expansion import QueryExpander
+
+            expander = QueryExpander(engine._get_ollama())
+            expanded = expander.expand(query)
+
         results = engine.hybrid_search(
             query=query,
             top_k=top_k,
             rerank=use_reranking,
             source_filter=source_filter,
+            metadata_filter=metadata_filter,
+            expanded_query=expanded,
+            use_contextual_search=use_contextual_search,
         )
 
         if not results:
@@ -411,6 +445,11 @@ async def rag_query(
                         "source": r["source"],
                         "content": r["content"],
                         "section_header": r.get("section_header", ""),
+                        "context_prefix": r.get("context_prefix", ""),
+                        "doc_type": r.get("doc_type", ""),
+                        "topics": r.get("topics", []),
+                        "language": r.get("language", ""),
+                        "keywords": r.get("keywords", []),
                     }
                     for r in results
                 ],
@@ -433,6 +472,20 @@ async def rag_query(
 
             lines.append(f"## {i}. {source_label}")
             lines.append(f"**Score**: {score_str}")
+
+            # Show metadata when available
+            meta_parts = []
+            if r.get("doc_type"):
+                meta_parts.append(f"Type: {r['doc_type']}")
+            if r.get("topics"):
+                meta_parts.append(f"Topics: {', '.join(r['topics'])}")
+            if r.get("language"):
+                meta_parts.append(f"Lang: {r['language']}")
+            if r.get("keywords"):
+                meta_parts.append(f"Keywords: {', '.join(r['keywords'][:5])}")
+            if meta_parts:
+                lines.append(f"**Metadata**: {' | '.join(meta_parts)}")
+
             lines.append("")
             lines.append(r["content"])
             lines.append("")
@@ -483,7 +536,9 @@ async def rag_delete_document(source_identifier: str) -> str:
     title="List Ingested Documents",
     description="""List all documents currently indexed in the RAG knowledge base.
 
-Returns document source paths, chunk counts, and ingestion timestamps.
+Returns document source paths, chunk counts, ingestion timestamps, and
+metadata (doc type, topics, language, keywords) when metadata extraction
+is enabled.
 
 Args:
   - (none)
@@ -497,7 +552,11 @@ Returns:
         "source": string,
         "chunk_count": number,
         "ingested_at": string,
-        "sections": [string]
+        "sections": [string],
+        "doc_type": string,
+        "topics": [string],
+        "language": string,
+        "keywords": [string]
       }
     ]
   }
@@ -533,6 +592,14 @@ async def rag_list_documents(
             lines.append(f"- **Chunks**: {doc['chunk_count']}")
             if doc.get("ingested_at"):
                 lines.append(f"- **Ingested**: {doc['ingested_at']}")
+            if doc.get("doc_type"):
+                lines.append(f"- **Type**: {doc['doc_type']}")
+            if doc.get("topics"):
+                lines.append(f"- **Topics**: {', '.join(doc['topics'][:10])}")
+            if doc.get("language"):
+                lines.append(f"- **Language**: {doc['language']}")
+            if doc.get("keywords"):
+                lines.append(f"- **Keywords**: {', '.join(doc['keywords'][:10])}")
             if doc.get("sections"):
                 lines.append(f"- **Sections**: {', '.join(doc['sections'][:10])}")
             lines.append("")

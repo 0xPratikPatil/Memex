@@ -2,7 +2,19 @@
 name = "personal-rag-mcp"
 version = "0.3.0"
 description = "Production MCP server for personal RAG with Docling + Qdrant + Ollama"
-requires-python = ">=3.11"
+authors = [
+    { name = "Pratik" },
+]
+license = { text = "MIT" }
+requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+]
 dependencies = [
     "httpx>=0.27,<1",
     "tenacity>=9,<10",
@@ -10,6 +22,28 @@ dependencies = [
     "qdrant-client>=1.18,<2",
     "fastembed>=0.4,<1",
     "sentence-transformers>=3,<4",
+    "redis>=5,<6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pytest-cov>=6,<7",
+    "pytest-asyncio>=0.25,<1",
+    "mypy>=1.15,<2",
+    "ruff>=0.16,<1",
+    "pre-commit>=4,<5",
+    "black>=25,<26",
+]
+test = [
+    "pytest>=8,<9",
+    "pytest-cov>=6,<7",
+    "pytest-asyncio>=0.25,<1",
+    "httpx>=0.27,<1",
+]
+eval = [
+    "ragas>=0.2,<1",
+    "datasets>=3,<4",
 ]
 
 [project.scripts]
@@ -21,6 +55,19 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short --strict-markers"
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
 
 [tool.ruff]
 target-version = "py312"
@@ -34,4 +81,24 @@ ignore = [
     "EXE001",   # shebangs are needed for Docker ENTRYPOINT
     "RUF012",   # mutable class attributes are acceptable here
     "RUF015",   # single-element slice is readable enough
+]
+
+[tool.coverage.run]
+source = ["."]
+omit = [
+    "tests/*",
+    ".opencode/*",
+    "scripts/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.0",
 ]

@@ -43,7 +43,7 @@ RUN groupadd -g 10001 -r appgroup && \
     mkdir -p /app/.cache && chown -R appuser:appgroup /app/.cache
 
 # Copy application code with proper ownership
-COPY --chown=appuser:appgroup config.py run.py ./
+COPY --chown=appuser:appgroup run.py ./
 COPY --chown=appuser:appgroup src/ src/
 
 # Switch to non-root user

@@ -116,21 +116,66 @@ For local stdio mode:
 | `ollama` | 11434 | Embedding server |
 | `docling` | 5001 | Document conversion |
 
+## Project Structure
+
+```
+.
+├── src/
+│   ├── config.py          # Central configuration (env vars)
+│   ├── server.py          # MCP server tool definitions
+│   ├── pipeline.py        # RAG engine: embeddings, Qdrant, search
+│   ├── docling_client.py  # Docling document conversion client
+│   ├── models/            # Data models (Pydantic/dataclass)
+│   ├── services/          # Business logic services
+│   └── utils/             # Shared utilities
+├── tests/
+│   ├── unit/              # Unit tests
+│   ├── integration/       # Integration tests
+│   └── fixtures/          # Test fixtures and sample data
+├── scripts/               # Utility scripts
+├── run.py                 # Entry point (stdio/HTTP mode)
+├── file_server.py         # Lightweight host file server
+├── Dockerfile             # MCP server container
+├── Dockerfile.fileserver  # File server container
+├── docker-compose.yml     # Full stack orchestration
+├── Makefile               # Common development tasks
+└── pyproject.toml         # Project metadata and tooling config
+```
+
 ## Development
 
+### Prerequisites
+
+- Python 3.11+
+- Docker & Docker Compose
+- [uv](https://docs.astral.sh/uv/) (recommended) or pip
+
+### Setup
+
 ```bash
-# Run locally (without Docker)
+# Clone and configure
+cd mcp/rag
+cp .env.example .env
+
+# Install dependencies (with uv)
+uv sync
+
+# Or with pip
 pip install -e .
 
-# Start Qdrant locally
-docker run -p 6333:6333 qdrant/qdrant
+# Install pre-commit hooks (optional)
+pip install pre-commit
+pre-commit install
+```
 
-# Start Ollama locally
-ollama serve
+### Running Locally
 
-# Start Docling locally
-pip install docling-serve
-docling-serve run
+```bash
+# Start infrastructure services only
+docker compose up -d qdrant ollama docling fileserver
+
+# Pull embedding model into Ollama (first time only)
+docker compose exec ollama ollama pull bge-m3
 
 # Run MCP server in stdio mode
 python run.py
@@ -138,6 +183,51 @@ python run.py
 # Run MCP server in HTTP mode
 python run.py --http --port 8080
 ```
+
+### Common Tasks
+
+```bash
+make lint       # Run ruff linter
+make fmt        # Auto-format with ruff
+make test       # Run pytest
+make build      # Build Docker images
+make up         # docker compose up -d
+make down       # docker compose down
+make logs       # docker compose logs -f
+make clean      # Remove build artifacts
+```
+
+## Testing
+
+```bash
+# Run all tests
+make test
+
+# Run with verbose output
+pytest tests/ -v
+
+# Run a specific test file
+pytest tests/unit/test_config.py -v
+
+# Run tests with coverage
+pip install pytest-cov
+pytest tests/ --cov=src --cov-report=html
+```
+
+## Contributing
+
+1. Create a feature branch: `git checkout -b feature/my-feature`
+2. Make your changes and add tests
+3. Run linting and tests: `make lint make test`
+4. Commit with a descriptive message
+5. Push and open a Pull Request
+
+### Code Style
+
+- Formatter/linter: [Ruff](https://docs.astral.sh/ruff/) (configured in `pyproject.toml`)
+- Line length: 120 characters
+- Import sorting: `ruff check --select I`
+- All code must pass `make lint` before committing
 
 ## Chunking Strategies
 

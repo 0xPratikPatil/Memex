@@ -126,6 +126,8 @@ services:
       OLLAMA_EMBED_URL: "http://ollama:11434/api/embeddings"
       QDRANT_URL: "http://qdrant:6333"
       FILE_SERVER_URL: "http://fileserver:9900"
+      REDIS_URL: "redis://redis:6379/0"
+      ENABLE_CACHE: "true"
       MCP_HOST: "0.0.0.0"
       MCP_PORT: "8080"
       MCP_TRANSPORT: "http"
@@ -135,6 +137,9 @@ services:
       SEARCH_FUSION: "rrf"
       RERANK_ENABLED: "true"
       ENABLE_OCR: "true"
+      ENABLE_CONTEXTUAL_RETRIEVAL: "false"
+      CONTEXT_STRATEGY: "header"
+      CONTEXT_MODEL: ""
       NVIDIA_VISIBLE_DEVICES: all
     networks:
       - backend
@@ -146,6 +151,8 @@ services:
       docling:
         condition: service_healthy
       fileserver:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
@@ -200,6 +207,32 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ── Redis (caching layer) ──────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - backend
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 networks:
   backend:
     driver: bridge
@@ -207,3 +240,4 @@ networks:
 volumes:
   qdrant_data:
   ollama_data:
+  redis_data:

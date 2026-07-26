@@ -31,11 +31,14 @@ class FileHandler(BaseHTTPRequestHandler):
         path = unquote(self.path).lstrip("/")
 
         if not path:
-            self.send_json(200, {
-                "status": "ok",
-                "message": "File server running",
-                "roots": [str(r) for r in self.allowed_roots],
-            })
+            self.send_json(
+                200,
+                {
+                    "status": "ok",
+                    "message": "File server running",
+                    "roots": [str(r) for r in self.allowed_roots],
+                },
+            )
             return
 
         if path == "health":
@@ -131,6 +134,7 @@ class FileHandler(BaseHTTPRequestHandler):
 
     def send_json(self, code: int, data: dict):
         import json
+
         body = json.dumps(data).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")

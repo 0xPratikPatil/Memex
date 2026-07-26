@@ -7,6 +7,7 @@ with exponential back-off.  Works both inside Docker and on bare metal.
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,7 +22,7 @@ from tenacity import (
     wait_exponential,
 )
 
-import config
+from . import config
 
 logger = logging.getLogger("docling-client")
 
@@ -108,13 +109,9 @@ def fetch_file_from_server(file_path: str) -> tuple[bytes, str]:
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 404:
             raise FileNotFoundError(f"File not found on server: {file_path}") from None
-        raise RuntimeError(
-            f"File server returned HTTP {exc.response.status_code}"
-        ) from exc
+        raise RuntimeError(f"File server returned HTTP {exc.response.status_code}") from exc
     except httpx.TransportError as exc:
-        raise RuntimeError(
-            f"Cannot reach file server at {config.FILE_SERVER_URL}: {exc}"
-        ) from exc
+        raise RuntimeError(f"Cannot reach file server at {config.FILE_SERVER_URL}: {exc}") from exc
 
 
 # ── Conversion options ───────────────────────────────────────────────────────
@@ -137,6 +134,19 @@ def _build_options() -> dict[str, Any]:
 
 def parse_url(url: str) -> ConversionResult:
     """Fetch a URL via Docling and return structured conversion result."""
+    from .services.cache import cache_parse_result, get_cached_parse_result
+
+    file_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+    cached = get_cached_parse_result(file_hash)
+    if cached is not None:
+        logger.info("Docling cache hit for URL: %s", url)
+        return ConversionResult(
+            markdown=cached["markdown"],
+            status=cached.get("status", "success"),
+            processing_time=cached.get("processing_time", 0.0),
+            errors=cached.get("errors", []),
+        )
+
     payload = {
         "options": _build_options(),
         "sources": [{"kind": "http", "url": url}],
@@ -146,15 +156,19 @@ def parse_url(url: str) -> ConversionResult:
         data = _post(payload)
     except httpx.HTTPStatusError as exc:
         raise RuntimeError(
-            f"Docling server returned HTTP {exc.response.status_code}: "
-            f"{exc.response.text[:500]}"
+            f"Docling server returned HTTP {exc.response.status_code}: {exc.response.text[:500]}"
         ) from exc
     except httpx.TransportError as exc:
-        raise RuntimeError(
-            f"Cannot reach Docling server at {config.DOCLING_URL}: {exc}"
-        ) from exc
+        raise RuntimeError(f"Cannot reach Docling server at {config.DOCLING_URL}: {exc}") from exc
 
-    return _parse_response(data)
+    result = _parse_response(data)
+    cache_parse_result(file_hash, {
+        "markdown": result.markdown,
+        "status": result.status,
+        "processing_time": result.processing_time,
+        "errors": result.errors,
+    })
+    return result
 
 
 def parse_local_file(file_path: str) -> ConversionResult:
@@ -163,6 +177,19 @@ def parse_local_file(file_path: str) -> ConversionResult:
     Args:
         file_path: Absolute path on the host (e.g., /mnt/docs/report.pdf)
     """
+    from .services.cache import cache_parse_result, get_cached_parse_result
+
+    file_hash = hashlib.sha256(file_path.encode()).hexdigest()[:16]
+    cached = get_cached_parse_result(file_hash)
+    if cached is not None:
+        logger.info("Docling cache hit for local file: %s", file_path)
+        return ConversionResult(
+            markdown=cached["markdown"],
+            status=cached.get("status", "success"),
+            processing_time=cached.get("processing_time", 0.0),
+            errors=cached.get("errors", []),
+        )
+
     file_bytes, filename = fetch_file_from_server(file_path)
     b64 = base64.b64encode(file_bytes).decode("ascii")
 
@@ -181,15 +208,18 @@ def parse_local_file(file_path: str) -> ConversionResult:
         data = _post(payload)
     except httpx.HTTPStatusError as exc:
         raise RuntimeError(
-            f"Docling server returned HTTP {exc.response.status_code}: "
-            f"{exc.response.text[:500]}"
+            f"Docling server returned HTTP {exc.response.status_code}: {exc.response.text[:500]}"
         ) from exc
     except httpx.TransportError as exc:
-        raise RuntimeError(
-            f"Cannot reach Docling server at {config.DOCLING_URL}: {exc}"
-        ) from exc
+        raise RuntimeError(f"Cannot reach Docling server at {config.DOCLING_URL}: {exc}") from exc
 
     result = _parse_response(data)
+    cache_parse_result(file_hash, {
+        "markdown": result.markdown,
+        "status": result.status,
+        "processing_time": result.processing_time,
+        "errors": result.errors,
+    })
     return result
 
 
@@ -214,13 +244,10 @@ def parse_file_content(
         data = _post(payload)
     except httpx.HTTPStatusError as exc:
         raise RuntimeError(
-            f"Docling server returned HTTP {exc.response.status_code}: "
-            f"{exc.response.text[:500]}"
+            f"Docling server returned HTTP {exc.response.status_code}: {exc.response.text[:500]}"
         ) from exc
     except httpx.TransportError as exc:
-        raise RuntimeError(
-            f"Cannot reach Docling server at {config.DOCLING_URL}: {exc}"
-        ) from exc
+        raise RuntimeError(f"Cannot reach Docling server at {config.DOCLING_URL}: {exc}") from exc
 
     return _parse_response(data)
 
@@ -246,19 +273,14 @@ def _parse_response(data: dict) -> ConversionResult:
     text_content = doc.get("text_content") or ""
 
     if not markdown_text and status != "failure":
-        raise ValueError(
-            "Docling converted the file but returned empty markdown. "
-            f"Status: {status}, errors: {errors}"
-        )
+        raise ValueError(f"Docling converted the file but returned empty markdown. Status: {status}, errors: {errors}")
 
     if status == "failure":
         error_msg = "; ".join(errors) if errors else "Unknown error"
         raise RuntimeError(f"Docling conversion failed: {error_msg}")
 
     if status == "partial_success":
-        logger.warning(
-            "Docling partial success with errors: %s", errors
-        )
+        logger.warning("Docling partial success with errors: %s", errors)
 
     logger.info(
         "Docling conversion complete — status=%s, %d chars markdown, %.1fs",

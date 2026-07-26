@@ -13,10 +13,10 @@ import argparse
 import os
 import sys
 
-# Ensure project root is on sys.path so ``import config`` works.
+# Ensure project root is on sys.path so ``from src import config`` works.
 sys.path.insert(0, os.path.dirname(__file__))
 
-import config
+from src import config
 
 
 def main() -> None:
@@ -51,11 +51,13 @@ def main() -> None:
         app = mcp.streamable_http_app()
 
         async def health(request: Request) -> JSONResponse:
-            return JSONResponse({
-                "status": "ok",
-                "service": "personal-rag-mcp",
-                "transport": "streamable-http",
-            })
+            return JSONResponse(
+                {
+                    "status": "ok",
+                    "service": "personal-rag-mcp",
+                    "transport": "streamable-http",
+                }
+            )
 
         app.routes.insert(0, Route("/health", endpoint=health))
 

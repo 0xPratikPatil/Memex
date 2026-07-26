@@ -63,14 +63,14 @@ SPARSE_MODEL: str = _env("SPARSE_MODEL", "Qdrant/bm25")
 DENSE_DIM: int = _env_int("DENSE_DIM", 1024)
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
-CHUNK_SIZE: int = _env_int("CHUNK_SIZE", 512)        # tokens (target)
-CHUNK_OVERLAP: int = _env_int("CHUNK_OVERLAP", 50)   # tokens (overlap)
-MIN_CHUNK_LEN: int = _env_int("MIN_CHUNK_LEN", 30)   # min chars to keep
+CHUNK_SIZE: int = _env_int("CHUNK_SIZE", 512)  # tokens (target)
+CHUNK_OVERLAP: int = _env_int("CHUNK_OVERLAP", 50)  # tokens (overlap)
+MIN_CHUNK_LEN: int = _env_int("MIN_CHUNK_LEN", 30)  # min chars to keep
 CHUNK_STRATEGY: str = _env("CHUNK_STRATEGY", "recursive")  # recursive | paragraph | fixed
 
 # ── HTTP client settings ──────────────────────────────────────────────────────
-HTTP_TIMEOUT: float = _env_float("HTTP_TIMEOUT", 60.0)           # seconds per request
-DOCLING_TIMEOUT: float = _env_float("DOCLING_TIMEOUT", 300.0)    # doc conversion can be slow
+HTTP_TIMEOUT: float = _env_float("HTTP_TIMEOUT", 60.0)  # seconds per request
+DOCLING_TIMEOUT: float = _env_float("DOCLING_TIMEOUT", 300.0)  # doc conversion can be slow
 HTTP_MAX_RETRIES: int = _env_int("HTTP_MAX_RETRIES", 3)
 HTTP_RETRY_BACKOFF: float = _env_float("HTTP_RETRY_BACKOFF", 0.5)  # exponential base
 
@@ -94,5 +94,54 @@ CHARACTER_LIMIT: int = _env_int("CHARACTER_LIMIT", 25000)
 ENABLE_OCR: bool = _env_bool("ENABLE_OCR", True)
 ENABLE_RERANKING: bool = _env_bool("ENABLE_RERANKING", True)
 
+# ── Query Expansion ──────────────────────────────────────────────────────────
+ENABLE_QUERY_EXPANSION: bool = _env_bool("ENABLE_QUERY_EXPANSION", False)
+ENABLE_HYDE: bool = _env_bool("ENABLE_HYDE", False)
+ENABLE_MULTI_QUERY: bool = _env_bool("ENABLE_MULTI_QUERY", False)
+ENABLE_QUERY_REWRITE: bool = _env_bool("ENABLE_QUERY_REWRITE", False)
+
+HYDE_MODEL: str = _env("HYDE_MODEL", "")  # empty = use EMBED_MODEL
+MULTI_QUERY_COUNT: int = _env_int("MULTI_QUERY_COUNT", 3)
+MULTI_QUERY_MODEL: str = _env("MULTI_QUERY_MODEL", "")  # empty = use Ollama chat
+QUERY_REWRITE_MODEL: str = _env("QUERY_REWRITE_MODEL", "")
+
+# ── Contextual Retrieval ────────────────────────────────────────────────────
+ENABLE_CONTEXTUAL_RETRIEVAL: bool = _env_bool("ENABLE_CONTEXTUAL_RETRIEVAL", False)
+CONTEXT_STRATEGY: str = _env("CONTEXT_STRATEGY", "header")  # header | summary | surrounding
+CONTEXT_MODEL: str = _env("CONTEXT_MODEL", "")  # empty = use EMBED_MODEL
+CONTEXT_PREFIX_MAX_TOKENS: int = _env_int("CONTEXT_PREFIX_MAX_TOKENS", 50)
+CONTEXT_BATCH_SIZE: int = _env_int("CONTEXT_BATCH_SIZE", 10)
+
 # ── Embedding batch size ─────────────────────────────────────────────────────
 EMBED_BATCH_SIZE: int = _env_int("EMBED_BATCH_SIZE", 32)
+
+# ── Cache Settings ──────────────────────────────────────────────────────────
+ENABLE_CACHE: bool = _env_bool("ENABLE_CACHE", False)
+REDIS_URL: str = _env("REDIS_URL", "redis://localhost:6379/0")
+
+CACHE_TTL_EMBEDDING: int = _env_int("CACHE_TTL_EMBEDDING", 86400)  # 24h
+CACHE_TTL_SEARCH: int = _env_int("CACHE_TTL_SEARCH", 3600)  # 1h
+CACHE_TTL_PARSE: int = _env_int("CACHE_TTL_PARSE", 604800)  # 7d
+CACHE_TTL_EXPANSION: int = _env_int("CACHE_TTL_EXPANSION", 21600)  # 6h
+
+CACHE_MAX_MEMORY_MB: int = _env_int("CACHE_MAX_MEMORY_MB", 256)
+CACHE_EVICTION_POLICY: str = _env("CACHE_EVICTION_POLICY", "allkeys-lru")
+
+# ── Metadata Enhancement ──────────────────────────────────────────────────────
+ENABLE_METADATA_EXTRACTION: bool = _env_bool("ENABLE_METADATA_EXTRACTION", False)
+ENABLE_ENTITY_EXTRACTION: bool = _env_bool("ENABLE_ENTITY_EXTRACTION", False)
+ENABLE_DOC_CLASSIFICATION: bool = _env_bool("ENABLE_DOC_CLASSIFICATION", False)
+ENABLE_TOPIC_TAGGING: bool = _env_bool("ENABLE_TOPIC_TAGGING", False)
+ENABLE_LANGUAGE_DETECTION: bool = _env_bool("ENABLE_LANGUAGE_DETECTION", True)
+
+METADATA_MODEL: str = _env("METADATA_MODEL", "")  # empty = use EMBED_MODEL via Ollama
+MAX_ENTITIES_PER_CHUNK: int = _env_int("MAX_ENTITIES_PER_CHUNK", 10)
+MAX_TOPICS_PER_CHUNK: int = _env_int("MAX_TOPICS_PER_CHUNK", 5)
+
+# ── Evaluation ──────────────────────────────────────────────────────────────
+EVAL_ENABLED: bool = _env_bool("EVAL_ENABLED", False)
+EVAL_DATASET_PATH: str = _env("EVAL_DATASET_PATH", "evaluation.jsonl")
+EVAL_OUTPUT_DIR: str = _env("EVAL_OUTPUT_DIR", "eval_reports")
+EVAL_TOP_K: int = _env_int("EVAL_TOP_K", 10)
+EVAL_RUN_RAGAS: bool = _env_bool("EVAL_RUN_RAGAS", False)
+EVAL_LOG_TIMING: bool = _env_bool("EVAL_LOG_TIMING", False)
