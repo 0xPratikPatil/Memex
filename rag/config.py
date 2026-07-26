@@ -63,7 +63,7 @@ REDIS_URL: str = _env("REDIS_URL", f"redis://localhost:{REDIS_PORT}/0")
 DOCLING_API_KEY: str = _env("DOCLING_API_KEY", "")
 
 # ── Model / collection names ──────────────────────────────────────────────────
-COLLECTION_NAME: str = _env("COLLECTION_NAME", "personal_rag")
+COLLECTION_NAME: str = _env("COLLECTION_NAME", "memex")
 EMBED_MODEL: str = _env("EMBED_MODEL", "bge-m3")
 RERANK_MODEL: str = _env("RERANK_MODEL", "BAAI/bge-reranker-base")
 SPARSE_MODEL: str = _env("SPARSE_MODEL", "Qdrant/bm25")

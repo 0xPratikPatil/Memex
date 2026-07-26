@@ -44,18 +44,24 @@ echo "  rerank  ${RERANK}"
 echo "  sparse  ${SPARSE}"
 echo ""
 
+# ── 0. Create .env if missing ────────────────────────────────────────────────
+if [ ! -f .env ]; then
+    cp .env.example .env
+    info "created .env from .env.example"
+fi
+
 # ── 1. Docker ───────────────────────────────────────────────────────────────
-echo "[1/5] Docker"
+echo "[1/6] Docker"
 docker info >/dev/null 2>&1 || fail "Docker not running"
 ok "running"
 
 # ── 2. Start services ───────────────────────────────────────────────────────
-echo "[2/5] Services"
+echo "[2/6] Services"
 docker compose up -d --build --remove-orphans
 ok "started"
 
 # ── 3. Health checks ────────────────────────────────────────────────────────
-echo "[3/5] Health checks"
+echo "[3/6] Health checks"
 for svc in "${BOOT_SERVICES[@]}"; do
     if ! docker compose ps -q "$svc" &>/dev/null; then
         info "${svc}: not in compose, skipping"
@@ -68,7 +74,7 @@ for svc in "${BOOT_SERVICES[@]}"; do
 done
 
 # ── 4. Pull models ──────────────────────────────────────────────────────────
-echo "[4/5] Models"
+echo "[4/6] Models"
 pull() {
     local m="$1"
     if docker compose exec -T ollama ollama list 2>/dev/null | grep -q "$m"; then
@@ -83,7 +89,7 @@ pull "$CHAT"
 ok "ready"
 
 # ── 5. Verify ────────────────────────────────────────────────────────────────
-echo "[5/5] Verify"
+echo "[5/6] Verify"
 curl -sf http://localhost:5002/health >/dev/null && ok "ml-services" || fail "ml-services unreachable"
 
 # ── Done ────────────────────────────────────────────────────────────────────
@@ -94,11 +100,11 @@ echo "╚═══════════════════════�
 echo ""
 docker compose ps --format "table {{.Service}}\t{{.Status}}" 2>/dev/null
 echo ""
-echo "  make dev && uv run memex"
+echo "  uv run memex"
 echo ""
 
-## ── Undocumented Features ──────────────────────────────────────────────────
-## These need qwen2:0.5b (pulled above):
+## ── Advanced Features ─────────────────────────────────────────────────
+## These need the chat model (pulled above):
 ##   ENABLE_QUERY_EXPANSION=true  ENABLE_HYDE=true
 ##   ENABLE_CONTEXTUAL_RETRIEVAL=true
 ##   ENABLE_METADATA_EXTRACTION=true

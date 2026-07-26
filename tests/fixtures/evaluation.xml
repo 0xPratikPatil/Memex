@@ -5,7 +5,7 @@
     <answer>test_document.pdf</answer>
   </qa_pair>
   <qa_pair>
-    <question>Ingest a sample document and then use rag_collection_stats to check the collection. How many total points (vectors) are stored in the personal_rag collection after ingesting one document with approximately 3 chunks?</question>
+    <question>Ingest a sample document and then use rag_collection_stats to check the collection. How many total points (vectors) are stored in the memex collection after ingesting one document with approximately 3 chunks?</question>
     <answer>3</answer>
   </qa_pair>
   <qa_pair>

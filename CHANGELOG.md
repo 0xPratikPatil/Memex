@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Named volumes with documented persistence rationale
   - Professional Makefile with 12 targets + `make help`
 
-- **Unified chat model**: All LLM features fall back to `CHAT_MODEL=qwen2:0.5b`
+- **Unified chat model**: All LLM features fall back to `CHAT_MODEL=qwen2:5.5b`
   - Context retrieval, query expansion, metadata extraction all use one model
   - No more broken fallback to embedding-only `bge-m3`
 

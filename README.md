@@ -36,52 +36,39 @@ Production-ready MCP server for Retrieval-Augmented Generation with Docling docu
 - **Hybrid Search**: Dense (bge-m3) + Sparse (BM25) with Reciprocal Rank Fusion
 - **Cross-Encoder Reranking**: Optional reranking via BAAI/bge-reranker
 - **Rich Metadata**: Section headers, ingestion timestamps, source tracking
-- **6 MCP Tools**: Ingest, search, list, stats, delete
+- **8 MCP Tools**: Ingest, search, list, stats, delete, status, batch, URL ingest
 
 ## Quick Start
 
 ```bash
-# 1. Clone and configure
-cd mcp/rag
-cp .env.example .env
-
-# 2. Install dependencies
-uv sync
-
-# 3. Start backend services (Docker)
-docker compose up -d
-
-# 4. Pull embedding model into Ollama (first time only)
-docker compose exec ollama ollama pull bge-m3
-
-# 5. Verify services are healthy
-curl http://localhost:6333/dashboard  # Qdrant
-curl http://localhost:11434/api/tags  # Ollama
-curl http://localhost:5001/health     # Docling
-
-# 6. Run MCP server locally
-uv run memex
+./setup.sh        # bootstrap everything (Docker + models + config)
+uv run memex      # start MCP server
 ```
 
-## Development with uv
+Add to your MCP client config:
+```json
+{
+  "mcpServers": {
+    "personal_rag": {
+      "command": "uv",
+      "args": ["run", "memex"],
+      "cwd": "/path/to/memex"
+    }
+  }
+}
+```
 
-[uv](https://docs.astral.sh/uv/) is the recommended package manager for development.
+## Development
 
 ```bash
-# Install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# Install dev deps
+uv sync --extra dev --extra test
 
-# Sync dependencies
-uv sync
-
-# Run MCP server
-uv run memex
-
-# Run tests
-uv run pytest tests/ -v
-
-# Lint
-uv run ruff check rag/ memex/
+# Tests, lint, format
+make test
+make lint
+make fmt
+make help     # all targets
 ```
 
 ## MCP Tools
@@ -95,74 +82,44 @@ uv run ruff check rag/ memex/
 | `rag_list_documents` | List all ingested documents |
 | `rag_collection_stats` | Get collection statistics |
 | `rag_delete_document` | Remove a document and its chunks |
+| `rag_service_status` | Check backend service health |
 
 ## Configuration
 
-All settings via environment variables (see `.env.example`):
+All settings via environment variables. Copy and edit `.env.example`:
+
+```bash
+cp .env.example .env
+```
+
+Key settings:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DOCLING_URL` | `http://docling:5001/v1/convert/source` | Docling Serve endpoint |
-| `OLLAMA_EMBED_URL` | `http://ollama:11434/api/embeddings` | Ollama embedding endpoint |
-| `QDRANT_URL` | `http://qdrant:6333` | Qdrant endpoint |
-| `EMBED_MODEL` | `bge-m3` | Ollama embedding model |
+| `EMBED_MODEL` | `bge-m3` | Embedding model (Ollama) |
+| `CHAT_MODEL` | `qwen2:0.5b` | Chat/LLM model for advanced features |
 | `CHUNK_SIZE` | `512` | Target chunk size (tokens) |
+| `ENABLE_CACHE` | `false` | Enable Redis caching |
+| `ENABLE_QUERY_EXPANSION` | `false` | Enable HyDE + Multi-Query |
+| `ENABLE_CONTEXTUAL_RETRIEVAL` | `false` | Add context prefixes to chunks |
+| `ENABLE_METADATA_EXTRACTION` | `false` | Extract entities, topics, language |
+
+**Full reference**: See `.env.example` for all 60+ options.
 | `CHUNK_OVERLAP` | `50` | Overlap between chunks (tokens) |
 | `CHUNK_STRATEGY` | `recursive` | Chunking: `recursive` or `fixed` |
 | `SEARCH_FUSION` | `rrf` | Fusion: `rrf` (reciprocal rank) or `weighted` |
 | `RERANK_ENABLED` | `true` | Enable cross-encoder reranking |
 | `MCP_TRANSPORT` | `http` | Transport: `http` or `stdio` |
 
-## MCP Client Configuration
-
-Add to your MCP client config (e.g., `opencode.json`):
-
-```json
-{
-  "mcpServers": {
-    "personal_rag": {
-      "url": "http://localhost:8080/mcp"
-    }
-  }
-}
-```
-
-For local uv mode (recommended):
-
-```json
-{
-  "mcpServers": {
-    "personal_rag": {
-      "command": "uv",
-      "args": ["run", "memex"],
-      "cwd": "/path/to/project"
-    }
-  }
-}
-```
-
-For local python mode:
-
-```json
-{
-  "mcpServers": {
-    "personal_rag": {
-      "command": "python",
-      "args": ["-m", "memex"],
-      "cwd": "/path/to/mcp/rag"
-    }
-  }
-}
-```
-
 ## Docker Services
 
-| Service | Port | Description |
-|---------|------|-------------|
-| `qdrant` | 6333, 6334 | Vector database |
-| `ollama` | 11434 | Embedding server |
-| `docling` | 5001 | Document conversion |
-| `redis` | 6379 | Caching layer |
+| Service | Port | Purpose |
+|---------|------|---------|
+| Qdrant | 6333 | Vector database |
+| Ollama | 11434 | Embeddings + chat LLM |
+| Docling | 5001 | Document conversion |
+| ML Services | 5002 | Sparse BM25 + reranker |
+| Redis | 6379 | Caching layer |
 
 **Note:** MCP server runs locally (not in Docker) for direct file system access.
 
