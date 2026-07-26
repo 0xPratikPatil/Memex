@@ -146,8 +146,7 @@ memex/
 ├── docs/
 │   └── superpowers/specs/ # Design specifications
 ├── .github/               # CI/CD workflows
-├── Dockerfile             # MCP server container
-├── Dockerfile.fileserver  # File server container
+├── Dockerfile             # Multi-stage: MCP server + File server
 ├── docker-compose.yml     # Full stack orchestration
 ├── Makefile               # Common development tasks
 ├── pyproject.toml         # Project metadata and tooling config

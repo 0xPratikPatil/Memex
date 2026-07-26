@@ -1,6 +1,13 @@
 # syntax=docker/dockerfile:1
-# ── Stage 1: build deps ──────────────────────────────────────────────────────
-FROM python:3.12.8-slim AS builder
+# ══════════════════════════════════════════════════════════════════════════════
+# Memex - Multi-stage Dockerfile
+# Produces two images via build targets:
+#   docker build --target mcp -t memex-mcp .
+#   docker build --target fileserver -t memex-fileserver .
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Stage 1: Python builder (shared base) ────────────────────────────────────
+FROM python:3.12-slim AS python-builder
 
 WORKDIR /app
 
@@ -11,18 +18,27 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get install -y --no-install-recommends build-essential && \
     rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml ./
-
 # Install Python dependencies with pip cache mount
+COPY pyproject.toml ./
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir -e . 2>/dev/null || \
-    pip install --no-cache-dir httpx tenacity mcp qdrant-client fastembed sentence-transformers
+    pip install --no-cache-dir \
+        httpx \
+        tenacity \
+        mcp \
+        qdrant-client \
+        fastembed \
+        sentence-transformers \
+        redis
 
-# ── Stage 2: runtime ──────────────────────────────────────────────────────────
-FROM python:3.12.8-slim AS runtime
+# ══════════════════════════════════════════════════════════════════════════════
+# TARGET: mcp - Full MCP Server with ML dependencies
+# ══════════════════════════════════════════════════════════════════════════════
+FROM python:3.12-slim AS mcp
 
-LABEL org.opencontainers.image.title="Personal RAG MCP Server"
+LABEL org.opencontainers.image.title="Memex MCP Server"
 LABEL org.opencontainers.image.description="Production MCP server for RAG with Docling + Qdrant + Ollama"
+LABEL org.opencontainers.image.version="0.3.0"
 
 WORKDIR /app
 
@@ -34,8 +50,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+COPY --from=python-builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=python-builder /usr/local/bin /usr/local/bin
 
 # Create non-root user with specific UID/GID and writable cache dir
 RUN groupadd -g 10001 -r appgroup && \
@@ -66,3 +82,39 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 ENTRYPOINT ["python", "-m", "src.cli"]
 CMD ["--http"]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TARGET: fileserver - Lightweight file server (no ML dependencies)
+# ══════════════════════════════════════════════════════════════════════════════
+FROM python:3.12-slim AS fileserver
+
+LABEL org.opencontainers.image.title="Memex File Server"
+LABEL org.opencontainers.image.description="Lightweight file server for MCP Docker access"
+LABEL org.opencontainers.image.version="0.3.0"
+
+WORKDIR /app
+
+# Install curl for healthcheck
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -g 10001 -r appgroup && \
+    useradd -u 10001 -r -g appgroup -d /app -s /sbin/nologin appuser
+
+# Copy only the file server script
+COPY --chown=appuser:appgroup src/services/file_server.py .
+
+# Switch to non-root user
+USER 10001
+
+EXPOSE 9900
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:9900/health || exit 1
+
+ENTRYPOINT ["python", "file_server.py"]
+CMD ["--port", "9900", "--roots", "/mnt", "/home"]

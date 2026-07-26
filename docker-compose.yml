@@ -119,6 +119,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: mcp
     ports:
       - "8080:8080"
     environment:
@@ -183,7 +184,8 @@ services:
   fileserver:
     build:
       context: .
-      dockerfile: Dockerfile.fileserver
+      dockerfile: Dockerfile
+      target: fileserver
     volumes:
       - /mnt:/mnt:ro
       - /home:/home:ro
