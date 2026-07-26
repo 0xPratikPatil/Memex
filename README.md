@@ -53,7 +53,6 @@ Production-ready MCP server for Retrieval-Augmented Generation with Docling docu
 ```bash
 ./setup.sh        # bootstrap everything (Docker + models + config)
 uv sync           # install MCP server deps
-uv sync --extra chunking  # optional: Docling HybridChunker
 uv run memex      # start MCP server
 ```
 
@@ -73,7 +72,7 @@ Add to your MCP client config:
 ## Development
 
 ```bash
-uv sync --extra dev --extra test --extra chunking
+uv sync --extra dev --extra test
 make test
 make lint
 make fmt

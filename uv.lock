@@ -1988,6 +1988,7 @@ name = "memex"
 version = "0.4.0"
 source = { editable = "." }
 dependencies = [
+    { name = "docling" },
     { name = "httpx" },
     { name = "mcp" },
     { name = "python-dotenv" },
@@ -1997,9 +1998,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-chunking = [
-    { name = "docling" },
-]
 dev = [
     { name = "mypy" },
     { name = "pre-commit" },
@@ -2032,7 +2030,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "datasets", marker = "extra == 'eval'", specifier = ">=3,<4" },
-    { name = "docling", marker = "extra == 'chunking'", specifier = ">=2" },
+    { name = "docling", specifier = ">=2" },
     { name = "fastembed", marker = "extra == 'local'", specifier = ">=0.4,<1" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.27,<1" },
@@ -2054,7 +2052,7 @@ requires-dist = [
     { name = "sentence-transformers", marker = "extra == 'local'", specifier = ">=3,<4" },
     { name = "tenacity", specifier = ">=9,<10" },
 ]
-provides-extras = ["dev", "local", "test", "eval", "chunking"]
+provides-extras = ["dev", "local", "test", "eval"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ruff", specifier = ">=0.16.0" }]

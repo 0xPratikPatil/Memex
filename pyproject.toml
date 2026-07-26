@@ -22,6 +22,7 @@ dependencies = [
     "qdrant-client>=1.18,<2",
     "redis>=5,<6",
     "python-dotenv>=1.2.2",
+    "docling>=2",
 ]
 
 [project.optional-dependencies]
@@ -48,10 +49,6 @@ eval = [
     "datasets>=3,<4",
     "langdetect>=1.0.9",
 ]
-chunking = [
-    "docling>=2",
-]
-
 [project.scripts]
 memex = "memex.cli:main"
 memex-mcp = "memex.cli:main"

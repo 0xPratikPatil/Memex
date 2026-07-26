@@ -51,17 +51,17 @@ if [ ! -f .env ]; then
 fi
 
 # ── 1. Docker ───────────────────────────────────────────────────────────────
-echo "[1/6] Docker"
+echo "[1/7] Docker"
 docker info >/dev/null 2>&1 || fail "Docker not running"
 ok "running"
 
 # ── 2. Start services ───────────────────────────────────────────────────────
-echo "[2/6] Services"
+echo "[2/7] Services"
 docker compose up -d --build --remove-orphans
 ok "started"
 
 # ── 3. Health checks ────────────────────────────────────────────────────────
-echo "[3/6] Health checks"
+echo "[3/7] Health checks"
 
 check_http() {
     local name="$1" url="$2"
@@ -88,7 +88,7 @@ check_http "ml-services" "http://localhost:5002/health"
 ok "redis         (Docker healthcheck)"
 
 # ── 4. Pull models ──────────────────────────────────────────────────────────
-echo "[4/6] Models"
+echo "[4/7] Models"
 pull() {
     local m="$1"
     if docker compose exec -T ollama ollama list 2>/dev/null | grep -q "$m"; then
@@ -103,7 +103,7 @@ pull "$CHAT"
 ok "ready"
 
 # ── 5. Verify models loaded ─────────────────────────────────────────────────
-echo "[5/6] Verify models"
+echo "[5/7] Verify models"
 # Test embedding model responds
 curl -sf -X POST http://localhost:11434/api/embeddings \
     -H "Content-Type: application/json" \
@@ -114,6 +114,21 @@ curl -sf -X POST http://localhost:11434/api/chat \
     -H "Content-Type: application/json" \
     -d "{\"model\":\"${CHAT}\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":false}" >/dev/null \
     && ok "${CHAT}" || fail "${CHAT} not responding"
+
+# ── 6. Verify advanced features ───────────────────────────────────────────────
+echo "[6/7] Advanced features"
+# Redis cache ping (informational only — won't stop bootstrap)
+if uv run python -c "import redis; r = redis.Redis(host='localhost', port=6379, decode_responses=True); r.ping()" 2>/dev/null; then
+    echo "  ✓ redis cache ping"
+else
+    echo "  ✗ redis cache ping (non-fatal)"
+fi
+# Hybrid chunker availability (informational only — won't stop bootstrap)
+if uv run python -c "from rag.chunking import is_hybrid_chunker_available; assert is_hybrid_chunker_available(), 'HybridChunker not available'" 2>/dev/null; then
+    echo "  ✓ hybrid chunker"
+else
+    echo "  ✗ hybrid chunker (non-fatal)"
+fi
 
 # ── Done ────────────────────────────────────────────────────────────────────
 echo ""
@@ -127,8 +142,7 @@ echo "  uv run memex"
 echo ""
 
 ## ── Advanced Features ─────────────────────────────────────────────────
-## These need the chat model (pulled above):
-##   ENABLE_QUERY_EXPANSION=true  ENABLE_HYDE=true
-##   ENABLE_CONTEXTUAL_RETRIEVAL=true
-##   ENABLE_METADATA_EXTRACTION=true
-## See .env.example for all options."
+## Advanced features (query expansion, contextual retrieval, metadata
+##   extraction) are enabled by default. Their env vars are already set
+##   to true in .env.example — no action needed unless you want to
+##   disable them. Run `make dev` to install all dependencies."

@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-26
+
+### Added
+
+- **Docling HybridChunker** (CHUNK_STRATEGY=hybrid): tokenizer-aware, structure-preserving chunking on DoclingDocument. Multi-format serialization (table→HTML, code→fenced, image→caption).
+- **AGENTS.md**: project instructions for OpenCode with feature catalog and tool hints.
+- Docling enrichment flags: picture classification, code/formula/chart extraction (opt-in), image export mode.
+- Defensive # comment stripping in config loader.
+- CHUNK_MERGE_PEERS, CHUNK_REPEAT_TABLE_HEADER, CHUNK_TYPE_FORMAT config options.
+- 3 new test files: test_chunking.py (23), test_config.py (25), test_pipeline_chunking.py (6).
+
+### Changed
+
+- **All advanced features enabled by default**: query expansion (HyDE + rewrite + multi-query), contextual retrieval (summary strategy), Redis caching, metadata extraction (entities, topics, classification, language).
+- **Chunk defaults**: CHUNK_SIZE 512→1024, CHUNK_OVERLAP 50→128, CHUNK_STRATEGY recursive→hybrid.
+- **Search**: SEARCH_TOP_K 20→30, MULTI_QUERY_COUNT stays at 3.
+- **Embedding**: EMBED_BATCH_SIZE 32→64.
+- **Docker**: ML services now use uv instead of pip for faster builds. Docling serve image unchanged (pre-built ghcr pull).
+- **docling added to core dependencies** (no extra needed for HybridChunker).
+- Contextual retrieval defaults to summary strategy (was header-only).
+- `.env` inline comments removed — values with trailing `# comment` broke python-dotenv parsing.
+- **299 tests** (246 unit + 53 integration) — all pass against live Docker services.
+
+### Fixed
+
+- Dockerfile: curl install moved before USER switch (was failing on non-root).
+- `.env` model fallback vars (HYDE_MODEL, CONTEXT_MODEL, etc.) stripped inline comments that broke `or config.CHAT_MODEL` fallback.
+- Integration tests updated for new defaults (CONTEXT_STRATEGY, query expansion flags).
+- `_parse_response` now correctly populates json_content, html_content, text_content from Docling serve response.
+
 ## [Unreleased]
 
 ### Changed
