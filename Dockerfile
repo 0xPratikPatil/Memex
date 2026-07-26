@@ -54,6 +54,9 @@ RUN groupadd -g 1001 -r appgroup && \
     useradd -u 1001 -r -g appgroup -d /app -s /sbin/nologin appuser && \
     mkdir -p /app/.cache && chown -R appuser:appgroup /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
 COPY --from=preload --chown=appuser:appgroup /app/.cache /app/.cache
 
 COPY --chown=appuser:appgroup rag/ml_server.py /app/server.py
@@ -66,9 +69,6 @@ ENV HF_HOME=/app/.cache/huggingface
 ENV TRANSFORMERS_CACHE=/app/.cache/huggingface
 
 USER 1001
-
-RUN apt-get update && apt-get install -y --no-install-recommends curl && \
-    rm -rf /var/lib/apt/lists/*
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
     CMD curl -f http://localhost:5002/health || exit 1
