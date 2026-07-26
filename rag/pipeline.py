@@ -920,6 +920,27 @@ class RAGEngine:
         logger.info("Deleted chunks for source: %s", source_identifier)
         return True
 
+    def get_chunker_status(self) -> dict[str, Any]:
+        """Return chunker configuration and availability."""
+        try:
+            from rag.chunking import is_hybrid_chunker_available
+
+            hybrid_available = is_hybrid_chunker_available()
+        except Exception:
+            hybrid_available = False
+        return {
+            "strategy": config.CHUNK_STRATEGY,
+            "chunk_size": config.CHUNK_SIZE,
+            "chunk_overlap": config.CHUNK_OVERLAP,
+            "hybrid_available": hybrid_available,
+            "active_chunker": "Docling HybridChunker"
+            if (config.CHUNK_STRATEGY == "hybrid" and hybrid_available)
+            else config.CHUNK_STRATEGY.title(),
+            "merge_peers": config.CHUNK_MERGE_PEERS,
+            "repeat_table_header": config.CHUNK_REPEAT_TABLE_HEADER,
+            "type_format": config.CHUNK_TYPE_FORMAT,
+        }
+
     def close(self) -> None:
         """Release HTTP clients and Qdrant connection."""
         if self._ollama is not None and not self._ollama.is_closed:

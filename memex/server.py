@@ -203,9 +203,11 @@ async def rag_ingest_file(input: IngestFileInput) -> str:
             docling_json=result.json_content or None,
             progress_cb=_progress,
         )
+        chunker_status = engine.get_chunker_status()
+        chunker_name = chunker_status["active_chunker"]
         return (
             f"Successfully ingested '{file_path_or_url}'. "
-            f"Created {count} chunks. "
+            f"Created {count} chunks using {chunker_name}. "
             f"(Docling: {result.processing_time:.1f}s, "
             f"{len(result.markdown)} chars, hash: {content_hash[:12]}...)"
         )
@@ -268,9 +270,11 @@ async def rag_ingest_url(input: IngestUrlInput) -> str:
             content_hash=content_hash,
             docling_json=result.json_content or None,
         )
+        chunker_status = engine.get_chunker_status()
+        chunker_name = chunker_status["active_chunker"]
         return (
             f"Successfully ingested '{url}'. "
-            f"Created {count} chunks. "
+            f"Created {count} chunks using {chunker_name}. "
             f"(Docling: {result.processing_time:.1f}s, "
             f"{len(result.markdown)} chars, hash: {content_hash[:12]}...)"
         )
@@ -652,6 +656,8 @@ Returns health status and latency for each service:
 - ML Services (sparse BM25 + reranker)
 - Redis (caching layer)
 
+Also includes chunker configuration (strategy, size, availability).
+
 Args:
   - (none)
 
@@ -732,6 +738,13 @@ async def rag_service_status() -> str:
                 "url": url,
                 "error": str(e),
             }
+
+    try:
+        engine = _get_engine()
+        chunker_info = engine.get_chunker_status()
+    except Exception:
+        chunker_info = {"error": "unavailable"}
+    statuses["chunker"] = chunker_info
 
     try:
         return json.dumps(statuses, indent=2)

@@ -28,6 +28,7 @@ class TestBuildStartupBanner:
         banner = build_startup_banner()
         assert "hybrid" in banner.lower()
         assert "1024" in banner
+        assert any(name in banner for name in ("Docling HybridChunker", "legacy recursive"))
 
     def test_includes_cache_status(self):
         with patch("memex.startup.config.ENABLE_CACHE", True):

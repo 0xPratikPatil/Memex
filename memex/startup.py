@@ -50,6 +50,15 @@ def build_startup_banner() -> str:
     lines.append(f"    chat model  : {config.CHAT_MODEL}")
     lines.append(f"    chunking    : {config.CHUNK_STRATEGY} @ {config.CHUNK_SIZE} tokens")
 
+    from rag.chunking import is_hybrid_chunker_available as _hybrid_ok
+
+    try:
+        _ok = _hybrid_ok()
+    except Exception:
+        _ok = False
+    chunker_name = "Docling HybridChunker" if _ok else "legacy recursive"
+    lines.append(f"    chunker     : {chunker_name}")
+
     cache_state = "enabled" if config.ENABLE_CACHE else "disabled"
     lines.append(f"    cache       : {cache_state}")
 
