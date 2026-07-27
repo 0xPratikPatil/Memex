@@ -64,7 +64,14 @@ def _get_engine():
 
 
 def _prewarm_models():
-    """Load sparse model and reranker in background thread to avoid first-search cold start."""
+    """Load sparse model, reranker, and Ollama models in background thread.
+
+    Sends a trivial embedding and chat request to force Ollama to load
+    models from disk into GPU memory.  Without this the first user query
+    incurs a 30-60 s cold-start penalty while the model weights are
+    transferred.
+    """
+    import httpx
 
     def _load():
         try:
@@ -73,6 +80,35 @@ def _prewarm_models():
             logger.info("Sparse model loaded")
             engine._get_reranker()
             logger.info("Reranker loaded")
+
+            # ── Prewarm Ollama embedding model (cold-start: ~25-30s) ───
+            try:
+                with httpx.Client(timeout=120) as client:
+                    client.post(
+                        config.OLLAMA_EMBED_URL,
+                        json={"model": config.EMBED_MODEL, "input": "prewarm"},
+                    )
+                logger.info("Embedding model pre-warmed: %s", config.EMBED_MODEL)
+            except Exception as exc:
+                logger.warning("Embedding prewarm failed: %s", exc)
+
+            # ── Prewarm Ollama chat model (cold-start: ~50-60s) ────────
+            try:
+                with httpx.Client(timeout=120) as client:
+                    chat_url = config.OLLAMA_EMBED_URL.replace("/api/embeddings", "/api/chat")
+                    client.post(
+                        chat_url,
+                        json={
+                            "model": config.CHAT_MODEL,
+                            "messages": [{"role": "user", "content": "ok"}],
+                            "stream": False,
+                            "options": {"num_predict": 1, "temperature": 0},
+                        },
+                    )
+                logger.info("Chat model pre-warmed: %s", config.CHAT_MODEL)
+            except Exception as exc:
+                logger.warning("Chat prewarm failed: %s", exc)
+
             logger.info("Model pre-warming complete")
         except Exception as exc:
             logger.warning("Model pre-warming failed: %s", exc)

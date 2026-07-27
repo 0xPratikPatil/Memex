@@ -348,8 +348,11 @@ class MetadataExtractor:
         """Remove markdown code fences (```json ... ```) from LLM output."""
         return re.sub(r"```(?:json)?\s*\n?(.*?)\n?\s*```", r"\1", text, flags=re.DOTALL).strip()
 
-    def _chat(self, prompt: str) -> str:
-        """Call Ollama chat API and return the assistant message content."""
+    def _chat(self, prompt: str, num_predict: int = 200) -> str:
+        """Call Ollama chat API and return the assistant message content.
+
+        Handles models with ``thinking`` field fallback (e.g. qwen3.5).
+        """
         if self._ollama is None:
             raise RuntimeError("Ollama client not available for metadata extraction")
         chat_url = config.OLLAMA_EMBED_URL.replace("/api/embeddings", "/api/chat")
@@ -359,6 +362,7 @@ class MetadataExtractor:
                 "model": config.METADATA_MODEL or config.CHAT_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
+                "options": {"num_predict": num_predict, "temperature": 0},
             },
         )
         resp.raise_for_status()

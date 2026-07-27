@@ -217,7 +217,7 @@ class ContextGenerator:
 
         return contexts
 
-    def _chat(self, prompt: str) -> str:
+    def _chat(self, prompt: str, num_predict: int = 200) -> str:
         """Call Ollama chat API and return the assistant message content.
 
         Handles models that return reasoning in a ``thinking`` field
@@ -231,6 +231,7 @@ class ContextGenerator:
                 "model": config.CONTEXT_MODEL or config.CHAT_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
+                "options": {"num_predict": num_predict, "temperature": 0},
             },
         )
         resp.raise_for_status()

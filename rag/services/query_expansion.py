@@ -137,7 +137,7 @@ class QueryExpander:
         lines = [line.strip() for line in response.strip().split("\n") if line.strip()]
         return lines[:count]
 
-    def _chat(self, prompt: str) -> str:
+    def _chat(self, prompt: str, num_predict: int = 150) -> str:
         """Call Ollama chat API and return the assistant message content.
 
         Handles models with ``thinking`` field fallback (e.g. qwen3.5).
@@ -150,6 +150,7 @@ class QueryExpander:
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
+                "options": {"num_predict": num_predict, "temperature": 0},
             },
         )
         resp.raise_for_status()
