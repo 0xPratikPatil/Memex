@@ -99,7 +99,7 @@ docker compose ps             # verify all healthy
 ```bash
 docker compose exec -T ollama ollama list           # list downloaded models
 docker compose exec -T ollama ollama pull qwen3-embedding:0.6b  # pull embedding model
-docker compose exec -T ollama ollama pull qwen3.5:0.8b  # pull chat model
+docker compose exec -T ollama ollama pull qwen2.5:1.5b  # pull chat model
 docker compose exec -T ollama ollama rm <model>     # remove a model
 ```
 
@@ -116,7 +116,7 @@ curl -s -X POST http://localhost:11434/api/embeddings \
 # Test chat
 curl -s -X POST http://localhost:11434/api/chat \
   -H "Content-Type: application/json" \
-  -d '{"model":"qwen3.5:0.8b","messages":[{"role":"user","content":"hi"}],"stream":false}' | jq .
+  -d '{"model":"qwen2.5:1.5b","messages":[{"role":"user","content":"hi"}],"stream":false}' | jq .
 ```
 
 ### Run the MCP server

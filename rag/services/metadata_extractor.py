@@ -409,7 +409,7 @@ class MetadataExtractor:
         )
 
         try:
-            response = self._chat(prompt, num_predict=-1)
+            response = self._chat(prompt, num_predict=400)
             parsed = json.loads(self._strip_code_fences(response))
             if not isinstance(parsed, list):
                 parsed = [parsed]
@@ -482,13 +482,10 @@ class MetadataExtractor:
         """Remove markdown code fences (```json ... ```) from LLM output."""
         return re.sub(r"```(?:json)?\s*\n?(.*?)\n?\s*```", r"\1", text, flags=re.DOTALL).strip()
 
-    def _chat(self, prompt: str, num_predict: int = -1) -> str:
+    def _chat(self, prompt: str, num_predict: int = 200) -> str:
         """Call Ollama chat API and return the assistant message content.
 
         Handles models with ``thinking`` field fallback (e.g. qwen3.5).
-
-        Uses num_predict=-1 (unlimited) so thinking models can complete
-        their chain-of-thought reasoning before producing content.
         """
         if self._ollama is None:
             raise RuntimeError("Ollama client not available for metadata extraction")
@@ -499,7 +496,7 @@ class MetadataExtractor:
                 "model": config.METADATA_MODEL or config.CHAT_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
-                "options": {"num_predict": num_predict},
+                "options": {"num_predict": num_predict, "temperature": 0},
             },
         )
         resp.raise_for_status()

@@ -80,7 +80,7 @@ EMBED_MODEL_FALLBACK: str = _env("EMBED_MODEL_FALLBACK", "bge-m3")
 RERANK_MODEL: str = _env("RERANK_MODEL", "Qwen/Qwen3-Reranker-0.6B")
 RERANK_MODEL_FALLBACK: str = _env("RERANK_MODEL_FALLBACK", "BAAI/bge-reranker-base")
 SPARSE_MODEL: str = _env("SPARSE_MODEL", "Qdrant/bm25")
-CHAT_MODEL: str = _env("CHAT_MODEL", "qwen3.5:0.8b")  # for context/query/metadata generation
+CHAT_MODEL: str = _env("CHAT_MODEL", "qwen2.5:1.5b")  # for context/query/metadata generation
 
 # Provider: "http" (Docker ML service) or "local" (load in-process)
 SPARSE_PROVIDER: str = _env("SPARSE_PROVIDER", "http")

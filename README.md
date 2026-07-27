@@ -42,9 +42,9 @@ Production-ready MCP server for Retrieval-Augmented Generation with Docling docu
 - **Multi-format Embedding**: Table chunks → HTML, code chunks → fenced, text → Markdown
 - **Docling Enrichment**: Picture classification, image export, code/formula/chart extraction (opt-in)
 - **Contextual Retrieval**: LLM-generated context prefixes for each chunk (Anthropic's contextual retrieval)
-- **Hybrid Search**: Dense (qwen3-embedding:0.6b, 1024d) + Sparse (BM25) + RRF fusion + cross-encoder/causal-LM rerank
+- **Hybrid Search**: Dense (qwen3-embedding:0.6b, 1024d) + Sparse (BM25) + RRF fusion + causal-LM rerank (Qwen/Qwen3-Reranker-0.6B)
 - **Query Expansion**: HyDE (hypothetical document), query rewrite, multi-query paraphrasing
-- **Metadata Extraction**: Entities, topics, document classification, language detection, dates, keywords
+- **Metadata Extraction**: Entities, topics, document classification, language detection, dates, keywords — LLM-powered via qwen2.5:1.5b
 - **Redis Caching**: Embedding cache, search cache, parse cache — all enabled by default
 - **8 MCP Tools**: Ingest, search, list, stats, delete, status, batch, URL ingest
 
@@ -105,7 +105,7 @@ Key settings:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `EMBED_MODEL` | `qwen3-embedding:0.6b` | Embedding model (Ollama) |
-| `CHAT_MODEL` | `qwen3.5:0.8b` | Chat/LLM model for context, metadata, query expansion |
+| `CHAT_MODEL` | `qwen2.5:1.5b` | Chat/LLM model for context, metadata, query expansion |
 | `CHUNK_SIZE` | `1024` | Target chunk size (tokens) |
 | `CHUNK_STRATEGY` | `hybrid` | `hybrid`, `recursive`, or `fixed` |
 | `ENABLE_CACHE` | `true` | Redis caching (embeddings, search, parse) |

@@ -80,7 +80,6 @@ services:
       OLLAMA_HOST: 0.0.0.0
       OLLAMA_NUM_PARALLEL: 4
       OLLAMA_MAX_LOADED_MODELS: 2
-      OLLAMA_NUM_CTX: "8192"
     networks:
       - backend
     healthcheck:
