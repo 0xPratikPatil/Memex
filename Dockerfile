@@ -1,102 +1,152 @@
 # syntax=docker/dockerfile:1
-# ══════════════════════════════════════════════════════════════════════════════
-# Memex — ML Services (sparse embeddings + cross-encoder reranker)
+# ═══════════════════════════════════════════════════════════════════════════════════
+# Memex — ML Services (sparse embeddings + cross-encoder / causal-LM reranker)
 #
-# Optimized for: layer caching, reproducible builds, GPU inference.
-# Models are pre-cached at build time for instant startup.
-# ══════════════════════════════════════════════════════════════════════════════
+# Multi-stage build with:
+#   • Pinned base images and tools for reproducible builds.
+#   • BuildKit cache mounts for fast incremental rebuilds.
+#   • Model pre-caching at build time (instant container startup).
+#   • Non-root runtime user with explicit UID/GID.
+#   • GPU support via NVIDIA Container Toolkit.
+# ═══════════════════════════════════════════════════════════════════════════════════
 
-# ── Stage 1: Dependencies (cached) ───────────────────────────────────────────
+# ── Global ARGs (available in FROM but re-declared per stage for RUN access) ──────
+ARG SPARSE_MODEL=Qdrant/bm25
+ARG RERANK_MODEL=Qwen3-Reranker-0.6B
+ARG RERANK_MODEL_FALLBACK=BAAI/bge-reranker-base
+ARG RERANK_TYPE=auto
+ARG UV_VERSION=0.6.0
+
+# ═══════════════════════════════════════════════════════════════════════════════════
+# Stage 0 — uv : Pinned uv package manager (isolated stage for reproducible builds)
+# ═══════════════════════════════════════════════════════════════════════════════════
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
+
+# ═══════════════════════════════════════════════════════════════════════════════════
+# Stage 1 — deps : Base runtime with all Python packages installed
+# ═══════════════════════════════════════════════════════════════════════════════════
 FROM pytorch/pytorch:2.6.0-cuda12.6-cudnn9-runtime AS deps
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# ── System dependencies (curl for healthcheck, ca-certificates for TLS) ──
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# ── uv package manager (pinned version) ───────────────────────────────────
+COPY --from=uv /uv /usr/local/bin/uv
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+
+# ── Python virtual environment ──────────────────────────────────────────────
 RUN uv venv /opt/venv
-ENV VIRTUAL_ENV=/opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
 
-RUN uv pip install --no-cache \
-    "fastembed>=0.4,<1" \
-    "sentence-transformers>=3,<5" \
-    "fastapi[standard]>=0.115,<1" \
-    "uvicorn[standard]>=0.30,<1" \
-    "pydantic>=2,<3" \
-    "httpx>=0.27,<1"
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:$PATH"
 
-# ── Stage 2: Model pre-caching (optional, build-time speedup) ────────────────
+# ── Install Python packages (BuildKit cache mount for uv) ───────────────────
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install \
+      "fastembed>=0.4,<1" \
+      "sentence-transformers>=3,<5" \
+      "fastapi[standard]>=0.115,<1" \
+      "uvicorn[standard]>=0.30,<1" \
+      "pydantic>=2,<3" \
+      "httpx>=0.27,<1"
+
+# ═══════════════════════════════════════════════════════════════════════════════════
+# Stage 2 — preload : Pre-cache ML models at build time
+# ═══════════════════════════════════════════════════════════════════════════════════
 FROM deps AS preload
-ENV VIRTUAL_ENV=/opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-ARG SPARSE_MODEL=Qdrant/bm25
-ARG RERANK_MODEL=Qwen3-Reranker-0.6B
-ARG RERANK_MODEL_FALLBACK=BAAI/bge-reranker-base
-ARG RERANK_TYPE=auto
-ENV HF_HOME=/app/.cache/huggingface
-ENV TRANSFORMERS_CACHE=/app/.cache/huggingface
 
-RUN python -c "\
-from fastembed import SparseTextEmbedding; \
-m = SparseTextEmbedding(model_name='${SPARSE_MODEL}'); \
-list(m.embed(['warmup'])); \
-print('Sparse model cached')"
+ARG SPARSE_MODEL
+ARG RERANK_MODEL
+ARG RERANK_MODEL_FALLBACK
+ARG RERANK_TYPE
 
-# Pre-cache reranker based on type (auto-detect or explicit)
-# Skip on failure - fallback happens at runtime
-RUN (if [ "$RERANK_TYPE" = "causal-lm" ] || (echo "$RERANK_MODEL" | grep -qi "qwen3-reranker"); then \
-      echo "Pre-caching causal-LM reranker: ${RERANK_MODEL}"; \
-      python -c "\
-from transformers import AutoModelForCausalLM, AutoTokenizer; \
-AutoTokenizer.from_pretrained('${RERANK_MODEL}', trust_remote_code=True); \
-AutoModelForCausalLM.from_pretrained('${RERANK_MODEL}', trust_remote_code=True); \
-print('Causal-LM reranker cached')" ; \
-    else \
-      echo "Pre-caching cross-encoder reranker: ${RERANK_MODEL}"; \
-      python -c "\
-from sentence_transformers import CrossEncoder; \
-m = CrossEncoder('${RERANK_MODEL}', device='cpu'); \
-print('Cross-encoder reranker cached')" ; \
-    fi) || echo "Reranker pre-cache failed, will fallback at runtime"
+ENV HF_HOME=/app/.cache/huggingface \
+    TRANSFORMERS_CACHE=/app/.cache/huggingface
 
-# Also pre-cache the fallback reranker
-RUN python -c "\
-from sentence_transformers import CrossEncoder; \
-m = CrossEncoder('${RERANK_MODEL_FALLBACK}', device='cpu'); \
-print('Fallback reranker cached')"
+# ── Pre-cache sparse model (BM25) ───────────────────────────────────────────
+RUN python -c \
+    "from fastembed import SparseTextEmbedding; \
+     m = SparseTextEmbedding(model_name='${SPARSE_MODEL}'); \
+     list(m.embed(['warmup'])); \
+     print('Sparse model cached: ${SPARSE_MODEL}')"
 
-# ── Stage 3: Runtime (minimal) ───────────────────────────────────────────────
+# ── Pre-cache primary reranker (graceful fallback on failure) ───────────────
+RUN ( \
+  if [ "${RERANK_TYPE}" = "causal-lm" ] || (echo "${RERANK_MODEL}" | grep -qi "qwen3-reranker"); then \
+    echo "Pre-caching causal-LM reranker: ${RERANK_MODEL}"; \
+    python -c \
+      "from transformers import AutoModelForCausalLM, AutoTokenizer; \
+       AutoTokenizer.from_pretrained('${RERANK_MODEL}', trust_remote_code=True); \
+       AutoModelForCausalLM.from_pretrained('${RERANK_MODEL}', trust_remote_code=True); \
+       print('Causal-LM reranker cached')"; \
+  else \
+    echo "Pre-caching cross-encoder reranker: ${RERANK_MODEL}"; \
+    python -c \
+      "from sentence_transformers import CrossEncoder; \
+       m = CrossEncoder('${RERANK_MODEL}', device='cpu'); \
+       print('Cross-encoder reranker cached')"; \
+  fi \
+  ) || echo "Primary reranker pre-cache skipped — fallback will load at runtime"
+
+# ── Always pre-cache the fallback reranker ──────────────────────────────────
+RUN python -c \
+    "from sentence_transformers import CrossEncoder; \
+     m = CrossEncoder('${RERANK_MODEL_FALLBACK}', device='cpu'); \
+     print('Fallback reranker cached: ${RERANK_MODEL_FALLBACK}')"
+
+# ═══════════════════════════════════════════════════════════════════════════════════
+# Stage 3 — ml : Minimal production runtime
+# ═══════════════════════════════════════════════════════════════════════════════════
 FROM deps AS ml
-ENV VIRTUAL_ENV=/opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
 
+ARG SPARSE_MODEL
+ARG RERANK_MODEL
+ARG RERANK_MODEL_FALLBACK
+ARG RERANK_TYPE
+
+ENV SPARSE_MODEL=${SPARSE_MODEL} \
+    RERANK_MODEL=${RERANK_MODEL} \
+    RERANK_MODEL_FALLBACK=${RERANK_MODEL_FALLBACK} \
+    RERANK_TYPE=${RERANK_TYPE} \
+    HF_HOME=/app/.cache/huggingface \
+    TRANSFORMERS_CACHE=/app/.cache/huggingface
+
+# ── Non-root user (explicit UID/GID for host volume compatibility) ─────────
 RUN groupadd -g 1001 -r appgroup && \
     useradd -u 1001 -r -g appgroup -d /app -s /sbin/nologin appuser && \
-    mkdir -p /app/.cache && chown -R appuser:appgroup /app
+    mkdir -p /app/.cache && \
+    chown -R appuser:appgroup /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl && \
-    rm -rf /var/lib/apt/lists/*
-
+# ── Copy pre-cached models and application code ─────────────────────────────
 COPY --from=preload --chown=appuser:appgroup /app/.cache /app/.cache
-
 COPY --chown=appuser:appgroup rag/ml_server.py /app/server.py
-
-ARG SPARSE_MODEL=Qdrant/bm25
-ARG RERANK_MODEL=Qwen3-Reranker-0.6B
-ARG RERANK_MODEL_FALLBACK=BAAI/bge-reranker-base
-ARG RERANK_TYPE=auto
-ENV SPARSE_MODEL=${SPARSE_MODEL}
-ENV RERANK_MODEL=${RERANK_MODEL}
-ENV RERANK_MODEL_FALLBACK=${RERANK_MODEL_FALLBACK}
-ENV RERANK_TYPE=${RERANK_TYPE}
-ENV HF_HOME=/app/.cache/huggingface
-ENV TRANSFORMERS_CACHE=/app/.cache/huggingface
 
 USER 1001
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
-    CMD curl -f http://localhost:5002/health || exit 1
+# ── Healthcheck ─────────────────────────────────────────────────────────────
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
+    CMD ["curl", "-sf", "http://localhost:5002/health"]
 
 EXPOSE 5002
+
+# ── Labels (OCI standard) ───────────────────────────────────────────────────
+LABEL org.opencontainers.image.title="Memex ML Services" \
+      org.opencontainers.image.description="Sparse BM25 embeddings + cross-encoder/causal-LM reranker" \
+      org.opencontainers.image.source="https://github.com/0xPratikPatil/Memex"
+
+STOPSIGNAL SIGTERM
 
 CMD ["/opt/venv/bin/python", "/app/server.py"]

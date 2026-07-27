@@ -1,36 +1,51 @@
-# docker-compose.yml — Memex: Personal RAG backend services
+# ────────────────────────────────────────────────────────────────────────────────
+# Memex — Personal RAG backend services
 #
-# MCP server runs locally (not in Docker) for direct file access.
-# See: uv run memex
+# The MCP server runs on the host (uv run memex), not in Docker.
+# All services bind to 127.0.0.1 — only accessible from the host machine.
 #
-name: memex
-# Usage:
-#   ./setup.sh                    # one-command bootstrap
-#   docker compose up -d          # start backend services
-#   docker compose down           # stop everything
+# Quick start:
+#   ./setup.sh                          # one-command bootstrap
+#   docker compose up -d                # start all backend services
+#   docker compose down                 # stop everything
+#   docker compose down -v              # stop + remove persisted data
 #
-# Custom models via env:
+# Custom models:
 #   EMBED_MODEL=qwen3-embedding:0.6b CHAT_MODEL=qwen3.5:0.8b docker compose up -d
+# ────────────────────────────────────────────────────────────────────────────────
+
+name: memex
 
 services:
-  # ── Qdrant vector database ──────────────────────────────────────────────
+  # ══════════════════════════════════════════════════════════════════════════════
+  # Qdrant — Vector database (semantic search index)
+  # ══════════════════════════════════════════════════════════════════════════════
   qdrant:
     image: qdrant/qdrant:v1.18
+    init: true
+    command:
+      - "./entrypoint.sh"
+      - "--uri"
+      - "http://localhost:6333"
     ports:
-      - "${QDRANT_PORT:-6333}:6333"
-      - "${QDRANT_GRPC_PORT:-6334}:6334"
+      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
+      - "127.0.0.1:${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
       - qdrant_data:/qdrant/storage
     environment:
       QDRANT__SERVICE__GRPC_PORT: "6334"
     networks:
       - backend
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333' || exit 1"]
+      test: ["CMD", "curl", "-sf", "http://localhost:6333/healthz"]
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 15s
     deploy:
       resources:
         limits:
@@ -40,27 +55,35 @@ services:
           cpus: "0.25"
           memory: 256M
     restart: unless-stopped
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 
-  # ── Ollama (embeddings + chat LLM) ──────────────────────────────────────
+  # ══════════════════════════════════════════════════════════════════════════════
+  # Ollama — Local LLM inference (embeddings + chat)
+  # ══════════════════════════════════════════════════════════════════════════════
   ollama:
     image: ollama/ollama:0.32.4
+    init: true
     ports:
-      - "${OLLAMA_PORT:-11434}:11434"
+      - "127.0.0.1:${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama_data:/root/.ollama
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       OLLAMA_KEEP_ALIVE: 24h
       OLLAMA_HOST: 0.0.0.0
+      OLLAMA_NUM_PARALLEL: 1
+      OLLAMA_MAX_LOADED_MODELS: 2
     networks:
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/11434' || exit 1"]
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -78,17 +101,23 @@ services:
               count: all
               capabilities: [gpu]
     restart: unless-stopped
+    stop_grace_period: 60s
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 
-  # ── Docling document conversion ─────────────────────────────────────────
+  # ══════════════════════════════════════════════════════════════════════════════
+  # Docling Serve — Document parsing & conversion (PDF, DOCX, HTML, etc.)
+  # ══════════════════════════════════════════════════════════════════════════════
   docling:
     image: ghcr.io/docling-project/docling-serve-cu130:v1.27.0
+    init: true
     ports:
-      - "${DOCLING_PORT:-5001}:5001"
+      - "127.0.0.1:${DOCLING_PORT:-5001}:5001"
     environment:
       DOCLING_SERVE_HOST: "0.0.0.0"
       DOCLING_SERVE_PORT: "5001"
@@ -96,7 +125,7 @@ services:
     networks:
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:5001/health || exit 1"]
+      test: ["CMD", "curl", "-sf", "http://localhost:5001/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -114,23 +143,26 @@ services:
               count: all
               capabilities: [gpu]
     restart: unless-stopped
+    stop_grace_period: 60s
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 
-  # ── MCP Server runs locally (not in Docker) ────────────────────────────
-  #   uv run memex        # start MCP server locally
-
-  # ── ML Services (sparse BM25 + cross-encoder reranker) ──────────────────
+  # ══════════════════════════════════════════════════════════════════════════════
+  # ML Services — Sparse BM25 embeddings + cross-encoder / causal-LM reranker
+  # ══════════════════════════════════════════════════════════════════════════════
   ml-services:
     build:
       context: .
       dockerfile: Dockerfile
       target: ml
+    init: true
     ports:
-      - "${ML_SERVICES_PORT:-5002}:5002"
+      - "127.0.0.1:${ML_SERVICES_PORT:-5002}:5002"
     environment:
       SPARSE_MODEL: "${SPARSE_MODEL:-Qdrant/bm25}"
       RERANK_MODEL: "${RERANK_MODEL:-Qwen3-Reranker-0.6B}"
@@ -140,7 +172,7 @@ services:
     networks:
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:5002/health || exit 1"]
+      test: ["CMD", "curl", "-sf", "http://localhost:5002/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -155,24 +187,35 @@ services:
           memory: 1G
           devices:
             - driver: nvidia
-              count: 1
+              count: all
               capabilities: [gpu]
     restart: unless-stopped
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 
-  # ── Redis (caching layer) ──────────────────────────────────────────────
+  # ══════════════════════════════════════════════════════════════════════════════
+  # Redis — Search + embedding cache
+  # ══════════════════════════════════════════════════════════════════════════════
   redis:
     image: redis:7.4.10-alpine
+    init: true
     ports:
-      - "${REDIS_PORT:-6379}:6379"
-    networks:
-      - backend
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    command:
+      - redis-server
+      - --appendonly yes
+      - --maxmemory 256mb
+      - --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
+    networks:
+      - backend
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 15s
@@ -187,17 +230,30 @@ services:
           cpus: "0.1"
           memory: 64M
     restart: unless-stopped
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 
+# ══════════════════════════════════════════════════════════════════════════════════
+# Networks
+# ══════════════════════════════════════════════════════════════════════════════════
 networks:
   backend:
     driver: bridge
+    internal: false
 
+# ══════════════════════════════════════════════════════════════════════════════════
+# Named volumes (persist across container restarts)
+# ══════════════════════════════════════════════════════════════════════════════════
 volumes:
-  qdrant_data:   # persists vector database (all indexed documents)
-  ollama_data:   # persists downloaded models (multi-GB, avoid re-download)
-  redis_data:    # persists cache (avoid cold-start on restart)
+  qdrant_data:
+    name: memex_qdrant_data
+  ollama_data:
+    name: memex_ollama_data
+  redis_data:
+    name: memex_redis_data
