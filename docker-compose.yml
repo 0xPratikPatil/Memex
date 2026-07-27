@@ -168,6 +168,8 @@ services:
       RERANK_MODEL: "${RERANK_MODEL:-Qwen/Qwen3-Reranker-0.6B}"
       RERANK_MODEL_FALLBACK: "${RERANK_MODEL_FALLBACK:-BAAI/bge-reranker-base}"
       RERANK_TYPE: "${RERANK_TYPE:-auto}"
+      CC: gcc
+      CXX: g++
       NVIDIA_VISIBLE_DEVICES: all
     networks:
       - backend
