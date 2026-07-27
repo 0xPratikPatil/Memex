@@ -42,7 +42,7 @@ Production-ready MCP server for Retrieval-Augmented Generation with Docling docu
 - **Multi-format Embedding**: Table chunks → HTML, code chunks → fenced, text → Markdown
 - **Docling Enrichment**: Picture classification, image export, code/formula/chart extraction (opt-in)
 - **Contextual Retrieval**: LLM-generated context prefixes for each chunk (Anthropic's contextual retrieval)
-- **Hybrid Search**: Dense (bge-m3 1024d) + Sparse (BM25) + RRF fusion + cross-encoder rerank
+- **Hybrid Search**: Dense (qwen3-embedding:0.6b, 1024d) + Sparse (BM25) + RRF fusion + cross-encoder/causal-LM rerank
 - **Query Expansion**: HyDE (hypothetical document), query rewrite, multi-query paraphrasing
 - **Metadata Extraction**: Entities, topics, document classification, language detection, dates, keywords
 - **Redis Caching**: Embedding cache, search cache, parse cache — all enabled by default
@@ -104,7 +104,7 @@ Key settings:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `EMBED_MODEL` | `bge-m3` | Embedding model (Ollama) |
+| `EMBED_MODEL` | `qwen3-embedding:0.6b` | Embedding model (Ollama) |
 | `CHAT_MODEL` | `qwen3.5:0.8b` | Chat/LLM model for context, metadata, query expansion |
 | `CHUNK_SIZE` | `1024` | Target chunk size (tokens) |
 | `CHUNK_STRATEGY` | `hybrid` | `hybrid`, `recursive`, or `fixed` |
@@ -176,7 +176,7 @@ memex/
 
 ## Chunking Strategies
 
-**Hybrid** (default): Docling Serve HybridChunker via `/v1/chunk/hybrid/source` API. Tokenizer-aware (aligned to bge-m3), two-pass (split oversized + merge undersized peers). Preserves headings, captions, table structure. Repeats table headers across chunk boundaries. All heavy processing runs in Docker — no local `docling` packages needed.
+**Hybrid** (default): Docling Serve HybridChunker via `/v1/chunk/hybrid/source` API. Tokenizer-aware (aligned to qwen3-embedding), two-pass (split oversized + merge undersized peers). Preserves headings, captions, table structure. Repeats table headers across chunk boundaries. All heavy processing runs in Docker — no local `docling` packages needed.
 
 **Recursive**: Legacy fallback. Regex-splits markdown by headers → paragraphs → sentences → words.
 
@@ -189,9 +189,9 @@ User query
   → Query Rewrite (LLM expands ambiguous queries)
   → HyDE (LLM generates hypothetical answer, embeds it)
   → Multi-Query (3 paraphrases, each embedded + searched)
-  → Dense search (bge-m3, semantic) + Sparse search (BM25, lexical)
+  → Dense search (qwen3-embedding:0.6b, semantic) + Sparse search (BM25, lexical)
   → RRF fusion (k=60, merges all rankings)
-  → Cross-encoder rerank (bge-reranker-base, reads query+doc pairs)
+  → Cross-encoder / causal-LM rerank (Qwen3-Reranker-0.6B, fallback bge-reranker-base)
   → Top-k results
 ```
 

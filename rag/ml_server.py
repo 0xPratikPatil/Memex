@@ -29,7 +29,7 @@ _rerank_type = "cross-encoder"
 
 RERANK_MODEL = os.getenv("RERANK_MODEL", "Qwen3-Reranker-0.6B")
 RERANK_MODEL_FALLBACK = os.getenv("RERANK_MODEL_FALLBACK", "BAAI/bge-reranker-base")
-RERANK_TYPE = os.getenv("RERANK_TYPE", "causal-lm")
+RERANK_TYPE = os.getenv("RERANK_TYPE", "auto")
 SPARSE_MODEL = os.getenv("SPARSE_MODEL", "Qdrant/bm25")
 
 

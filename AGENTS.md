@@ -11,7 +11,7 @@ OpenCode should proactively use the following features when working with this co
 - All controlled by ENABLE_QUERY_EXPANSION=true (master toggle).
 
 ### Search
-- **Hybrid Search**: Dense (bge-m3, 1024d) + Sparse (BM25 via Qdrant/bm25) + RRF fusion (k=60) + cross-encoder rerank (BAAI/bge-reranker-base).
+- **Hybrid Search**: Dense (qwen3-embedding:0.6b, 1024d, fallback bge-m3) + Sparse (BM25 via Qdrant/bm25) + RRF fusion (k=60) + cross-encoder/causal-LM rerank (Qwen3-Reranker-0.6B, fallback BAAI/bge-reranker-base).
 - **Contextual Retrieval** (ENABLE_CONTEXTUAL_RETRIEVAL=true, CONTEXT_STRATEGY=summary): LLM-generated context prefixes for each chunk, improving embedding quality.
 - **Search Cache**: Redis caches full result sets for repeated queries (CACHE_TTL_SEARCH=3600).
 
@@ -98,7 +98,7 @@ docker compose ps             # verify all healthy
 ### Pull / manage models
 ```bash
 docker compose exec -T ollama ollama list           # list downloaded models
-docker compose exec -T ollama ollama pull bge-m3    # pull embedding model
+docker compose exec -T ollama ollama pull qwen3-embedding:0.6b  # pull embedding model
 docker compose exec -T ollama ollama pull qwen3.5:0.8b  # pull chat model
 docker compose exec -T ollama ollama rm <model>     # remove a model
 ```
@@ -111,7 +111,7 @@ curl http://localhost:11434/api/tags
 # Test embedding
 curl -s -X POST http://localhost:11434/api/embeddings \
   -H "Content-Type: application/json" \
-  -d '{"model":"bge-m3","prompt":"test"}' | jq .
+  -d '{"model":"qwen3-embedding:0.6b","prompt":"test"}' | jq .
 
 # Test chat
 curl -s -X POST http://localhost:11434/api/chat \
