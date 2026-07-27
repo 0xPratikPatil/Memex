@@ -11,7 +11,7 @@ OpenCode should proactively use the following features when working with this co
 - All controlled by ENABLE_QUERY_EXPANSION=true (master toggle).
 
 ### Search
-- **Hybrid Search**: Dense (qwen3-embedding:0.6b, 1024d, fallback bge-m3) + Sparse (BM25 via Qdrant/bm25) + RRF fusion (k=60) + cross-encoder/causal-LM rerank (Qwen3-Reranker-0.6B, fallback BAAI/bge-reranker-base).
+- **Hybrid Search**: Dense (qwen3-embedding:0.6b, 1024d, fallback bge-m3) + Sparse (BM25 via Qdrant/bm25) + RRF fusion (k=60) + cross-encoder/causal-LM rerank (Qwen/Qwen3-Reranker-0.6B, fallback BAAI/bge-reranker-base).
 - **Contextual Retrieval** (ENABLE_CONTEXTUAL_RETRIEVAL=true, CONTEXT_STRATEGY=summary): LLM-generated context prefixes for each chunk, improving embedding quality.
 - **Search Cache**: Redis caches full result sets for repeated queries (CACHE_TTL_SEARCH=3600).
 

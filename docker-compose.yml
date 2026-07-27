@@ -41,7 +41,7 @@ services:
         soft: -1
         hard: -1
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:6333/healthz"]
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -78,12 +78,12 @@ services:
       NVIDIA_VISIBLE_DEVICES: all
       OLLAMA_KEEP_ALIVE: 24h
       OLLAMA_HOST: 0.0.0.0
-      OLLAMA_NUM_PARALLEL: 1
+      OLLAMA_NUM_PARALLEL: 4
       OLLAMA_MAX_LOADED_MODELS: 2
     networks:
       - backend
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/11434'"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -165,7 +165,7 @@ services:
       - "127.0.0.1:${ML_SERVICES_PORT:-5002}:5002"
     environment:
       SPARSE_MODEL: "${SPARSE_MODEL:-Qdrant/bm25}"
-      RERANK_MODEL: "${RERANK_MODEL:-Qwen3-Reranker-0.6B}"
+      RERANK_MODEL: "${RERANK_MODEL:-Qwen/Qwen3-Reranker-0.6B}"
       RERANK_MODEL_FALLBACK: "${RERANK_MODEL_FALLBACK:-BAAI/bge-reranker-base}"
       RERANK_TYPE: "${RERANK_TYPE:-auto}"
       NVIDIA_VISIBLE_DEVICES: all

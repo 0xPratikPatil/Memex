@@ -29,7 +29,7 @@ Production-ready MCP server for Retrieval-Augmented Generation with Docling docu
 │  │  ┌─────────────────────────────────────────────┐   │   │
 │  │  │ ML Services :5002                           │   │   │
 │  │  │  - Sparse BM25 (Qdrant/bm25)                │   │   │
-│  │  │  - Cross-Encoder (BAAI/bge-reranker-base)   │   │   │
+│  │  │  - Causal-LM Reranker (Qwen/Qwen3-Reranker-0.6B)   │   │   │
 │  │  └─────────────────────────────────────────────┘   │   │
 │  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
@@ -191,7 +191,7 @@ User query
   → Multi-Query (3 paraphrases, each embedded + searched)
   → Dense search (qwen3-embedding:0.6b, semantic) + Sparse search (BM25, lexical)
   → RRF fusion (k=60, merges all rankings)
-  → Cross-encoder / causal-LM rerank (Qwen3-Reranker-0.6B, fallback bge-reranker-base)
+  → Cross-encoder / causal-LM rerank (Qwen/Qwen3-Reranker-0.6B, fallback bge-reranker-base)
   → Top-k results
 ```
 

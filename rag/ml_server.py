@@ -27,7 +27,7 @@ _sparse_model = None
 _reranker = None
 _rerank_type = "cross-encoder"
 
-RERANK_MODEL = os.getenv("RERANK_MODEL", "Qwen3-Reranker-0.6B")
+RERANK_MODEL = os.getenv("RERANK_MODEL", "Qwen/Qwen3-Reranker-0.6B")
 RERANK_MODEL_FALLBACK = os.getenv("RERANK_MODEL_FALLBACK", "BAAI/bge-reranker-base")
 RERANK_TYPE = os.getenv("RERANK_TYPE", "auto")
 SPARSE_MODEL = os.getenv("SPARSE_MODEL", "Qdrant/bm25")
@@ -73,7 +73,7 @@ class CausalLMReranker:
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype=torch.float16,
+            dtype=torch.float16,
             device_map=device,
             trust_remote_code=True,
         )

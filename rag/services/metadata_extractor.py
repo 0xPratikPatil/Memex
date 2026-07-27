@@ -341,6 +341,140 @@ class MetadataExtractor:
             "phone_count": len(phones),
         }
 
+    # ── Batch extraction ──────────────────────────────────────────────────
+
+    def extract_batch(
+        self,
+        chunks: list[dict[str, Any]],
+        document_text: str = "",
+        source_identifier: str = "",
+        batch_size: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Extract metadata for multiple chunks in batches to reduce LLM calls.
+
+        Combines entity extraction and topic tagging into a single prompt per batch.
+        Returns a list of metadata dicts, one per chunk.
+        """
+        if not chunks:
+            return []
+
+        results: list[dict[str, Any]] = []
+        doc_type_done = False
+
+        for batch_start in range(0, len(chunks), batch_size):
+            batch = chunks[batch_start : batch_start + batch_size]
+            batch_meta = self._extract_batch_metadata(
+                batch, document_text, source_identifier,
+                doc_type=not doc_type_done, batch_start=batch_start,
+            )
+            if not doc_type_done and batch_meta and batch_meta[0].get("doc_type"):
+                doc_type_done = True
+            results.extend(batch_meta)
+
+        return results
+
+    def _extract_batch_metadata(
+        self,
+        batch: list[dict[str, Any]],
+        document_text: str,
+        source_identifier: str,
+        doc_type: bool = True,
+        batch_start: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Extract metadata for a batch of chunks in a single LLM call."""
+        if not self._ollama:
+            return [{} for _ in batch]
+
+        chunks_text = "\n\n".join(
+            f"[Chunk {i}]: {c['content'][:500]}" for i, c in enumerate(batch)
+        )
+
+        tasks = []
+        if config.ENABLE_ENTITY_EXTRACTION:
+            tasks.append("entities (JSON object with keys: people, organizations, dates, locations, products — each a list of strings)")
+        if config.ENABLE_TOPIC_TAGGING:
+            tasks.append(f"topics (JSON array of up to {config.MAX_TOPICS_PER_CHUNK} topic labels)")
+        if doc_type and config.ENABLE_DOC_CLASSIFICATION:
+            tasks.append("doc_type (one of: report, email, article, code, documentation, presentation, resume, contract, invoice, meeting_notes, other)")
+
+        if not tasks:
+            return [{} for _ in batch]
+
+        prompt = (
+            f"Extract metadata from each chunk below. For each chunk, return a JSON object "
+            f"with keys matching these tasks: {'; '.join(tasks)}.\n\n"
+            f"Return a JSON array of objects, one per chunk, in order. "
+            f"Only output JSON.\n\n"
+            f"Chunks:\n{chunks_text}"
+        )
+
+        try:
+            response = self._chat(prompt, num_predict=400)
+            parsed = json.loads(self._strip_code_fences(response))
+            if not isinstance(parsed, list):
+                parsed = [parsed]
+            # Pad/truncate to match batch size
+            while len(parsed) < len(batch):
+                parsed.append({})
+            normalized = [self._normalize_metadata(m) for m in parsed[: len(batch)]]
+            # Add cheap regex-based metadata per chunk
+            for i, (chunk, meta) in enumerate(zip(batch, normalized, strict=True)):
+                chunk_with_index = {**chunk, "chunk_index": batch_start + i}
+                if config.ENABLE_LANGUAGE_DETECTION:
+                    lang = self.detect_language(chunk["content"])
+                    if lang:
+                        meta["language"] = lang
+                meta["dates"] = self.extract_dates(chunk["content"])
+                meta["keywords"] = self.extract_keywords(chunk["content"])
+                meta["structural"] = self.extract_structural(chunk_with_index, source_identifier)
+            return normalized
+        except (json.JSONDecodeError, Exception) as exc:
+            logger.debug("Batch metadata extraction failed, falling back to per-chunk: %s", exc)
+            return self._fallback_per_chunk(batch, document_text, source_identifier, doc_type)
+
+    def _fallback_per_chunk(
+        self,
+        batch: list[dict[str, Any]],
+        document_text: str,
+        source_identifier: str,
+        doc_type: bool,
+    ) -> list[dict[str, Any]]:
+        """Fallback to per-chunk extraction when batch fails."""
+        results = []
+        for i, chunk in enumerate(batch):
+            meta: dict[str, Any] = {}
+            chunk_with_index = {**chunk, "chunk_index": i}
+            if config.ENABLE_ENTITY_EXTRACTION:
+                meta["entities"] = self.extract_entities(chunk["content"])
+            if doc_type and config.ENABLE_DOC_CLASSIFICATION and i == 0:
+                meta["doc_type"] = self.classify_document(document_text or chunk["content"])
+            if config.ENABLE_TOPIC_TAGGING:
+                meta["topics"] = self.extract_topics(chunk["content"])
+            if config.ENABLE_LANGUAGE_DETECTION:
+                lang = self.detect_language(chunk["content"])
+                if lang:
+                    meta["language"] = lang
+            meta["dates"] = self.extract_dates(chunk["content"])
+            meta["keywords"] = self.extract_keywords(chunk["content"])
+            meta["structural"] = self.extract_structural(chunk_with_index, source_identifier)
+            results.append(meta)
+        return results
+
+    def _normalize_metadata(self, meta: dict[str, Any]) -> dict[str, Any]:
+        """Normalize LLM output to expected metadata format."""
+        result: dict[str, Any] = {}
+        if "entities" in meta and isinstance(meta["entities"], dict):
+            result["entities"] = {
+                k: v[: config.MAX_ENTITIES_PER_CHUNK]
+                for k, v in meta["entities"].items()
+                if isinstance(v, list)
+            }
+        if "topics" in meta and isinstance(meta["topics"], list):
+            result["topics"] = [str(t) for t in meta["topics"][: config.MAX_TOPICS_PER_CHUNK]]
+        if "doc_type" in meta:
+            result["doc_type"] = str(meta["doc_type"]).strip().lower()
+        return result
+
     # ── Internal helpers ──────────────────────────────────────────────────
 
     @staticmethod

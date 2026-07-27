@@ -12,7 +12,7 @@
 
 # ── Global ARGs (available in FROM but re-declared per stage for RUN access) ──────
 ARG SPARSE_MODEL=Qdrant/bm25
-ARG RERANK_MODEL=Qwen3-Reranker-0.6B
+ARG RERANK_MODEL=Qwen/Qwen3-Reranker-0.6B
 ARG RERANK_MODEL_FALLBACK=BAAI/bge-reranker-base
 ARG RERANK_TYPE=auto
 ARG UV_VERSION=0.6.0
@@ -61,7 +61,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       "fastapi[standard]>=0.115,<1" \
       "uvicorn[standard]>=0.30,<1" \
       "pydantic>=2,<3" \
-      "httpx>=0.27,<1"
+      "httpx>=0.27,<1" \
+      "accelerate>=1.0,<2"
 
 # ═══════════════════════════════════════════════════════════════════════════════════
 # Stage 2 — preload : Pre-cache ML models at build time

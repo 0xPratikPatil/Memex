@@ -33,7 +33,7 @@ unset HTTP_TIMEOUT DOCLING_TIMEOUT QDRANT_TIMEOUT 2>/dev/null || true
 # ── Models (env var > .env > default) ───────────────────────────────────────
 EMBED="${EMBED_MODEL:-qwen3-embedding:0.6b}"
 CHAT="${CHAT_MODEL:-qwen3.5:0.8b}"
-RERANK="${RERANK_MODEL:-Qwen3-Reranker-0.6B}"
+RERANK="${RERANK_MODEL:-Qwen/Qwen3-Reranker-0.6B}"
 SPARSE="${SPARSE_MODEL:-Qdrant/bm25}"
 
 BOOT_SERVICES=(qdrant ollama docling ml-services redis)
