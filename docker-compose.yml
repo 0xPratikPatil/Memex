@@ -133,8 +133,9 @@ services:
       - "${ML_SERVICES_PORT:-5002}:5002"
     environment:
       SPARSE_MODEL: "${SPARSE_MODEL:-Qdrant/bm25}"
-      RERANK_MODEL: "${RERANK_MODEL:-BAAI/bge-reranker-base}"
-      RERANK_TYPE: "${RERANK_TYPE:-cross-encoder}"
+      RERANK_MODEL: "${RERANK_MODEL:-Qwen3-Reranker-0.6B}"
+      RERANK_MODEL_FALLBACK: "${RERANK_MODEL_FALLBACK:-BAAI/bge-reranker-base}"
+      RERANK_TYPE: "${RERANK_TYPE:-auto}"
       NVIDIA_VISIBLE_DEVICES: all
     networks:
       - backend

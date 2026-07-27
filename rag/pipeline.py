@@ -369,52 +369,73 @@ class RAGEngine:
         wait=wait_exponential(multiplier=config.HTTP_RETRY_BACKOFF, max=10),
         reraise=True,
     )
-    def _dense_embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def _dense_embed_batch(self, texts: list[str], model: str | None = None) -> list[list[float]]:
         """Embed a batch of texts via Ollama.
 
         Supports both the legacy ``/api/embeddings`` endpoint (prompt field)
         and the current ``/api/embed`` endpoint (input field, batched).
+        Falls back to EMBED_MODEL_FALLBACK if primary model fails.
         """
-        from rag.services.cache import cache_embedding, get_cached_embedding
+        from rag.services.cache import get_cached_embedding
 
+        if model is None:
+            model = config.EMBED_MODEL
         client = self._get_ollama()
 
         uncached_texts: list[tuple[int, str]] = []
         cached_map: dict[int, list[float]] = {}
 
         for idx, text in enumerate(texts):
-            cached = get_cached_embedding(text)
+            cached = get_cached_embedding(text, model=model)
             if cached is not None:
                 cached_map[idx] = cached
             else:
                 uncached_texts.append((idx, text))
 
         if uncached_texts:
-            is_new_api = "/api/embed" in config.OLLAMA_EMBED_URL and "/api/embeddings" not in config.OLLAMA_EMBED_URL
-            if is_new_api:
-                # Batch via /api/embed — supports input array
-                for idx, text in uncached_texts:
-                    resp = client.post(
-                        config.OLLAMA_EMBED_URL,
-                        json={"model": config.EMBED_MODEL, "input": text},
-                    )
-                    resp.raise_for_status()
-                    emb = resp.json()["embeddings"][0]
-                    cache_embedding(text, emb)
-                    cached_map[idx] = emb
-            else:
-                # Legacy /api/embeddings — one at a time
-                for idx, text in uncached_texts:
-                    resp = client.post(
-                        config.OLLAMA_EMBED_URL,
-                        json={"model": config.EMBED_MODEL, "prompt": text},
-                    )
-                    resp.raise_for_status()
-                    emb = resp.json()["embedding"]
-                    cache_embedding(text, emb)
-                    cached_map[idx] = emb
+            try:
+                self._embed_via_ollama(client, uncached_texts, cached_map, model)
+            except Exception as e:
+                if model != config.EMBED_MODEL_FALLBACK:
+                    logger.warning("Embedding with %s failed (%s), falling back to %s",
+                                   model, e, config.EMBED_MODEL_FALLBACK)
+                    self._embed_via_ollama(client, uncached_texts, cached_map, config.EMBED_MODEL_FALLBACK)
+                else:
+                    raise
 
         return [cached_map[i] for i in range(len(texts))]
+
+    def _embed_via_ollama(
+        self,
+        client: httpx.Client,
+        uncached_texts: list[tuple[int, str]],
+        cached_map: dict[int, list[float]],
+        model: str,
+    ) -> None:
+        """Embed uncached texts via Ollama, storing results in cached_map."""
+        from rag.services.cache import cache_embedding
+
+        is_new_api = "/api/embed" in config.OLLAMA_EMBED_URL and "/api/embeddings" not in config.OLLAMA_EMBED_URL
+        if is_new_api:
+            for idx, text in uncached_texts:
+                resp = client.post(
+                    config.OLLAMA_EMBED_URL,
+                    json={"model": model, "input": text},
+                )
+                resp.raise_for_status()
+                emb = resp.json()["embeddings"][0]
+                cache_embedding(text, emb, model=model)
+                cached_map[idx] = emb
+        else:
+            for idx, text in uncached_texts:
+                resp = client.post(
+                    config.OLLAMA_EMBED_URL,
+                    json={"model": model, "prompt": text},
+                )
+                resp.raise_for_status()
+                emb = resp.json()["embedding"]
+                cache_embedding(text, emb, model=model)
+                cached_map[idx] = emb
 
     def _dense_embed(self, text: str) -> list[float]:
         """Embed a single text."""

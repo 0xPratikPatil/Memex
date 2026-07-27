@@ -152,23 +152,37 @@ class QueryExpander:
         resp.raise_for_status()
         return resp.json()["message"]["content"]
 
-    def _embed(self, text: str) -> list[float]:
-        """Embed text via Ollama.
+    def _embed(self, text: str, model: str | None = None) -> list[float]:
+        """Embed text via Ollama with fallback.
 
         Supports both /api/embed (new, batched) and /api/embeddings (legacy).
+        Falls back to EMBED_MODEL_FALLBACK if primary model fails.
         """
+        if model is None:
+            model = config.EMBED_MODEL
+        try:
+            return self._embed_single(text, model)
+        except Exception as e:
+            if model != config.EMBED_MODEL_FALLBACK:
+                logger.warning("Embedding with %s failed (%s), falling back to %s",
+                               model, e, config.EMBED_MODEL_FALLBACK)
+                return self._embed_single(text, config.EMBED_MODEL_FALLBACK)
+            raise
+
+    def _embed_single(self, text: str, model: str) -> list[float]:
+        """Embed text via Ollama using specified model."""
         is_new_api = "/api/embed" in config.OLLAMA_EMBED_URL and "/api/embeddings" not in config.OLLAMA_EMBED_URL
         if is_new_api:
             resp = self._ollama.post(
                 config.OLLAMA_EMBED_URL,
-                json={"model": config.EMBED_MODEL, "input": text},
+                json={"model": model, "input": text},
             )
             resp.raise_for_status()
             return resp.json()["embeddings"][0]
         else:
             resp = self._ollama.post(
                 config.OLLAMA_EMBED_URL,
-                json={"model": config.EMBED_MODEL, "prompt": text},
+                json={"model": model, "prompt": text},
             )
             resp.raise_for_status()
             return resp.json()["embedding"]

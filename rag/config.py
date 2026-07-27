@@ -75,19 +75,21 @@ DOCLING_API_KEY: str = _env("DOCLING_API_KEY", "")
 
 # ── Model / collection names ──────────────────────────────────────────────────
 COLLECTION_NAME: str = _env("COLLECTION_NAME", "memex")
-EMBED_MODEL: str = _env("EMBED_MODEL", "bge-m3")
-RERANK_MODEL: str = _env("RERANK_MODEL", "BAAI/bge-reranker-base")
+EMBED_MODEL: str = _env("EMBED_MODEL", "qwen3-embedding:0.6b")
+EMBED_MODEL_FALLBACK: str = _env("EMBED_MODEL_FALLBACK", "bge-m3")
+RERANK_MODEL: str = _env("RERANK_MODEL", "Qwen3-Reranker-0.6B")
+RERANK_MODEL_FALLBACK: str = _env("RERANK_MODEL_FALLBACK", "BAAI/bge-reranker-base")
 SPARSE_MODEL: str = _env("SPARSE_MODEL", "Qdrant/bm25")
 CHAT_MODEL: str = _env("CHAT_MODEL", "qwen3.5:0.8b")  # for context/query/metadata generation
 
 # Provider: "http" (Docker ML service) or "local" (load in-process)
 SPARSE_PROVIDER: str = _env("SPARSE_PROVIDER", "http")
 RERANK_PROVIDER: str = _env("RERANK_PROVIDER", "http")
-RERANK_TYPE: str = _env("RERANK_TYPE", "cross-encoder")  # cross-encoder | causal-lm
+RERANK_TYPE: str = _env("RERANK_TYPE", "causal-lm")  # cross-encoder | causal-lm
 DENSE_DIM: int = _env_int("DENSE_DIM", 1024)
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
-CHUNK_TOKENIZER: str = _env("CHUNK_TOKENIZER", "BAAI/bge-m3")
+CHUNK_TOKENIZER: str = _env("CHUNK_TOKENIZER", "Qwen/Qwen3-Embedding-0.6B")
 CHUNK_SIZE: int = _env_int("CHUNK_SIZE", 1024)
 CHUNK_OVERLAP: int = _env_int("CHUNK_OVERLAP", 128)  # Legacy-only; HybridChunker ignores this
 MIN_CHUNK_LEN: int = _env_int("MIN_CHUNK_LEN", 30)
