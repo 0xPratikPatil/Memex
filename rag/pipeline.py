@@ -566,13 +566,12 @@ class RAGEngine:
         if config.ENABLE_METADATA_EXTRACTION:
             metadata_extractor = MetadataExtractor(self._get_ollama())
             _progress("Extracting metadata...", 74)
-            batch_metas = metadata_extractor.extract_batch(
-                raw_chunks,
-                document_text=text,
-                source_identifier=source_identifier,
-                batch_size=config.CONTEXT_BATCH_SIZE,
-            )
-            for chunk, chunk_meta in zip(raw_chunks, batch_metas, strict=True):
+            for chunk in raw_chunks:
+                chunk_meta = metadata_extractor.extract_all(
+                    chunk=chunk,
+                    document_text=text,
+                    source_identifier=source_identifier,
+                )
                 chunk["metadata"] = chunk_meta
 
         _progress(f"Generating embeddings ({len(raw_chunks)} chunks)...", 75)

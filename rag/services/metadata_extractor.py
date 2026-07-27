@@ -391,11 +391,11 @@ class MetadataExtractor:
 
         tasks = []
         if config.ENABLE_ENTITY_EXTRACTION:
-            tasks.append("entities (JSON object with keys: people, organizations, dates, locations, products — each a list of strings)")
+            tasks.append("entities (JSON with keys: people, orgs, dates, locations, products — each a list)")
         if config.ENABLE_TOPIC_TAGGING:
             tasks.append(f"topics (JSON array of up to {config.MAX_TOPICS_PER_CHUNK} topic labels)")
         if doc_type and config.ENABLE_DOC_CLASSIFICATION:
-            tasks.append("doc_type (one of: report, email, article, code, documentation, presentation, resume, contract, invoice, meeting_notes, other)")
+            tasks.append("doc_type (report, email, article, code, documentation, presentation, resume, contract, invoice, meeting_notes, other)")
 
         if not tasks:
             return [{} for _ in batch]
@@ -409,7 +409,7 @@ class MetadataExtractor:
         )
 
         try:
-            response = self._chat(prompt, num_predict=400)
+            response = self._chat(prompt, num_predict=-1)
             parsed = json.loads(self._strip_code_fences(response))
             if not isinstance(parsed, list):
                 parsed = [parsed]
@@ -482,10 +482,13 @@ class MetadataExtractor:
         """Remove markdown code fences (```json ... ```) from LLM output."""
         return re.sub(r"```(?:json)?\s*\n?(.*?)\n?\s*```", r"\1", text, flags=re.DOTALL).strip()
 
-    def _chat(self, prompt: str, num_predict: int = 200) -> str:
+    def _chat(self, prompt: str, num_predict: int = -1) -> str:
         """Call Ollama chat API and return the assistant message content.
 
         Handles models with ``thinking`` field fallback (e.g. qwen3.5).
+
+        Uses num_predict=-1 (unlimited) so thinking models can complete
+        their chain-of-thought reasoning before producing content.
         """
         if self._ollama is None:
             raise RuntimeError("Ollama client not available for metadata extraction")
@@ -496,7 +499,7 @@ class MetadataExtractor:
                 "model": config.METADATA_MODEL or config.CHAT_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
-                "options": {"num_predict": num_predict, "temperature": 0},
+                "options": {"num_predict": num_predict},
             },
         )
         resp.raise_for_status()
