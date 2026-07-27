@@ -218,7 +218,12 @@ class ContextGenerator:
         return contexts
 
     def _chat(self, prompt: str) -> str:
-        """Call Ollama chat API and return the assistant message content."""
+        """Call Ollama chat API and return the assistant message content.
+
+        Handles models that return reasoning in a ``thinking`` field
+        (e.g. qwen3.5) by falling back to ``thinking`` when ``content``
+        is empty.
+        """
         chat_url = config.OLLAMA_EMBED_URL.replace("/api/embeddings", "/api/chat")
         resp = self._ollama.post(
             chat_url,
@@ -229,7 +234,11 @@ class ContextGenerator:
             },
         )
         resp.raise_for_status()
-        return resp.json()["message"]["content"]
+        msg = resp.json()["message"]
+        content = msg.get("content", "")
+        if not content:
+            content = msg.get("thinking", "")
+        return content
 
 
 def strip_context_prefix(content: str) -> str:

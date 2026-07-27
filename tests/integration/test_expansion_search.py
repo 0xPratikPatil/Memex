@@ -28,7 +28,7 @@ class TestQueryExpanderIntegration:
 
     @pytest.fixture
     def ollama_client(self) -> httpx.Client:
-        return httpx.Client()
+        return httpx.Client(timeout=60.0)
 
     @pytest.fixture
     def expander(self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch) -> QueryExpander:

@@ -43,7 +43,8 @@ list(m.embed(['warmup'])); \
 print('Sparse model cached')"
 
 # Pre-cache reranker based on type (auto-detect or explicit)
-RUN if [ "$RERANK_TYPE" = "causal-lm" ] || (echo "$RERANK_MODEL" | grep -qi "qwen3-reranker"); then \
+# Skip on failure - fallback happens at runtime
+RUN (if [ "$RERANK_TYPE" = "causal-lm" ] || (echo "$RERANK_MODEL" | grep -qi "qwen3-reranker"); then \
       echo "Pre-caching causal-LM reranker: ${RERANK_MODEL}"; \
       python -c "\
 from transformers import AutoModelForCausalLM, AutoTokenizer; \
@@ -56,7 +57,7 @@ print('Causal-LM reranker cached')" ; \
 from sentence_transformers import CrossEncoder; \
 m = CrossEncoder('${RERANK_MODEL}', device='cpu'); \
 print('Cross-encoder reranker cached')" ; \
-    fi
+    fi) || echo "Reranker pre-cache failed, will fallback at runtime"
 
 # Also pre-cache the fallback reranker
 RUN python -c "\

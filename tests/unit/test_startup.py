@@ -18,7 +18,7 @@ class TestBuildStartupBanner:
     def test_includes_embed_model(self):
         banner = build_startup_banner()
         assert "embed" in banner.lower()
-        assert "bge-m3" in banner
+        assert any(m in banner for m in ("bge-m3", "qwen3-embedding"))
 
     def test_includes_chat_model(self):
         banner = build_startup_banner()

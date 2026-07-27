@@ -138,7 +138,10 @@ class QueryExpander:
         return lines[:count]
 
     def _chat(self, prompt: str) -> str:
-        """Call Ollama chat API and return the assistant message content."""
+        """Call Ollama chat API and return the assistant message content.
+
+        Handles models with ``thinking`` field fallback (e.g. qwen3.5).
+        """
         chat_url = config.OLLAMA_EMBED_URL.replace("/api/embeddings", "/api/chat")
         model = config.HYDE_MODEL or config.MULTI_QUERY_MODEL or config.QUERY_REWRITE_MODEL or config.CHAT_MODEL
         resp = self._ollama.post(
@@ -150,7 +153,11 @@ class QueryExpander:
             },
         )
         resp.raise_for_status()
-        return resp.json()["message"]["content"]
+        msg = resp.json()["message"]
+        content = msg.get("content", "")
+        if not content:
+            content = msg.get("thinking", "")
+        return content
 
     def _embed(self, text: str, model: str | None = None) -> list[float]:
         """Embed text via Ollama with fallback.

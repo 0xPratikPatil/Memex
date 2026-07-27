@@ -362,4 +362,8 @@ class MetadataExtractor:
             },
         )
         resp.raise_for_status()
-        return resp.json()["message"]["content"]
+        msg = resp.json()["message"]
+        content = msg.get("content", "")
+        if not content:
+            content = msg.get("thinking", "")
+        return content
