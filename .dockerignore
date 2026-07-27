@@ -1,5 +1,6 @@
 # ── Version control ──
 .git/
+**/.git/
 .gitattributes
 .gitignore
 .github/
@@ -15,6 +16,7 @@ build/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.tox/
 .coverage
 htmlcov/
 
@@ -22,6 +24,7 @@ htmlcov/
 .venv/
 venv/
 env/
+.cache/
 
 # ── Secrets & environment ──
 .env

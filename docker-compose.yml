@@ -10,6 +10,8 @@
 #   docker compose down                 # stop everything
 #   docker compose down -v              # stop + remove persisted data
 #
+# Docker best practices: DOCKER.md and AGENTS.md#docker-best-practices
+#
 # Custom models:
 #   EMBED_MODEL=qwen3-embedding:0.6b CHAT_MODEL=qwen2.5:1.5b docker compose up -d
 # ────────────────────────────────────────────────────────────────────────────────
@@ -18,10 +20,11 @@ name: memex
 
 services:
   # ══════════════════════════════════════════════════════════════════════════════
-  # Qdrant — Vector database (semantic search index)
+  # Qdrant — Vector database (semantic search index, 1024d HNSW)
   # ══════════════════════════════════════════════════════════════════════════════
   qdrant:
     image: qdrant/qdrant:v1.18
+    container_name: memex-qdrant
     init: true
     command:
       - "./entrypoint.sh"
@@ -32,6 +35,8 @@ services:
       - "127.0.0.1:${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+    tmpfs:
+      - /tmp:exec,size=64M
     environment:
       QDRANT__SERVICE__GRPC_PORT: "6334"
     networks:
@@ -63,17 +68,23 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    labels:
+      - "com.memex.service=qdrant"
+      - "com.memex.description=Vector database with HNSW index for semantic search"
 
   # ══════════════════════════════════════════════════════════════════════════════
-  # Ollama — Local LLM inference (embeddings + chat)
+  # Ollama — Local LLM inference (embeddings + chat, Docker-only, never on host)
   # ══════════════════════════════════════════════════════════════════════════════
   ollama:
     image: ollama/ollama:0.32.4
+    container_name: memex-ollama
     init: true
     ports:
       - "127.0.0.1:${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama_data:/root/.ollama
+    tmpfs:
+      - /tmp:exec,size=256M
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       OLLAMA_KEEP_ALIVE: 24h
@@ -109,15 +120,21 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    labels:
+      - "com.memex.service=ollama"
+      - "com.memex.description=LLM inference for embeddings (qwen3-embedding) and chat (qwen2.5)"
 
   # ══════════════════════════════════════════════════════════════════════════════
   # Docling Serve — Document parsing & conversion (PDF, DOCX, HTML, etc.)
   # ══════════════════════════════════════════════════════════════════════════════
   docling:
     image: ghcr.io/docling-project/docling-serve-cu130:v1.27.0
+    container_name: memex-docling
     init: true
     ports:
       - "127.0.0.1:${DOCLING_PORT:-5001}:5001"
+    tmpfs:
+      - /tmp:exec,size=128M
     environment:
       DOCLING_SERVE_HOST: "0.0.0.0"
       DOCLING_SERVE_PORT: "5001"
@@ -151,6 +168,9 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    labels:
+      - "com.memex.service=docling"
+      - "com.memex.description=Document parsing and hybrid chunking (Docling HybridChunker)"
 
   # ══════════════════════════════════════════════════════════════════════════════
   # ML Services — Sparse BM25 embeddings + cross-encoder / causal-LM reranker
@@ -159,15 +179,19 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: ml
+      target: runtime
+    container_name: memex-ml
     init: true
     ports:
       - "127.0.0.1:${ML_SERVICES_PORT:-5002}:5002"
+    tmpfs:
+      - /tmp:exec,size=64M
     environment:
       SPARSE_MODEL: "${SPARSE_MODEL:-Qdrant/bm25}"
       RERANK_MODEL: "${RERANK_MODEL:-Qwen/Qwen3-Reranker-0.6B}"
       RERANK_MODEL_FALLBACK: "${RERANK_MODEL_FALLBACK:-BAAI/bge-reranker-base}"
       RERANK_TYPE: "${RERANK_TYPE:-auto}"
+      # Triton CUDA kernel compilation at model load time needs gcc.
       CC: gcc
       CXX: g++
       NVIDIA_VISIBLE_DEVICES: all
@@ -200,12 +224,16 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    labels:
+      - "com.memex.service=ml-services"
+      - "com.memex.description=Sparse BM25 embeddings + causal-LM reranker (Qwen3-Reranker)"
 
   # ══════════════════════════════════════════════════════════════════════════════
-  # Redis — Search + embedding cache
+  # Redis — Search + embedding cache (allkeys-lru, 256mb max)
   # ══════════════════════════════════════════════════════════════════════════════
   redis:
     image: redis:7.4.10-alpine
+    container_name: memex-redis
     init: true
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
@@ -216,6 +244,8 @@ services:
       - --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
+    tmpfs:
+      - /tmp:exec,size=32M
     networks:
       - backend
     healthcheck:
@@ -240,6 +270,9 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    labels:
+      - "com.memex.service=redis"
+      - "com.memex.description=Search and embedding cache (append-only, allkeys-lru eviction)"
 
 # ══════════════════════════════════════════════════════════════════════════════════
 # Networks
@@ -247,6 +280,7 @@ services:
 networks:
   backend:
     driver: bridge
+    # internal: false — MCP server on host needs to reach containers via 127.0.0.1
     internal: false
 
 # ══════════════════════════════════════════════════════════════════════════════════

@@ -1,12 +1,14 @@
 # syntax=docker/dockerfile:1
 # ═══════════════════════════════════════════════════════════════════════════════════
-# Memex — ML Services (sparse embeddings + cross-encoder / causal-LM reranker)
+# Memex — ML Services (sparse BM25 embeddings + cross-encoder / causal-LM reranker)
 #
-# Multi-stage build with:
+# Multi-stage build rules:
+#   • Stages ordered least→most volatile: tooling → deps → model cache → app code
 #   • Pinned base images and tools for reproducible builds.
 #   • BuildKit cache mounts for fast incremental rebuilds.
-#   • Model pre-caching at build time (instant container startup).
-#   • Non-root runtime user with explicit UID/GID.
+#   • Model pre-caching at build time → instant container startup.
+#   • Non-root runtime user with explicit UID/GID (1001:1001).
+#   • COPY --link on all cross-stage copies (no intermediate layers in final image).
 #   • GPU support via NVIDIA Container Toolkit.
 # ═══════════════════════════════════════════════════════════════════════════════════
 
@@ -18,14 +20,14 @@ ARG RERANK_TYPE=auto
 ARG UV_VERSION=0.6.0
 
 # ═══════════════════════════════════════════════════════════════════════════════════
-# Stage 0 — uv : Pinned uv package manager (isolated stage for reproducible builds)
+# Stage 0 — uv-tool : Pinned uv package manager (most stable, rarely changes)
 # ═══════════════════════════════════════════════════════════════════════════════════
-FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv-tool
 
 # ═══════════════════════════════════════════════════════════════════════════════════
-# Stage 1 — deps : Base runtime with all Python packages installed
+# Stage 1 — python-base : OS + system deps + Python virtual environment
 # ═══════════════════════════════════════════════════════════════════════════════════
-FROM pytorch/pytorch:2.6.0-cuda12.6-cudnn9-runtime AS deps
+FROM pytorch/pytorch:2.6.0-cuda12.6-cudnn9-runtime AS python-base
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -34,7 +36,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 WORKDIR /app
 
-# ── System dependencies (curl for healthcheck, ca-certificates for TLS) ──
+# ── System dependencies ──────────────────────────────────────────────────────
+# gcc/g++ ARE runtime deps — required by Triton for CUDA kernel JIT compilation
+# when the causal-LM reranker loads on GPU. Do NOT remove them.
+# curl = healthcheck, ca-certificates = TLS for HuggingFace downloads.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       ca-certificates \
@@ -43,19 +48,19 @@ RUN apt-get update && \
       g++ \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ── uv package manager (pinned version) ───────────────────────────────────
-COPY --from=uv /uv /usr/local/bin/uv
+# ── uv package manager (pinned version) ──────────────────────────────────────
+COPY --from=uv-tool /uv /usr/local/bin/uv
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
-# ── Python virtual environment ──────────────────────────────────────────────
+# ── Python virtual environment ───────────────────────────────────────────────
 RUN uv venv /opt/venv
 
 ENV VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:$PATH"
 
-# ── Install Python packages (BuildKit cache mount for uv) ───────────────────
+# ── Install Python packages (BuildKit cache mount for uv) ────────────────────
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install \
       "fastembed>=0.4,<1" \
@@ -67,9 +72,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       "accelerate>=1.0,<2"
 
 # ═══════════════════════════════════════════════════════════════════════════════════
-# Stage 2 — preload : Pre-cache ML models at build time
+# Stage 2 — model-cache : Pre-cache HuggingFace models at build time
 # ═══════════════════════════════════════════════════════════════════════════════════
-FROM deps AS preload
+FROM python-base AS model-cache
 
 ARG SPARSE_MODEL
 ARG RERANK_MODEL
@@ -79,14 +84,14 @@ ARG RERANK_TYPE
 ENV HF_HOME=/app/.cache/huggingface \
     TRANSFORMERS_CACHE=/app/.cache/huggingface
 
-# ── Pre-cache sparse model (BM25) ───────────────────────────────────────────
+# ── Pre-cache sparse model (BM25) ────────────────────────────────────────────
 RUN python -c \
     "from fastembed import SparseTextEmbedding; \
      m = SparseTextEmbedding(model_name='${SPARSE_MODEL}'); \
      list(m.embed(['warmup'])); \
      print('Sparse model cached: ${SPARSE_MODEL}')"
 
-# ── Pre-cache primary reranker (graceful fallback on failure) ───────────────
+# ── Pre-cache primary reranker (graceful fallback on failure) ────────────────
 RUN ( \
   if [ "${RERANK_TYPE}" = "causal-lm" ] || (echo "${RERANK_MODEL}" | grep -qi "qwen3-reranker"); then \
     echo "Pre-caching causal-LM reranker: ${RERANK_MODEL}"; \
@@ -104,16 +109,16 @@ RUN ( \
   fi \
   ) || echo "Primary reranker pre-cache skipped — fallback will load at runtime"
 
-# ── Always pre-cache the fallback reranker ──────────────────────────────────
+# ── Always pre-cache the fallback reranker ───────────────────────────────────
 RUN python -c \
     "from sentence_transformers import CrossEncoder; \
      m = CrossEncoder('${RERANK_MODEL_FALLBACK}', device='cpu'); \
      print('Fallback reranker cached: ${RERANK_MODEL_FALLBACK}')"
 
 # ═══════════════════════════════════════════════════════════════════════════════════
-# Stage 3 — ml : Minimal production runtime
+# Stage 3 — runtime : Minimal production image (most volatile, changes with code)
 # ═══════════════════════════════════════════════════════════════════════════════════
-FROM deps AS ml
+FROM python-base AS runtime
 
 ARG SPARSE_MODEL
 ARG RERANK_MODEL
@@ -127,29 +132,32 @@ ENV SPARSE_MODEL=${SPARSE_MODEL} \
     HF_HOME=/app/.cache/huggingface \
     TRANSFORMERS_CACHE=/app/.cache/huggingface
 
-# ── Non-root user (explicit UID/GID for host volume compatibility) ─────────
+# ── Non-root user (explicit UID/GID for host volume compatibility) ───────────
 RUN groupadd -g 1001 -r appgroup && \
     useradd -u 1001 -r -g appgroup -d /app -s /sbin/nologin appuser && \
     mkdir -p /app/.cache && \
     chown -R appuser:appgroup /app
 
-# ── Copy pre-cached models and application code ─────────────────────────────
-COPY --from=preload --chown=appuser:appgroup /app/.cache /app/.cache
-COPY --chown=appuser:appgroup rag/ml_server.py /app/server.py
+# ── Copy pre-cached models and application code ──────────────────────────────
+# --link avoids preserving intermediate layers, reducing final image size.
+COPY --from=model-cache --chown=appuser:appgroup --link /app/.cache /app/.cache
+COPY --chown=appuser:appgroup --link rag/ml_server.py /app/server.py
 
 USER 1001
 
-# ── Healthcheck ─────────────────────────────────────────────────────────────
+EXPOSE 5002
+
+# ── Healthcheck (curl inside container) ──────────────────────────────────────
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
     CMD ["curl", "-sf", "http://localhost:5002/health"]
 
-EXPOSE 5002
+STOPSIGNAL SIGTERM
 
-# ── Labels (OCI standard) ───────────────────────────────────────────────────
+# ── OCI labels ───────────────────────────────────────────────────────────────
 LABEL org.opencontainers.image.title="Memex ML Services" \
       org.opencontainers.image.description="Sparse BM25 embeddings + cross-encoder/causal-LM reranker" \
-      org.opencontainers.image.source="https://github.com/0xPratikPatil/Memex"
-
-STOPSIGNAL SIGTERM
+      org.opencontainers.image.source="https://github.com/0xPratikPatil/Memex" \
+      org.opencontainers.image.authors="0xPratikPatil" \
+      org.opencontainers.image.documentation="https://github.com/0xPratikPatil/Memex/blob/main/DOCKER.md"
 
 CMD ["/opt/venv/bin/python", "/app/server.py"]

@@ -82,6 +82,60 @@ Ollama runs **exclusively in Docker**. Never install Ollama on the host.
 - Model pulls happen inside the container: `docker compose exec -T ollama ollama pull <model>`
 - Health check: `curl http://localhost:11434/api/tags` (hits Docker container)
 
+## Docker Best Practices (apply when modifying Dockerfile or compose)
+
+### Multi-Stage Dockerfile Rules
+
+- **Four stages**: `uv` → `deps` → `preload` → `ml` (runtime), in order of most stable to most volatile
+- **Pinned versions**: Every base image tag is pinned (`ollama/ollama:0.32.4`, not `:latest`)
+- **Non-root user**: Runtime stage MUST use USER with explicit UID:GID (1001:1001)
+- **COPY --link**: Use `--link` on all `COPY --from` in final stage to avoid preserving intermediate layers
+- **Pre-cache models**: All ML models are downloaded at build time in the `preload` stage — containers start instantly
+- **BuildKit cache mounts**: Use `RUN --mount=type=cache` for uv pip to speed up rebuilds
+- **Layer ordering**: System packages first, then Python deps, then models, then app code (most volatile last)
+- **No secrets in layers**: All credentials come from env vars at runtime, never baked into images
+- **Add gcc/g++**: Required for Triton kernel compilation during HuggingFace model loading — always include in `apt-get install`
+
+### Docker Compose Rules
+
+- **Host-only binding**: All ports bind to `127.0.0.1` explicitly — no external exposure
+- **Named volumes**: Use named volumes (not anonymous) for all persistent data: `qdrant_data`, `ollama_data`, `redis_data`
+- **Health checks**: Every service has a healthcheck with `interval`, `timeout`, `start_period`, and `retries`
+- **Resource limits**: Set `deploy.resources.limits` and `reservations` on every service (especially GPU memory)
+- **Logging**: `json-file` driver with `max-size: 10m` and `max-file: 3` on every service
+- **Security**: `no-new-privileges:true` on every service, no privileged containers
+- **Restart policy**: `unless-stopped` for all persistent services
+- **stop_grace_period**: Set judiciously (30s for fast shutdown, 60s for model-heavy services like ollama/docling)
+- **Environment variables**: Use `${VAR:-default}` syntax for all configurable values, referencing `.env`
+- **Single network**: All services share the `backend` bridge network (MCP server runs on host)
+- **Tmpfs for /tmp**: Use `tmpfs` mounts for `/tmp` on every service — keeps temp writes off the container filesystem
+- **Container names**: Use explicit `container_name: memex-<service>` for readable `docker compose ps` output
+- **Service labels**: Each service has `com.memex.service` and `com.memex.description` labels
+- **Override file**: `compose.override.yaml` is auto-loaded for development settings (tighter health checks)
+
+### When to Rebuild vs Restart
+
+| Change | Action |
+|--------|--------|
+| `rag/ml_server.py` | `docker compose build ml-services && docker compose up -d` |
+| Python packages in Dockerfile | `docker compose build --no-cache ml-services && docker compose up -d` |
+| System deps (apt-get) | `docker compose build --no-cache ml-services && docker compose up -d` |
+| Compose config, env vars, or labels | `docker compose up -d` (restart) |
+| Ollama models | `docker compose exec ollama ollama pull <model>` + restart if parallel changed |
+| Volume data | `docker compose down -v` (destroys all persisted data) |
+| MCP server Python (host) | Just restart `uv run memex` — no Docker rebuild needed |
+
+### Anti-Patterns (NEVER do)
+
+- Never use `:latest` tags — always pin to specific versions
+- Never run containers as root — always use non-root user in Dockerfile
+- Never bake secrets/API keys into image layers
+- Never expose services on `0.0.0.0` — always bind to `127.0.0.1`
+- Never store data in container filesystem — always use named volumes
+- Never install Ollama on host — Docker-only
+- Never use `--no-cache` unless absolutely necessary (model downloads are expensive)
+- Never leave gcc/g++ out of apt-get (breaks Triton kernel compilation)
+
 ## Practical Testing Setup
 
 ### First-time setup

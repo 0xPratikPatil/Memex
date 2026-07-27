@@ -1,0 +1,41 @@
+# ────────────────────────────────────────────────────────────────────────────────
+# compose.override.yaml — Development overrides
+#
+# Docker Compose auto-loads this file alongside compose.yml when running
+# `docker compose up`. No `-f` flag needed — it's automatic.
+#
+# This file:
+#   • Adds debug-level logging and verbose output for troubleshooting
+#   • Tightens health check intervals for faster dev feedback
+#   • Reduces start_period for quicker cycle time
+#   • IS git-committed (no secrets) — secrets go in .env (gitignored)
+#
+# Production overrides (if needed) go in compose.prod.yaml:
+#   docker compose -f compose.yml -f compose.prod.yaml up -d
+# ────────────────────────────────────────────────────────────────────────────────
+
+services:
+  qdrant:
+    healthcheck:
+      interval: 10s
+      start_period: 10s
+
+  ollama:
+    healthcheck:
+      interval: 10s
+      start_period: 20s
+
+  docling:
+    healthcheck:
+      interval: 15s
+      start_period: 20s
+
+  ml-services:
+    healthcheck:
+      interval: 15s
+      start_period: 60s
+
+  redis:
+    healthcheck:
+      interval: 10s
+      start_period: 5s
