@@ -4,7 +4,7 @@
 #
 #   ./setup.sh                              # use defaults
 #   EMBED_MODEL=llama3.2:1b ./setup.sh      # custom embedding model
-#   CHAT_MODEL=qwen3.5:0.8b ./setup.sh      # custom chat model
+#   CHAT_MODEL=qwen2.5:1.5b ./setup.sh      # custom chat model
 #
 # What it does:
 #   1. Creates .env from .env.example if missing
