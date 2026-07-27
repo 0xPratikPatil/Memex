@@ -139,9 +139,10 @@ RUN groupadd -g 1001 -r appgroup && \
     chown -R appuser:appgroup /app
 
 # ── Copy pre-cached models and application code ──────────────────────────────
-# --link avoids preserving intermediate layers, reducing final image size.
-COPY --from=model-cache --chown=appuser:appgroup --link /app/.cache /app/.cache
-COPY --chown=appuser:appgroup --link rag/ml_server.py /app/server.py
+# --link avoids preserving intermediate layers (valid on --from copies).
+# Use numeric UID:GID below — --link with named user/group hits "invalid user index".
+COPY --from=model-cache --chown=1001:1001 --link /app/.cache /app/.cache
+COPY --chown=1001:1001 rag/ml_server.py /app/server.py
 
 USER 1001
 
