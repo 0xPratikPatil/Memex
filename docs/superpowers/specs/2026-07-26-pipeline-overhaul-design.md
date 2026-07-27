@@ -194,19 +194,18 @@ def _build_options() -> dict[str, Any]:
 **Interface**:
 
 ```python
-from docling_core.transforms.chunker import HybridChunker
-from docling_core.transforms.chunker.base import BaseChunk
+from docling.chunking import HybridChunker
+from docling_core.transforms.chunker.tokenizer.huggingface import (
+    HuggingFaceTokenizer,
+)
 
 
 def chunk_docling_document(
     docling_json: dict[str, Any],
-    chunk_size: int = 1024,
-    chunk_overlap: int = 128,
-    merge_peers: bool = True,
-    repeat_table_header: bool = True,
-    tokenizer_name: str = "BAAI/bge-m3",
 ) -> list[dict[str, Any]]: ...
 ```
+
+The function reads `config.CHUNK_TOKENIZER`, `config.CHUNK_SIZE`, `config.CHUNK_MERGE_PEERS`, and `config.CHUNK_REPEAT_TABLE_HEADER` internally. The `HuggingFaceTokenizer` wraps the embedding model's tokenizer; `max_tokens` is set on the tokenizer, not on HybridChunker. The `chunk_overlap` config value is unused by HybridChunker — it only applies to the legacy recursive/fixed fallback chunkers.
 
 **Design decisions**:
 
@@ -265,7 +264,7 @@ def chunk_docling_document(
 - Dense: `bge-m3` (1024d) via Ollama
 - Sparse: `Qdrant/bm25` via fastembed (Docker ML service)
 - Reranker: `BAAI/bge-reranker-base` via sentence-transformers (Docker ML service)
-- Chat: `qwen2.5:0.5b` via Ollama (for context, metadata, and query expansion)
+- Chat: `qwen3.5:0.8b` via Ollama (for context, metadata, and query expansion)
 
 **How the models work together**: Dense (bge-m3) provides semantic recall — finds conceptually related chunks even without keyword overlap. Sparse (BM25) provides lexical precision — catches exact terms, API names, error codes. RRF (Reciprocal Rank Fusion, k=60) merges both rankings, boosting chunks that score well in both. The cross-encoder reranker (bge-reranker-base) then reads query+document pairs through full cross-attention, re-scoring the top candidates — this catches false positives where a chunk uses the right keywords but isn't actually *about* the query.
 

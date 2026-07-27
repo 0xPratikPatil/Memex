@@ -9,6 +9,7 @@ import asyncio
 import json
 import sys
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 # Create a test file
 TEST_FILE = Path("/tmp/memex_e2e_test.md")
@@ -38,8 +39,16 @@ def red(msg: str) -> str:
     return f"\033[31m{msg}\033[0m"
 
 
+def _mock_ctx() -> MagicMock:
+    """Create a mock MCP Context for tool calls that require it."""
+    ctx = MagicMock()
+    ctx.report_progress = AsyncMock()
+    return ctx
+
+
 async def main():
     results: dict[str, bool] = {}
+    mock_ctx = _mock_ctx()
 
     # ── 0. Service health ──────────────────────────────────────
     print("\n=== 0. Service Health ===")
@@ -78,9 +87,13 @@ async def main():
         status = await rag_service_status()
         data = json.loads(status)
         for name, info in data.items():
-            icon = "✓" if info.get("healthy") else "✗"
-            print(f"  {icon} {name}: {info.get('healthy', 'unknown')}")
-        all_ok = all(info.get("healthy") for info in data.values())
+            healthy = ("error" not in info and "strategy" in info) if name == "chunker" else info.get("healthy", False)
+            icon = "✓" if healthy else "✗"
+            print(f"  {icon} {name}: {info.get('healthy', info.get('strategy', 'unknown'))}")
+        all_ok = all(
+            ("error" not in v and "strategy" in v) if k == "chunker" else v.get("healthy", False)
+            for k, v in data.items()
+        )
         results["service_status"] = all_ok
         print(green("PASS") if all_ok else red("FAIL"))
     except Exception as e:
@@ -93,7 +106,7 @@ async def main():
         from memex.schemas import IngestFileInput
         from memex.server import rag_ingest_file
 
-        r = await rag_ingest_file(IngestFileInput(file_path_or_url=str(TEST_FILE)))
+        r = await rag_ingest_file(IngestFileInput(file_path_or_url=str(TEST_FILE)), mock_ctx)
         print(f"  {r[:120]}...")
         ok = "Successfully ingested" in r or "Already ingested" in r
         results["ingest_file"] = ok

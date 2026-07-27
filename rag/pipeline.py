@@ -5,7 +5,8 @@ and lazy-init for heavy models (sparse embeddings, reranker).
 
 Key improvements over v1:
 - Async I/O throughout
-- Recursive chunking that respects semantic boundaries
+- Docling HybridChunker for structure-aware tokenizer-aligned chunking
+- Legacy recursive/fixed chunking as fallback
 - Reciprocal Rank Fusion (RRF) for dense+sparse combination
 - Batch embedding via Ollama API
 - Rich per-chunk metadata
@@ -59,7 +60,7 @@ _eval_timings: dict[str, list[float]] = {}
 
 def _record_eval_timing(stage: str, elapsed_ms: float) -> None:
     """Record pipeline stage timing when evaluation logging is enabled."""
-    if not config.EVAL_LOG_TIMING:
+    if not config.EVAL_ENABLED or not config.EVAL_LOG_TIMING:
         return
     if stage not in _eval_timings:
         _eval_timings[stage] = []
@@ -250,26 +251,27 @@ def _fixed_chunk(
 
 def create_chunks(
     text: str = "",
-    docling_json: dict[str, Any] | None = None,
+    source_identifier: str = "",
 ) -> list[dict[str, Any]]:
-    """Create chunks from markdown text or a DoclingDocument JSON.
+    """Create chunks from a document.
 
-    When *docling_json* is provided and ``CHUNK_STRATEGY`` is ``hybrid``,
-    uses Docling's HybridChunker for structure-aware chunking.  Falls back
-    to legacy recursive/fixed chunking otherwise.
+    When *source_identifier* is provided and ``CHUNK_STRATEGY`` is ``hybrid``,
+    uses Docling Serve's ``/v1/chunk/hybrid/source`` API for structure-aware
+    chunking.  Falls back to legacy recursive/fixed chunking otherwise.
     """
     strategy = config.CHUNK_STRATEGY.lower()
 
-    if strategy == "hybrid" and docling_json:
+    if strategy == "hybrid" and source_identifier:
         try:
-            from rag.chunking import chunk_docling_document
+            from rag.chunking import chunk_file
 
-            chunks = chunk_docling_document(docling_json)
+            result = chunk_file(source_identifier)
+            chunks = result.get("chunks", [])
             return [c for c in chunks if len(c["content"].strip()) >= config.MIN_CHUNK_LEN]
         except ImportError:
             pass
         except Exception:
-            logger.warning("HybridChunker failed, falling back to recursive", exc_info=True)
+            logger.warning("Docling chunking API failed, falling back to recursive", exc_info=True)
 
     if not text.strip():
         return []
@@ -296,6 +298,7 @@ class RAGEngine:
     def __init__(self) -> None:
         self._qdrant: QdrantClient | None = None
         self._ollama: httpx.Client | None = None
+        self._ml_services: httpx.Client | None = None
 
     # ── Lazy singletons ───────────────────────────────────────────────────
 
@@ -323,6 +326,15 @@ class RAGEngine:
                 ),
             )
         return self._ollama
+
+    def _get_ml_services(self) -> httpx.Client:
+        if self._ml_services is None or self._ml_services.is_closed:
+            self._ml_services = httpx.Client(
+                base_url=config.ML_SERVICES_URL,
+                timeout=httpx.Timeout(30.0, connect=5.0),
+                limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+            )
+        return self._ml_services
 
     # ── Collection setup ──────────────────────────────────────────────────
 
@@ -401,15 +413,10 @@ class RAGEngine:
     def _sparse_embed(self, texts: list[str]) -> list[dict[str, float]]:
         """Get sparse embeddings via configured provider (http or local)."""
         if config.SPARSE_PROVIDER == "http":
-            client = httpx.Client(timeout=30.0)
-            resp = client.post(
-                f"{config.ML_SERVICES_URL}/sparse/embed",
-                json={"texts": texts},
-            )
+            client = self._get_ml_services()
+            resp = client.post("/sparse/embed", json={"texts": texts})
             resp.raise_for_status()
-            data = resp.json()
-            client.close()
-            return data["vectors"]
+            return resp.json()["vectors"]
         else:
             # Local provider — import fastembed on demand
             from fastembed import SparseTextEmbedding
@@ -422,14 +429,13 @@ class RAGEngine:
     def _rerank(self, query: str, documents: list[str], top_k: int = 10) -> tuple[list[float], list[int]]:
         """Rerank documents via configured provider (http, local, or ollama)."""
         if config.RERANK_PROVIDER == "http":
-            client = httpx.Client(timeout=30.0)
+            client = self._get_ml_services()
             resp = client.post(
-                f"{config.ML_SERVICES_URL}/rerank",
+                "/rerank",
                 json={"query": query, "documents": documents, "top_k": top_k},
             )
             resp.raise_for_status()
             data = resp.json()
-            client.close()
             return data["scores"], data["indices"]
         elif config.RERANK_PROVIDER == "local":
             from sentence_transformers import CrossEncoder
@@ -484,12 +490,12 @@ class RAGEngine:
         metadata: dict[str, Any] | None = None,
         content_hash: str = "",
         progress_cb: Callable[[str, int], None] | None = None,
-        docling_json: dict[str, Any] | None = None,
     ) -> int:
         """Chunk, embed, and upsert into Qdrant. Returns number of chunks.
 
-        When *docling_json* is provided, it is passed to the chunker for
-        structure-aware HybridChunker chunking.
+        When ``CHUNK_STRATEGY`` is ``hybrid``, uses the Docling Serve chunking
+        API for structure-aware chunking. Falls back to legacy recursive/fixed
+        chunking when the API is unavailable.
         """
 
         def _progress(msg: str, pct: int) -> None:
@@ -498,7 +504,7 @@ class RAGEngine:
             logger.info("ingest [%d%%] %s", pct, msg)
 
         _progress("Chunking document...", 70)
-        raw_chunks = create_chunks(text=text, docling_json=docling_json)
+        raw_chunks = create_chunks(text=text, source_identifier=source_identifier)
         if not raw_chunks:
             raise ValueError("No valid text chunks to ingest.")
 
@@ -579,11 +585,10 @@ class RAGEngine:
             )
 
         qdrant = self._get_qdrant()
-        batch_size = 64
-        for i in range(0, len(points), batch_size):
+        for i in range(0, len(points), config.EMBED_BATCH_SIZE):
             qdrant.upsert(
                 collection_name=config.COLLECTION_NAME,
-                points=points[i : i + batch_size],
+                points=points[i : i + config.EMBED_BATCH_SIZE],
             )
 
         logger.info("Ingested %d chunks for '%s'", len(points), source_identifier)
@@ -747,7 +752,7 @@ class RAGEngine:
             results.append(entry)
 
         # ── Reranking ─────────────────────────────────────────────────────
-        if rerank and results:
+        if rerank and results and config.ENABLE_RERANKING:
             t_rerank = time.monotonic()
             contents = [item["content"] for item in results]
             try:
@@ -928,24 +933,30 @@ class RAGEngine:
             hybrid_available = is_hybrid_chunker_available()
         except Exception:
             hybrid_available = False
-        return {
+        active_chunker = (
+            "Docling HybridChunker"
+            if (config.CHUNK_STRATEGY == "hybrid" and hybrid_available)
+            else config.CHUNK_STRATEGY.title()
+        )
+        result = {
             "strategy": config.CHUNK_STRATEGY,
             "chunk_size": config.CHUNK_SIZE,
-            "chunk_overlap": config.CHUNK_OVERLAP,
             "hybrid_available": hybrid_available,
-            "active_chunker": "Docling HybridChunker"
-            if (config.CHUNK_STRATEGY == "hybrid" and hybrid_available)
-            else config.CHUNK_STRATEGY.title(),
+            "active_chunker": active_chunker,
             "merge_peers": config.CHUNK_MERGE_PEERS,
-            "repeat_table_header": config.CHUNK_REPEAT_TABLE_HEADER,
-            "type_format": config.CHUNK_TYPE_FORMAT,
         }
+        if active_chunker != "Docling HybridChunker":
+            result["chunk_overlap"] = config.CHUNK_OVERLAP
+        return result
 
     def close(self) -> None:
         """Release HTTP clients and Qdrant connection."""
         if self._ollama is not None and not self._ollama.is_closed:
             self._ollama.close()
             self._ollama = None
+        if self._ml_services is not None and not self._ml_services.is_closed:
+            self._ml_services.close()
+            self._ml_services = None
         if self._qdrant is not None:
             with contextlib.suppress(Exception):
                 self._qdrant.close()

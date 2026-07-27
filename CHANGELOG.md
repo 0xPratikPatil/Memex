@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Chunking moved to Docling Serve API**: `rag/chunking.py` now calls `/v1/chunk/hybrid/source` instead of using local `docling` + `docling-core` packages. All heavy processing runs in Docker.
+- **Removed `docling>=2` from core dependencies**: No local docling packages needed — the Docling Serve container handles conversion and chunking.
+- Updated `rag/pipeline.py` to use API-based chunking via `source_identifier` parameter instead of `docling_json`.
+- Updated `memex/server.py` to remove `docling_json` from `ingest_text` calls.
+- **Env-driven configuration**: All settings flow from env vars (env > .env > default)
+  - `python-dotenv` auto-loads `.env` at startup
+  - Docker ports use `${VAR:-default}` syntax
+  - Service URLs constructed from `*_PORT` env vars, overridable via `*_URL`
+  - Comprehensive `.env.example` with all 80+ settings documented
+
+- **Architecture: MCP local + Docker backend**
+  - MCP runs directly on host (stdio mode, `uv run memex`)
+  - Backend (Qdrant, Ollama, Docling, ML Services, Redis) in Docker
+  - `rag/` package = RAG engine; `memex/` package = MCP server
+  - No file server — direct filesystem access via `pathlib`
+
+- **MCP thin + Docker ML**
+  - ML models (BM25 sparse, cross-encoder reranker) moved to Docker
+  - MCP only does HTTP orchestration — no `fastembed` or `sentence-transformers`
+  - Configurable providers: `SPARSE_PROVIDER`/`RERANK_PROVIDER` (http or local)
+
+- **Docker optimization**
+  - Multi-stage Dockerfile (deps → preload → runtime) with layer caching
+  - ML models pre-cached at build time (instant startup, no runtime download)
+  - Pinned image versions (qdrant:v1.18, ollama:0.32.4, redis:7.4.10-alpine)
+  - Named volumes with documented persistence rationale
+  - Professional Makefile with 14 targets + `make help`
+
+- **Unified chat model**: All LLM features fall back to `CHAT_MODEL=qwen3.5:0.8b`
+  - Context retrieval, query expansion, metadata extraction all use one model
+  - No more broken fallback to embedding-only `bge-m3`
+
+- **310 tests** (257 unit + 53 integration) — all pass against live Docker services.
+
+### Added
+- **8 MCP tools**: ingest_file, ingest_url, ingest_batch, query, list_documents,
+  collection_stats, delete_document, service_status
+- Query Expansion (HyDE + Multi-Query + Query Rewriting)
+- Contextual Retrieval (document context prefixes for chunks)
+- Caching Layer (Redis cache-aside for embeddings, search, parsing)
+- Metadata Enhancement (entity extraction, classification, topics)
+- Evaluation Framework (RAGAS integration, custom metrics, A/B testing)
+- **Integration tests**: 53 tests (Redis cache, contextual, query expansion, metadata)
+- setup.sh bootstrap script (one-command setup with model downloads)
+- scripts/test_e2e.py (9/9 E2E checks)
+- scripts/verify_features.py (55-check feature verification)
+- Provider system (`SPARSE_PROVIDER`, `RERANK_PROVIDER`)
+- Configurable ports (`QDRANT_PORT`, `OLLAMA_PORT`, etc.)
+- `.env.example` comprehensive reference
+- MIT License, GitHub Actions CI, Dependabot, pre-commit hooks
+
+### Fixed
+- **PDF backend case sensitivity**: `rag/docling_client.py` and `rag/chunking.py` now lowercase `DOCLING_PDF_BACKEND` before passing to Docling API (expects `dlparse_v4`, not `DLPARSE_V4`)
+- **Contextual retrieval batch parsing**: `rag/services/contextual_retrieval.py` now uses numbered-line format (`1. prefix\n2. prefix`) instead of `|||` separator, which small LLMs don't follow
+- **Metadata extraction JSON parsing**: `rag/services/metadata_extractor.py` now strips markdown code fences before `json.loads` — small LLMs wrap output in `\`\`\`json...\`\`\``
+- **E2E test mock Context**: `scripts/test_e2e.py` now provides mock `Context` for ingest tool calls
+- **Test assertions updated**: `tests/unit/test_server.py` and `test_docling_client.py` aligned with new API
+- Import paths after restructuring
+- Docker configuration for new file locations
+- Environment variable documentation
+
 ## [0.5.0] - 2026-07-26
 
 ### Added
@@ -26,7 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **docling added to core dependencies** (no extra needed for HybridChunker).
 - Contextual retrieval defaults to summary strategy (was header-only).
 - `.env` inline comments removed — values with trailing `# comment` broke python-dotenv parsing.
-- **299 tests** (246 unit + 53 integration) — all pass against live Docker services.
+- **310 tests** (257 unit + 53 integration) — all pass against live Docker services.
 
 ### Fixed
 
@@ -34,60 +98,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.env` model fallback vars (HYDE_MODEL, CONTEXT_MODEL, etc.) stripped inline comments that broke `or config.CHAT_MODEL` fallback.
 - Integration tests updated for new defaults (CONTEXT_STRATEGY, query expansion flags).
 - `_parse_response` now correctly populates json_content, html_content, text_content from Docling serve response.
-
-## [Unreleased]
-
-### Changed
-
-- **Env-driven configuration**: All settings flow from env vars (env > .env > default)
-  - `python-dotenv` auto-loads `.env` at startup
-  - Docker ports use `${VAR:-default}` syntax
-  - Service URLs constructed from `*_PORT` env vars, overridable via `*_URL`
-  - Comprehensive `.env.example` with all 60+ settings documented
-
-- **Architecture: MCP local + Docker backend**
-  - MCP runs directly on host (stdio mode, `uv run memex`)
-  - Backend (Qdrant, Ollama, Docling, ML Services, Redis) in Docker
-  - `rag/` package = RAG engine; `memex/` package = MCP server
-  - No file server — direct filesystem access via `pathlib`
-
-- **MCP thin + Docker ML**
-  - ML models (BM25 sparse, cross-encoder reranker) moved to Docker
-  - MCP only does HTTP orchestration — no `fastembed` or `sentence-transformers`
-  - Configurable providers: `SPARSE_PROVIDER`/`RERANK_PROVIDER` (http or local)
-
-- **Docker optimization**
-  - Multi-stage Dockerfile (deps → preload → runtime) with layer caching
-  - ML models pre-cached at build time (instant startup, no runtime download)
-  - Pinned image versions (qdrant:v1.18, ollama:0.32.4, redis:7.4.10-alpine)
-  - Named volumes with documented persistence rationale
-  - Professional Makefile with 12 targets + `make help`
-
-- **Unified chat model**: All LLM features fall back to `CHAT_MODEL=qwen2.5:0.5b`
-  - Context retrieval, query expansion, metadata extraction all use one model
-  - No more broken fallback to embedding-only `bge-m3`
-
-### Added
-
-- **8 MCP tools**: ingest_file, ingest_url, ingest_batch, query, list_documents,
-  collection_stats, delete_document, service_status
-- Query Expansion (HyDE + Multi-Query + Query Rewriting)
-- Contextual Retrieval (document context prefixes for chunks)
-- Caching Layer (Redis cache-aside for embeddings, search, parsing)
-- Metadata Enhancement (entity extraction, classification, topics)
-- Evaluation Framework (RAGAS integration, custom metrics, A/B testing)
-- **Integration tests**: 53 tests (Redis cache, contextual, query expansion, metadata)
-- setup.sh bootstrap script (one-command setup with model downloads)
-- scripts/test_e2e.py (9/9 E2E checks)
-- Provider system (`SPARSE_PROVIDER`, `RERANK_PROVIDER`)
-- Configurable ports (`QDRANT_PORT`, `OLLAMA_PORT`, etc.)
-- `.env.example` comprehensive reference
-- MIT License, GitHub Actions CI, Dependabot, pre-commit hooks
-
-### Fixed
-- Import paths after restructuring
-- Docker configuration for new file locations
-- Environment variable documentation
 
 ## [0.3.0] - 2026-07-26
 

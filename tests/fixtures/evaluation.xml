@@ -1,84 +1,84 @@
 <evaluation>
   <!-- Easy queries: exact keyword match, single document -->
-  <qa_pair>
+  <qa_pair expected_sources="test_document.pdf" category="ingestion" difficulty="easy">
     <question>After ingesting a document, use the rag_list_documents tool to check the ingestion status. What is the source identifier of the most recently ingested document? Respond with just the source string.</question>
     <answer>test_document.pdf</answer>
   </qa_pair>
-  <qa_pair>
+  <qa_pair expected_keywords="points,vectors,collection" category="ingestion" difficulty="easy">
     <question>Ingest a sample document and then use rag_collection_stats to check the collection. How many total points (vectors) are stored in the memex collection after ingesting one document with approximately 3 chunks?</question>
     <answer>3</answer>
   </qa_pair>
-  <qa_pair>
+  <qa_pair expected_keywords="1024,dimension,dense" category="config" difficulty="easy">
     <question>Use rag_collection_stats to check the collection configuration. What is the dense vector dimension (dense_dim) configured for the collection? Respond with just the number.</question>
     <answer>1024</answer>
   </qa_pair>
 
   <!-- Medium queries: require multiple operations or semantic understanding -->
-  <qa_pair>
+  <qa_pair expected_keywords="documents,listed,total" category="ingestion" difficulty="medium">
     <question>Ingest two different documents into the RAG system. Then use rag_list_documents with response_format set to "json" to list all ingested documents. How many documents are listed in total? Respond with just the number.</question>
     <answer>2</answer>
   </qa_pair>
-  <qa_pair>
+  <qa_pair expected_keywords="results,returned" category="search" difficulty="medium">
     <question>Ingest a document containing information about Python programming. Then use rag_query to search for "What is a list comprehension in Python?" with top_k=3 and use_reranking=false. How many results are returned? Respond with just the number.</question>
     <answer>3</answer>
   </qa_pair>
-  <qa_pair>
+  <qa_pair expected_keywords="rrf_score,score" category="search" difficulty="medium">
     <question>Ingest a document about renewable energy sources. Then search using rag_query with the query "solar power advantages" and response_format set to "json". What is the score type shown in the first result - is it "rrf_score" or "vector_score"? Respond with just the score type name.</question>
     <answer>rrf_score</answer>
   </qa_pair>
-  <qa_pair>
+  <qa_pair expected_keywords="yes,filtered,source" category="search" difficulty="medium">
     <question>Ingest a document and then use rag_query with source_filter set to the exact source identifier of that document. Does the search return results only from that specific document? Respond with "yes" or "no".</question>
     <answer>yes</answer>
   </qa_pair>
-  <qa_pair>
+  <qa_pair expected_keywords="0,deleted,none" category="ingestion" difficulty="medium">
     <question>Ingest a document and note its source identifier. Then use rag_delete_document with that source identifier. After deletion, use rag_list_documents to verify. How many documents are listed after deletion? Respond with just the number.</question>
     <answer>0</answer>
   </qa_pair>
-  <qa_pair>
+  <qa_pair expected_keywords="same,deduplication" category="ingestion" difficulty="medium">
     <question>Ingest a document and use rag_query to search for a term. Then ingest the same document again with the same source identifier. Use rag_list_documents to check. How many chunks does the document show after re-ingestion - is it the same as before or doubled? Respond with "same" or "doubled".</question>
     <answer>same</answer>
   </qa_pair>
-  <qa_pair>
+  <qa_pair expected_keywords="yes,section_header" category="search" difficulty="medium">
     <question>Ingest a document with source_identifier set to "/data/quarterly_report.pdf". Then use rag_query with source_filter="/data/quarterly_report.pdf" and response_format="json". Does the JSON response include a "section_header" field for each result? Respond with "yes" or "no".</question>
     <answer>yes</answer>
   </qa_pair>
 
   <!-- Edge cases: empty/missing data, boundary conditions -->
-  <qa_pair>
+  <qa_pair expected_keywords="error,empty,results" category="edge-case" difficulty="hard">
     <question>Use rag_query with an empty string as the query. Does the system return an error or empty results? Respond with "error" or "empty".</question>
     <answer>empty</answer>
   </qa_pair>
-  <qa_pair>
+  <qa_pair expected_keywords="success,not_found" category="edge-case" difficulty="hard">
     <question>Use rag_delete_document with a source identifier that does not exist in the collection. Does the operation succeed or fail? Respond with "success" or "error".</question>
     <answer>success</answer>
   </qa_pair>
-  <qa_pair>
+  <qa_pair expected_keywords="1,result" category="edge-case" difficulty="easy">
     <question>Ingest a document and then query it using rag_query with top_k=1. How many results are returned? Respond with just the number.</question>
     <answer>1</answer>
   </qa_pair>
-  <qa_pair>
+  <qa_pair expected_keywords="yes,short,chunk" category="edge-case" difficulty="easy">
     <question>Ingest a very short document containing just the word "test". Does the ingestion succeed and create at least one chunk? Respond with "yes" or "no".</question>
     <answer>yes</answer>
   </qa_pair>
 
   <!-- Complex queries: multi-step operations, filtered searches -->
-  <qa_pair>
+  <qa_pair expected_keywords="3,unique,documents" category="ingestion" difficulty="hard">
     <question>Ingest three documents with different source identifiers. Then use rag_list_documents to list all. How many unique source identifiers are shown? Respond with just the number.</question>
     <answer>3</answer>
   </qa_pair>
-  <qa_pair>
+  <qa_pair expected_keywords="yes,both,results" category="search" difficulty="hard">
     <question>Ingest a document about machine learning. Then perform two separate rag_query searches: one for "neural networks" and one for "deep learning". Do both queries return at least one result? Respond with "yes" or "no".</question>
     <answer>yes</answer>
   </qa_pair>
-  <qa_pair>
+  <qa_pair expected_keywords="depends,reranking" category="search" difficulty="hard">
     <question>Ingest a document and use rag_query to search for a term with use_reranking=true. Then search the same query with use_reranking=false. Are the results returned in the same order in both cases? Respond with "yes", "no", or "depends".</question>
     <answer>depends</answer>
   </qa_pair>
-  <qa_pair>
+  <qa_pair expected_keywords="depends,both,one" category="search" difficulty="hard">
     <question>Ingest two documents from different topics. Use rag_query with a topic-specific search term. Does the result set contain chunks from both documents or primarily from one? Respond with "both" or "one".</question>
     <answer>depends</answer>
   </qa_pair>
-  <qa_pair>
+  <qa_pair expected_keywords="yes,fields,id,source,content,rrf_score" category="search" difficulty="medium">
     <question>Ingest a document. Then use rag_query with response_format="json" and examine the structure of each result. Does each result contain the fields "id", "source", "content", and "rrf_score"? Respond with "yes" or "no".</question>
     <answer>yes</answer>
   </qa_pair>

@@ -35,7 +35,7 @@ class TestQueryExpanderIntegration:
         monkeypatch.setattr(config, "ENABLE_QUERY_EXPANSION", True)
         monkeypatch.setattr(config, "ENABLE_QUERY_REWRITE", True)
         monkeypatch.setattr(config, "ENABLE_MULTI_QUERY", True)
-        monkeypatch.setattr(config, "CHAT_MODEL", "qwen2.5:0.5b")
+        monkeypatch.setattr(config, "CHAT_MODEL", "qwen3.5:0.8b")
         return QueryExpander(ollama_client)
 
     def test_rewrite_returns_string(self, expander: QueryExpander) -> None:
@@ -65,7 +65,7 @@ class TestQueryExpanderIntegration:
         bad_client = httpx.Client(timeout=httpx.Timeout(1.0))
         monkeypatch.setattr(config, "ENABLE_QUERY_REWRITE", True)
         monkeypatch.setattr(config, "ENABLE_MULTI_QUERY", True)
-        monkeypatch.setattr(config, "CHAT_MODEL", "qwen2.5:0.5b")
+        monkeypatch.setattr(config, "CHAT_MODEL", "qwen3.5:0.8b")
         monkeypatch.setattr(config, "OLLAMA_EMBED_URL", "http://localhost:19999/api/embeddings")
         expander = QueryExpander(bad_client)
         result = expander.expand("test query")

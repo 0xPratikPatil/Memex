@@ -13,7 +13,7 @@ Production-ready MCP server for Retrieval-Augmented Generation with Docling docu
 │  │                                                     │   │
 │  │  - Runs directly on host                           │   │
 │  │  - Direct filesystem access                        │   │
-│  │  - HybridChunker runs in-process                   │   │
+│  │  - HybridChunker via Docker Docling Serve            │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                           │                                 │
 │                           │ HTTP                            │
@@ -105,7 +105,7 @@ Key settings:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `EMBED_MODEL` | `bge-m3` | Embedding model (Ollama) |
-| `CHAT_MODEL` | `qwen2.5:0.5b` | Chat/LLM model for context, metadata, query expansion |
+| `CHAT_MODEL` | `qwen3.5:0.8b` | Chat/LLM model for context, metadata, query expansion |
 | `CHUNK_SIZE` | `1024` | Target chunk size (tokens) |
 | `CHUNK_STRATEGY` | `hybrid` | `hybrid`, `recursive`, or `fixed` |
 | `ENABLE_CACHE` | `true` | Redis caching (embeddings, search, parse) |
@@ -122,15 +122,17 @@ Key settings:
 
 ## Docker Services
 
-| Service | Port | Purpose |
-|---------|------|---------|
-| Qdrant | 6333 | Vector database |
-| Ollama | 11434 | Embeddings + chat LLM |
-| Docling | 5001 | Document conversion (GPU) |
-| ML Services | 5002 | Sparse BM25 + reranker (GPU) |
-| Redis | 6379 | Caching layer |
+All backend services run in Docker. The MCP server runs locally (not in Docker) for direct filesystem access.
 
-MCP server runs locally (not in Docker) for direct file system access.
+| Service | Port | Image | Purpose |
+|---------|------|-------|---------|
+| Qdrant | 6333 | `qdrant/qdrant:v1.18` | Vector database |
+| Ollama | 11434 | `ollama/ollama:0.32.4` | Embeddings + chat LLM (GPU) |
+| Docling | 5001 | `ghcr.io/docling-project/docling-serve-cu130:v1.27.0` | Document conversion (GPU) |
+| ML Services | 5002 | Built from `Dockerfile` | Sparse BM25 + reranker (GPU) |
+| Redis | 6379 | `redis:7.4.10-alpine` | Caching layer |
+
+> **Important**: Ollama runs exclusively in Docker — do NOT install Ollama on the host. All `localhost:11434` access goes through Docker port mapping. Models are persisted in the `ollama_data` Docker volume.
 
 ## Project Structure
 
@@ -144,11 +146,10 @@ memex/
 ├── rag/                    # RAG engine (backend logic)
 │   ├── __init__.py
 │   ├── config.py           # Env-driven central configuration (80+ options)
-│   ├── chunking.py         # Docling HybridChunker wrapper
+│   ├── chunking.py         # Docling HybridChunker via Serve API
 │   ├── pipeline.py         # RAGEngine: embeddings, Qdrant, search
 │   ├── docling_client.py   # Docling document conversion client
 │   ├── ml_server.py        # ML services (runs in Docker)
-│   ├── models/             # Data models
 │   ├── services/           # Business logic
 │   │   ├── cache.py        # Redis caching layer
 │   │   ├── contextual_retrieval.py  # Context prefixes for chunks
@@ -161,12 +162,13 @@ memex/
 ├── setup.sh                # One-command bootstrap
 ├── Makefile                # Development commands
 ├── tests/
-│   ├── unit/               # 246 unit tests
+│   ├── unit/               # 257 unit tests
 │   ├── integration/        # 53 integration tests
 │   └── fixtures/           # Test data
 ├── scripts/
 │   ├── evaluate.py         # Evaluation CLI tool
-│   └── test_e2e.py         # End-to-end verification
+│   ├── test_e2e.py         # End-to-end verification
+│   └── verify_features.py  # 55-check feature verification
 ├── docs/
 │   └── superpowers/specs/  # Design specifications
 └── pyproject.toml          # uv-managed deps with chunking/extra
@@ -174,9 +176,7 @@ memex/
 
 ## Chunking Strategies
 
-**Hybrid** (default): Docling HybridChunker operating on DoclingDocument JSON. Tokenizer-aware (aligned to bge-m3), two-pass (split oversized + merge undersized peers). Preserves headings, captions, table structure. Repeats table headers across chunk boundaries.
-
-**Multi-format**: Chunks are serialized by type — tables as HTML, code as fenced markdown, images as `[Image: caption]`, text as markdown. Each type gets an embedding format that preserves its structure.
+**Hybrid** (default): Docling Serve HybridChunker via `/v1/chunk/hybrid/source` API. Tokenizer-aware (aligned to bge-m3), two-pass (split oversized + merge undersized peers). Preserves headings, captions, table structure. Repeats table headers across chunk boundaries. All heavy processing runs in Docker — no local `docling` packages needed.
 
 **Recursive**: Legacy fallback. Regex-splits markdown by headers → paragraphs → sentences → words.
 
@@ -191,7 +191,7 @@ User query
   → Multi-Query (3 paraphrases, each embedded + searched)
   → Dense search (bge-m3, semantic) + Sparse search (BM25, lexical)
   → RRF fusion (k=60, merges all rankings)
-  → Cross-encoder rerank (bge-reranker-base, reads query+doco pairs)
+  → Cross-encoder rerank (bge-reranker-base, reads query+doc pairs)
   → Top-k results
 ```
 
@@ -200,7 +200,9 @@ Each stage fails gracefully — a HyDE failure doesn't block multi-query, a rera
 ## Testing
 
 ```bash
-make test                # 299 tests (246 unit + 53 integration)
+make test                # 310 tests (257 unit + 53 integration)
+make e2e                 # 9/9 end-to-end checks
+uv run python scripts/verify_features.py  # 55-check feature verification
 pytest tests/ -v         # verbose output
 pytest tests/ --cov=rag  # coverage report
 ```

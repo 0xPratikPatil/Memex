@@ -105,7 +105,7 @@ def _build_options() -> dict[str, Any]:
     if config.DOCLING_CHART_EXTRACT:
         opts["do_chart_extraction"] = True
     if config.DOCLING_PDF_BACKEND:
-        opts["pdf_backend"] = config.DOCLING_PDF_BACKEND
+        opts["pdf_backend"] = config.DOCLING_PDF_BACKEND.lower()
 
     return opts
 
@@ -227,35 +227,6 @@ def parse_local_file(file_path: str) -> ConversionResult:
         },
     )
     return result
-
-
-def parse_file_content(
-    file_content_b64: str,
-    filename: str,
-    source_identifier: str | None = None,
-) -> ConversionResult:
-    """Send base64-encoded file content to Docling and return structured result."""
-    payload = {
-        "options": _build_options(),
-        "sources": [
-            {
-                "kind": "file",
-                "base64_string": file_content_b64,
-                "filename": filename,
-            }
-        ],
-    }
-
-    try:
-        data = _post(payload)
-    except httpx.HTTPStatusError as exc:
-        raise RuntimeError(
-            f"Docling server returned HTTP {exc.response.status_code}: {exc.response.text[:500]}"
-        ) from exc
-    except httpx.TransportError as exc:
-        raise RuntimeError(f"Cannot reach Docling server at {config.DOCLING_URL}: {exc}") from exc
-
-    return _parse_response(data)
 
 
 def parse_file(file_path_or_url: str) -> ConversionResult:

@@ -86,7 +86,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
 
     label_a = args.label_a or Path(args.report_a).stem
     label_b = args.label_b or Path(args.report_b).stem
-    comparison = EvalRunner.compare(None, report_a, report_b, label_a, label_b)
+    comparison = EvalRunner.compare(report_a, report_b, label_a, label_b)
 
     print(f"\n=== A/B Comparison: {label_a} vs {label_b} ===")
     for metric, vals in comparison["metrics"].items():

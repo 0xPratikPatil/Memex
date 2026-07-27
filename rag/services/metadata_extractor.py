@@ -111,7 +111,7 @@ class MetadataExtractor:
         )
         try:
             response = self._chat(prompt)
-            entities = json.loads(response)
+            entities = json.loads(self._strip_code_fences(response))
             return {k: v[: config.MAX_ENTITIES_PER_CHUNK] for k, v in entities.items() if isinstance(v, list)}
         except (json.JSONDecodeError, Exception) as exc:
             logger.debug("Entity extraction failed: %s", exc)
@@ -179,7 +179,7 @@ class MetadataExtractor:
         )
         try:
             response = self._chat(prompt)
-            topics = json.loads(response)
+            topics = json.loads(self._strip_code_fences(response))
             if isinstance(topics, list):
                 return [str(t) for t in topics[: config.MAX_TOPICS_PER_CHUNK]]
             return []
@@ -342,6 +342,11 @@ class MetadataExtractor:
         }
 
     # ── Internal helpers ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _strip_code_fences(text: str) -> str:
+        """Remove markdown code fences (```json ... ```) from LLM output."""
+        return re.sub(r"```(?:json)?\s*\n?(.*?)\n?\s*```", r"\1", text, flags=re.DOTALL).strip()
 
     def _chat(self, prompt: str) -> str:
         """Call Ollama chat API and return the assistant message content."""

@@ -108,30 +108,114 @@ class ContextGenerator:
         Each chunk dict is copied and augmented with:
           - ``context_prefix``: the generated context string
           - ``content``: original content prefixed with the context
+
+        For LLM-based strategies (summary, surrounding), chunks are processed
+        in batches of ``CONTEXT_BATCH_SIZE`` to reduce LLM round-trips.
         """
         if not chunks:
             return chunks
 
-        enriched: list[dict[str, Any]] = []
-        for i, chunk in enumerate(chunks):
-            prev = chunks[i - 1]["content"] if i > 0 else ""
-            next_ = chunks[i + 1]["content"] if i < len(chunks) - 1 else ""
+        strategy = config.CONTEXT_STRATEGY.lower()
 
-            context = self.generate_context(
-                chunk=chunk["content"],
-                document_summary=document_summary,
-                section_header=chunk.get("section_header", ""),
-                prev_chunk=prev,
-                next_chunk=next_,
-            )
+        if strategy == "header":
+            enriched: list[dict[str, Any]] = []
+            for chunk in chunks:
+                context = self._context_from_header(chunk.get("section_header", ""))
+                enriched_chunk = chunk.copy()
+                enriched_chunk["context_prefix"] = context
+                if context:
+                    enriched_chunk["content"] = f"{context} {chunk['content']}".strip()
+                enriched.append(enriched_chunk)
+            return enriched
 
-            enriched_chunk = chunk.copy()
-            enriched_chunk["context_prefix"] = context
-            if context:
-                enriched_chunk["content"] = f"{context} {chunk['content']}".strip()
-            enriched.append(enriched_chunk)
+        # LLM-based strategies: batch chunks
+        batch_size = config.CONTEXT_BATCH_SIZE
+        enriched = []
+
+        for batch_start in range(0, len(chunks), batch_size):
+            batch = chunks[batch_start : batch_start + batch_size]
+
+            if strategy == "summary":
+                contexts = self._batch_context_from_summary(batch, document_summary)
+            elif strategy == "surrounding":
+                contexts = self._batch_context_from_surrounding(chunks, batch_start, batch_size)
+            else:
+                contexts = [self._context_from_header(c.get("section_header", "")) for c in batch]
+
+            for chunk, context in zip(batch, contexts, strict=True):
+                enriched_chunk = chunk.copy()
+                enriched_chunk["context_prefix"] = context
+                if context:
+                    enriched_chunk["content"] = f"{context} {chunk['content']}".strip()
+                enriched.append(enriched_chunk)
 
         return enriched
+
+    def _batch_context_from_summary(
+        self,
+        batch: list[dict[str, Any]],
+        summary: str,
+    ) -> list[str]:
+        """Generate context for a batch of chunks using document summary."""
+        if not summary:
+            return [""] * len(batch)
+
+        chunks_text = "\n\n".join(
+            f"[Chunk {i}]: {c['content'][:500]}" for i, c in enumerate(batch)
+        )
+        prompt = (
+            "Given this document summary and a batch of text chunks, write a short "
+            "contextual prefix (under 30 words) for each chunk that situates it "
+            "within the document. Do not repeat chunk content.\n\n"
+            f"Document summary: {summary}\n\n"
+            f"Chunks:\n{chunks_text}\n\n"
+            f"Output exactly {len(batch)} lines, one prefix per chunk, "
+            "numbered like: 1. prefix text\n2. prefix text\n..."
+        )
+        response = self._chat(prompt)
+        # Parse numbered lines: "1. context" or "1) context"
+        import re
+
+        lines = re.findall(r"(?:^|\n)\s*\d+[.)]\s*(.+)", response)
+        # Pad or truncate to match batch size
+        while len(lines) < len(batch):
+            lines.append("")
+        return [f"[Context: {p.strip()}]" if p.strip() else "" for p in lines[: len(batch)]]
+
+    def _batch_context_from_surrounding(
+        self,
+        all_chunks: list[dict[str, Any]],
+        batch_start: int,
+        batch_size: int,
+    ) -> list[str]:
+        """Generate context for a batch using surrounding chunks."""
+        batch = all_chunks[batch_start : batch_start + batch_size]
+        contexts: list[str] = []
+
+        for i, _chunk in enumerate(batch):
+            global_idx = batch_start + i
+            prev = all_chunks[global_idx - 1]["content"] if global_idx > 0 else ""
+            next_ = all_chunks[global_idx + 1]["content"] if global_idx < len(all_chunks) - 1 else ""
+
+            if not prev and not next_:
+                contexts.append("")
+                continue
+
+            context_parts = []
+            if prev:
+                context_parts.append(f"Previous content: {prev[:200]}")
+            if next_:
+                context_parts.append(f"Following content: {next_[:200]}")
+
+            prompt = (
+                "Given the surrounding content of a text chunk, write a short contextual "
+                "prefix (under 30 words) that situates the chunk. Only output the prefix.\n\n"
+                + "\n".join(context_parts)
+            )
+            response = self._chat(prompt)
+            contexts.append(f"[Context: {response.strip()}]" if response.strip() else "")
+
+        return contexts
 
     def _chat(self, prompt: str) -> str:
         """Call Ollama chat API and return the assistant message content."""

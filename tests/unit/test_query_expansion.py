@@ -37,9 +37,10 @@ def mock_ollama() -> httpx.Client:
 
 
 @pytest.fixture
-def expander(mock_ollama: httpx.Client) -> QueryExpander:
-    """Return a QueryExpander with mock client. Tests must patch config flags."""
-    return QueryExpander(mock_ollama)
+def expander(mock_ollama: httpx.Client):
+    """Return a QueryExpander with mock client and caching disabled."""
+    with patch.object(config, "ENABLE_CACHE", False):
+        yield QueryExpander(mock_ollama)
 
 
 # ── ExpandedQuery dataclass ──────────────────────────────────────────────────

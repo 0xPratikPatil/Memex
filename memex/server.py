@@ -15,7 +15,7 @@ import logging
 import threading
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import ToolAnnotations
 
 from memex.schemas import (
@@ -131,9 +131,6 @@ def _friendly_error(exc: Exception) -> str:
     return f"Error: {exc}"
 
 
-# ── Tools ──────────────────────────────────────────────────────────────────────
-
-
 @mcp.tool(
     name="rag_ingest_file",
     title="Ingest Document",
@@ -165,7 +162,7 @@ Error Handling:
         openWorldHint=True,
     ),
 )
-async def rag_ingest_file(input: IngestFileInput) -> str:
+async def rag_ingest_file(input: IngestFileInput, ctx: Context) -> str:
     file_path_or_url = input.file_path_or_url
     try:
         from rag.docling_client import parse_file
@@ -175,13 +172,13 @@ async def rag_ingest_file(input: IngestFileInput) -> str:
         def _progress(msg: str, pct: int) -> None:
             logger.info("ingest [%d%%] %s", pct, msg)
 
-        _progress("Reading file from disk...", 5)
+        await ctx.report_progress(progress=5, total=100, message="Reading file from disk...")
         result = parse_file(file_path_or_url)
 
         if not result.ok:
             return f"Error: Docling conversion returned status '{result.status}' with errors: {result.errors}"
 
-        _progress("Checking if already ingested...", 10)
+        await ctx.report_progress(progress=10, total=100, message="Checking if already ingested...")
         content_hash = engine.compute_file_hash(result.markdown.encode())
         already, chunk_count = engine.is_already_ingested(file_path_or_url, content_hash)
         if already:
@@ -191,7 +188,7 @@ async def rag_ingest_file(input: IngestFileInput) -> str:
                 f"File unchanged — skipping."
             )
 
-        _progress("Converting with Docling...", 15)
+        await ctx.report_progress(progress=15, total=100, message="Converting with Docling...")
         count = engine.ingest_text(
             result.markdown,
             source_identifier=file_path_or_url,
@@ -200,7 +197,6 @@ async def rag_ingest_file(input: IngestFileInput) -> str:
                 "content_hash": content_hash,
             },
             content_hash=content_hash,
-            docling_json=result.json_content or None,
             progress_cb=_progress,
         )
         chunker_status = engine.get_chunker_status()
@@ -243,17 +239,23 @@ Error Handling:
         openWorldHint=True,
     ),
 )
-async def rag_ingest_url(input: IngestUrlInput) -> str:
+async def rag_ingest_url(input: IngestUrlInput, ctx: Context) -> str:
     url = input.url
     try:
         from rag.docling_client import parse_url
 
         engine = _get_engine()
+
+        def _progress(msg: str, pct: int) -> None:
+            logger.info("ingest [%d%%] %s", pct, msg)
+
+        await ctx.report_progress(progress=5, total=100, message="Fetching URL...")
         result = parse_url(url)
 
         if not result.ok:
             return f"Error: Docling conversion returned status '{result.status}' with errors: {result.errors}"
 
+        await ctx.report_progress(progress=10, total=100, message="Checking if already ingested...")
         content_hash = engine.compute_file_hash(result.markdown.encode())
         already, chunk_count = engine.is_already_ingested(url, content_hash)
         if already:
@@ -263,12 +265,13 @@ async def rag_ingest_url(input: IngestUrlInput) -> str:
                 f"File unchanged — skipping."
             )
 
+        await ctx.report_progress(progress=15, total=100, message="Converting with Docling...")
         count = engine.ingest_text(
             result.markdown,
             source_identifier=url,
             metadata={},
             content_hash=content_hash,
-            docling_json=result.json_content or None,
+            progress_cb=_progress,
         )
         chunker_status = engine.get_chunker_status()
         chunker_name = chunker_status["active_chunker"]
@@ -306,14 +309,16 @@ Error Handling:
         openWorldHint=True,
     ),
 )
-async def rag_ingest_batch(input: IngestBatchInput) -> dict[str, str]:
+async def rag_ingest_batch(input: IngestBatchInput, ctx: Context) -> dict[str, str]:
     from rag.docling_client import parse_file
 
     engine = _get_engine()
     summary: dict[str, str] = {}
+    total = len(input.items)
 
-    for item in input.items:
+    for i, item in enumerate(input.items):
         try:
+            await ctx.report_progress(progress=i, total=total, message=f"Processing {item}...")
             result = parse_file(item)
 
             if not result.ok:
@@ -331,13 +336,13 @@ async def rag_ingest_batch(input: IngestBatchInput) -> dict[str, str]:
                 source_identifier=item,
                 metadata={"content_type": item.rsplit(".", 1)[-1] if "." in item else ""},
                 content_hash=content_hash,
-                docling_json=result.json_content or None,
             )
             summary[item] = f"Success ({count} chunks, {result.processing_time:.1f}s conversion)"
         except Exception as exc:
             logger.exception("rag_ingest_batch item failed")
             summary[item] = f"Failed: {exc}"
 
+    await ctx.report_progress(progress=total, total=total, message="Batch complete")
     return summary
 
 
@@ -420,7 +425,6 @@ async def rag_query(input: QueryInput) -> str | QueryOutput:
             expanded_query=expanded,
             use_contextual_search=input.use_contextual_search,
         )
-
         if not results:
             if input.response_format == ResponseFormat.JSON:
                 return QueryOutput(total=0, count=0, results=[])

@@ -24,14 +24,6 @@ class TestChunkingDefaults:
         reload(config)
         assert config.CHUNK_MERGE_PEERS is True
 
-    def test_chunk_repeat_table_header_default_true(self):
-        reload(config)
-        assert config.CHUNK_REPEAT_TABLE_HEADER is True
-
-    def test_chunk_type_format_default_true(self):
-        reload(config)
-        assert config.CHUNK_TYPE_FORMAT is True
-
 
 class TestQueryExpansionDefaults:
     def test_enable_query_expansion_true(self):
@@ -118,6 +110,7 @@ class TestDoclingEnrichmentDefaults:
         reload(config)
         assert config.DOCLING_IMAGE_EXPORT == "embedded"
 
-    def test_pdf_backend_default_empty(self):
+    def test_pdf_backend_default_empty(self, monkeypatch):
+        monkeypatch.setenv("DOCLING_PDF_BACKEND", "")
         reload(config)
         assert config.DOCLING_PDF_BACKEND == ""

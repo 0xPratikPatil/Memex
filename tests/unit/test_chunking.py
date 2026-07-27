@@ -1,4 +1,4 @@
-"""Unit tests for chunking module."""
+"""Unit tests for chunking module (Docling Serve API-based)."""
 
 from __future__ import annotations
 
@@ -7,253 +7,214 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from rag.chunking import (
-    _serialize_chunk,
-    _serialize_code_chunk,
-    _serialize_image_chunk,
-    _serialize_table_chunk,
-    chunk_docling_document,
+    _build_chunking_options,
+    _build_convert_options,
+    _get_chunking_url,
+    _parse_chunk_response,
+    chunk_local_file,
+    chunk_url,
     is_hybrid_chunker_available,
 )
 
 
-def _make_chunk(text: str, chunk_type: str = "text", **meta_kwargs: object) -> MagicMock:
-    """Build a mock base_chunk with .text and .meta attributes."""
-    chunk = MagicMock()
-    chunk.text = text
-    chunk.meta.chunk_type = chunk_type
-    chunk.meta.code_language = None
-    chunk.meta.image_caption = None
-    for key, value in meta_kwargs.items():
-        setattr(chunk.meta, key, value)
-    return chunk
+class TestGetChunkingUrl:
+    def test_constructs_url_from_docling_url(self) -> None:
+        with patch("rag.chunking.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"):
+            url = _get_chunking_url()
+        assert url == "http://localhost:5001/v1/chunk/hybrid/source"
+
+    def test_strips_existing_chunk_path(self) -> None:
+        with patch("rag.chunking.config.DOCLING_URL", "http://host:5001/v1/convert/source"):
+            url = _get_chunking_url()
+        assert "/v1/chunk/hybrid/source" in url
 
 
-class TestSerializeTableChunk:
-    """Tests for _serialize_table_chunk."""
+class TestBuildChunkingOptions:
+    def test_includes_chunk_size(self) -> None:
+        with patch("rag.chunking.config.CHUNK_SIZE", 512):
+            opts = _build_chunking_options()
+        assert opts["max_tokens"] == 512
 
-    def test_wraps_non_html_in_table_tags(self) -> None:
-        """Should wrap plain table text in <table> tags."""
-        chunk = _make_chunk("col1 | col2\nval1 | val2")
+    def test_includes_tokenizer(self) -> None:
+        with patch("rag.chunking.config.CHUNK_TOKENIZER", "BAAI/bge-m3"):
+            opts = _build_chunking_options()
+        assert opts["tokenizer"] == "BAAI/bge-m3"
 
-        result = _serialize_table_chunk(chunk)
-
-        assert result == "<table>\ncol1 | col2\nval1 | val2\n</table>"
-
-    def test_passes_through_existing_html_table_tag(self) -> None:
-        """Should return unmodified text when it already contains <table>."""
-        existing = "<table>\n<tr><td>col1</td></tr>\n</table>"
-        chunk = _make_chunk(existing)
-
-        result = _serialize_table_chunk(chunk)
-
-        assert result == existing
-
-    def test_passes_through_existing_html_tr_tag(self) -> None:
-        """Should return unmodified text when it already contains <tr>."""
-        existing = "<tr><td>val</td></tr>"
-        chunk = _make_chunk(existing)
-
-        result = _serialize_table_chunk(chunk)
-
-        assert result == existing
+    def test_includes_merge_peers(self) -> None:
+        with patch("rag.chunking.config.CHUNK_MERGE_PEERS", True):
+            opts = _build_chunking_options()
+        assert opts["merge_peers"] is True
 
 
-class TestSerializeCodeChunk:
-    """Tests for _serialize_code_chunk."""
+class TestBuildConvertOptions:
+    def test_requests_markdown_output(self) -> None:
+        opts = _build_convert_options()
+        assert "md" in opts["to_formats"]
 
-    def test_wraps_non_fenced_code(self) -> None:
-        """Should wrap code in ``` fence when not already fenced."""
-        chunk = _make_chunk("print('hello')")
+    def test_includes_ocr_setting(self) -> None:
+        with patch("rag.chunking.config.ENABLE_OCR", True):
+            opts = _build_convert_options()
+        assert opts["do_ocr"] is True
 
-        result = _serialize_code_chunk(chunk)
+    def test_includes_enrichments_when_enabled(self) -> None:
+        with (
+            patch("rag.chunking.config.DOCLING_ENRICH_CODE", True),
+            patch("rag.chunking.config.DOCLING_ENRICH_FORMULA", True),
+            patch("rag.chunking.config.DOCLING_PICTURE_CLASSIFY", True),
+            patch("rag.chunking.config.DOCLING_CHART_EXTRACT", True),
+        ):
+            opts = _build_convert_options()
+        assert opts["do_code_enrichment"] is True
+        assert opts["do_formula_enrichment"] is True
+        assert opts["do_picture_classification"] is True
+        assert opts["do_chart_extraction"] is True
 
-        assert result == "```\nprint('hello')\n```"
-
-    def test_wraps_with_language_tag(self) -> None:
-        """Should include language in fence when code_language is set."""
-        chunk = _make_chunk("print('hello')", code_language="python")
-
-        result = _serialize_code_chunk(chunk)
-
-        assert result == "```python\nprint('hello')\n```"
-
-    def test_passes_through_existing_fence(self) -> None:
-        """Should return unmodified when code already starts with ```."""
-        existing = "```python\nprint('hello')\n```"
-        chunk = _make_chunk(existing)
-
-        result = _serialize_code_chunk(chunk)
-
-        assert result == existing
-
-    def test_empty_language_attribute_yields_no_lang_tag(self) -> None:
-        """Should not include language when code_language is empty string."""
-        chunk = _make_chunk("const x = 1;", code_language="")
-
-        result = _serialize_code_chunk(chunk)
-
-        assert result == "```\nconst x = 1;\n```"
-
-    def test_empty_text_is_fenced(self) -> None:
-        """Should still wrap empty text in fences."""
-        chunk = _make_chunk("")
-
-        result = _serialize_code_chunk(chunk)
-
-        assert result == "```\n\n```"
+    def test_omits_enrichments_when_disabled(self) -> None:
+        with (
+            patch("rag.chunking.config.DOCLING_ENRICH_CODE", False),
+            patch("rag.chunking.config.DOCLING_ENRICH_FORMULA", False),
+            patch("rag.chunking.config.DOCLING_PICTURE_CLASSIFY", False),
+            patch("rag.chunking.config.DOCLING_CHART_EXTRACT", False),
+        ):
+            opts = _build_convert_options()
+        assert "do_code_enrichment" not in opts
+        assert "do_formula_enrichment" not in opts
+        assert "do_picture_classification" not in opts
+        assert "do_chart_extraction" not in opts
 
 
-class TestSerializeImageChunk:
-    """Tests for _serialize_image_chunk."""
+class TestParseChunkResponse:
+    def test_parses_chunks_correctly(self) -> None:
+        data = {
+            "chunks": [
+                {
+                    "text": "First chunk content here",
+                    "headings": ["Chapter 1"],
+                    "chunk_index": 0,
+                },
+                {
+                    "text": "Second chunk content here",
+                    "headings": ["Chapter 1", "Section 1.1"],
+                    "chunk_index": 1,
+                },
+            ],
+            "documents": [],
+            "processing_time": 1.5,
+        }
+        result = _parse_chunk_response(data)
+        chunks = result["chunks"]
+        assert len(chunks) == 2
+        assert chunks[0]["content"] == "First chunk content here"
+        assert chunks[0]["section_header"] == "Chapter 1"
+        assert chunks[1]["section_header"] == "Chapter 1"
 
-    def test_formats_with_caption(self) -> None:
-        """Should format caption as [Image: ...] when image_caption is set."""
-        chunk = _make_chunk("raw description", image_caption="A diagram of the architecture")
+    def test_skips_empty_chunks(self) -> None:
+        data = {
+            "chunks": [
+                {"text": "Valid content", "headings": [], "chunk_index": 0},
+                {"text": "", "headings": [], "chunk_index": 1},
+                {"text": "  ", "headings": [], "chunk_index": 2},
+            ],
+            "documents": [],
+            "processing_time": 0.5,
+        }
+        result = _parse_chunk_response(data)
+        assert len(result["chunks"]) == 1
 
-        result = _serialize_image_chunk(chunk)
+    def test_empty_headings_uses_empty_section_header(self) -> None:
+        data = {
+            "chunks": [
+                {"text": "Some text", "headings": None, "chunk_index": 0},
+            ],
+            "documents": [],
+            "processing_time": 0.1,
+        }
+        result = _parse_chunk_response(data)
+        assert result["chunks"][0]["section_header"] == ""
 
-        assert result == "[Image: A diagram of the architecture]"
+    def test_empty_response_returns_empty_list(self) -> None:
+        result = _parse_chunk_response({"chunks": [], "documents": [], "processing_time": 0.0})
+        assert result["chunks"] == []
 
-    def test_returns_text_when_no_caption(self) -> None:
-        """Should return original text when no image_caption attribute."""
-        chunk = _make_chunk("raw description")
-        # Ensure image_caption is not present
-        del chunk.meta.image_caption
-
-        result = _serialize_image_chunk(chunk)
-
-        assert result == "raw description"
-
-    def test_returns_text_when_caption_is_none(self) -> None:
-        """Should return original text when image_caption is None."""
-        chunk = _make_chunk("raw description", image_caption=None)
-
-        result = _serialize_image_chunk(chunk)
-
-        assert result == "raw description"
-
-    def test_returns_text_when_caption_is_empty(self) -> None:
-        """Should return original text when image_caption is empty string."""
-        chunk = _make_chunk("raw description", image_caption="")
-
-        result = _serialize_image_chunk(chunk)
-
-        assert result == "raw description"
+    def test_include_doc_returns_markdown(self) -> None:
+        data = {
+            "chunks": [{"text": "content", "headings": [], "chunk_index": 0}],
+            "documents": [{"md_content": "# Title\n\nFull document text."}],
+            "processing_time": 1.0,
+        }
+        result = _parse_chunk_response(data, include_doc=True)
+        assert result["markdown"] == "# Title\n\nFull document text."
+        assert len(result["chunks"]) == 1
 
 
-class TestSerializeChunk:
-    """Tests for _serialize_chunk dispatcher."""
+class TestChunkUrl:
+    def test_sends_correct_payload(self) -> None:
+        with (
+            patch("rag.chunking._post_chunking") as mock_post,
+            patch("rag.chunking.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
+        ):
+            mock_post.return_value = {
+                "chunks": [{"text": "chunk content", "headings": ["Header"], "chunk_index": 0}],
+                "documents": [],
+                "processing_time": 1.0,
+            }
+            result = chunk_url("https://example.com/doc.pdf")
+            chunks = result["chunks"]
+            assert len(chunks) == 1
+            call_payload = mock_post.call_args[0][0]
+            assert call_payload["sources"] == [{"kind": "http", "url": "https://example.com/doc.pdf"}]
+            assert "convert_options" in call_payload
+            assert "chunking_options" in call_payload
 
-    def test_dispatches_table_by_type(self) -> None:
-        """Should use table serializer when chunk_type is 'table'."""
-        chunk = _make_chunk("col1 | col2\nval1 | val2", chunk_type="table")
 
-        result = _serialize_chunk(chunk)
+class TestChunkLocalFile:
+    def test_reads_file_and_sends_base64(self, tmp_path) -> None:
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"PDF content")
 
-        assert result == "<table>\ncol1 | col2\nval1 | val2\n</table>"
+        with (
+            patch("rag.chunking._post_chunking") as mock_post,
+            patch("rag.chunking.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
+        ):
+            mock_post.return_value = {
+                "chunks": [{"text": "chunk", "headings": [], "chunk_index": 0}],
+                "documents": [],
+                "processing_time": 0.5,
+            }
+            result = chunk_local_file(str(test_file))
+            chunks = result["chunks"]
+            assert len(chunks) == 1
+            call_payload = mock_post.call_args[0][0]
+            assert call_payload["sources"][0]["kind"] == "file"
+            assert call_payload["sources"][0]["filename"] == "test.pdf"
 
-    def test_dispatches_code_by_type(self) -> None:
-        """Should use code serializer when chunk_type is 'code'."""
-        chunk = _make_chunk("print('hello')", chunk_type="code", code_language="python")
-
-        result = _serialize_chunk(chunk)
-
-        assert result == "```python\nprint('hello')\n```"
-
-    def test_dispatches_image_by_type(self) -> None:
-        """Should use image serializer when chunk_type is 'image_description'."""
-        chunk = _make_chunk("raw desc", chunk_type="image_description", image_caption="A diagram")
-
-        result = _serialize_chunk(chunk)
-
-        assert result == "[Image: A diagram]"
-
-    def test_defaults_to_text_for_unknown_type(self) -> None:
-        """Should return plain text when chunk_type is not recognized."""
-        chunk = _make_chunk("some text", chunk_type="text")
-
-        result = _serialize_chunk(chunk)
-
-        assert result == "some text"
-
-    def test_defaults_to_text_when_chunk_type_missing(self) -> None:
-        """Should return plain text when chunk_type attribute is absent."""
-        chunk = MagicMock()
-        chunk.text = "fallback text"
-        del chunk.meta.chunk_type
-
-        result = _serialize_chunk(chunk)
-
-        assert result == "fallback text"
-
-    def test_returns_plain_text_when_format_disabled(self) -> None:
-        """Should return plain text regardless of chunk_type when format is off."""
-        chunk = _make_chunk("col1 | col2\nval1 | val2", chunk_type="table")
-
-        with patch("rag.chunking.config.CHUNK_TYPE_FORMAT", False):
-            result = _serialize_chunk(chunk)
-
-        assert result == "col1 | col2\nval1 | val2"
+    def test_raises_file_not_found(self) -> None:
+        with pytest.raises(FileNotFoundError, match="File not found"):
+            chunk_local_file("/nonexistent/file.txt")
 
 
 class TestIsHybridChunkerAvailable:
-    """Tests for is_hybrid_chunker_available."""
+    def test_returns_true_when_healthy(self) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
 
-    def test_returns_false_when_get_chunker_returns_none(self) -> None:
-        """Should return False when _get_hybrid_chunker returns None (import fails)."""
-        with patch("rag.chunking._get_hybrid_chunker", return_value=None):
+        with (
+            patch("rag.chunking.httpx.Client") as mock_client_cls,
+            patch("rag.chunking.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
+        ):
+            mock_client = MagicMock()
+            mock_client.get.return_value = mock_response
+            mock_client_cls.return_value = mock_client
+
             result = is_hybrid_chunker_available()
+            assert result is True
+            mock_client.get.assert_called_once_with("http://localhost:5001/health")
+            mock_client.close.assert_called_once()
 
-        assert result is False
-
-    def test_returns_true_when_get_chunker_returns_object(self) -> None:
-        """Should return True when _get_hybrid_chunker returns a chunker instance."""
-        with patch("rag.chunking._get_hybrid_chunker", return_value=MagicMock()):
+    def test_returns_false_on_error(self) -> None:
+        with (
+            patch("rag.chunking.httpx.Client", side_effect=Exception("connection failed")),
+            patch("rag.chunking.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
+        ):
             result = is_hybrid_chunker_available()
-
-        assert result is True
-
-
-class TestChunkDoclingDocument:
-    """Tests for chunk_docling_document error paths."""
-
-    def test_raises_when_hybrid_chunker_not_available(self) -> None:
-        """Should raise RuntimeError when _get_hybrid_chunker returns None."""
-        with (
-            patch("rag.chunking._get_hybrid_chunker", return_value=None),
-            pytest.raises(RuntimeError, match="HybridChunker not available"),
-        ):
-            chunk_docling_document({})
-
-    def test_error_message_mentions_uv_sync(self) -> None:
-        """Should guide user to install docling with uv sync."""
-        with (
-            patch("rag.chunking._get_hybrid_chunker", return_value=None),
-            pytest.raises(RuntimeError) as exc_info,
-        ):
-            chunk_docling_document({})
-
-        assert "uv sync" in str(exc_info.value)
-
-    def test_raises_when_docling_core_not_importable(self) -> None:
-        """Should raise RuntimeError when docling_core import fails."""
-        mock_chunker = MagicMock()
-
-        with (
-            patch("rag.chunking._get_hybrid_chunker", return_value=mock_chunker),
-            patch("rag.chunking.DoclingDocument", create=True),
-        ):
-            import builtins
-
-            original_import = builtins.__import__
-
-            def _fake_import(name, *args, **kwargs):
-                if name == "docling_core.docling_document":
-                    raise ImportError("No module named 'docling_core'")
-                return original_import(name, *args, **kwargs)
-
-            with (
-                patch("builtins.__import__", side_effect=_fake_import),
-                pytest.raises(RuntimeError, match="docling_core not available"),
-            ):
-                chunk_docling_document({})
+            assert result is False

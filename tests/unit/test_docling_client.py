@@ -211,7 +211,7 @@ class TestBuildOptionsPdfBackend:
     def test_pdf_backend_included_when_set(self):
         with patch("rag.docling_client.config.DOCLING_PDF_BACKEND", "DLPARSE_V4"):
             opts = _build_options()
-        assert opts["pdf_backend"] == "DLPARSE_V4"
+        assert opts["pdf_backend"] == "dlparse_v4"
 
 
 class TestBuildOptionsToFormats:

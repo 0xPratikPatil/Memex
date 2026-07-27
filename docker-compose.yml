@@ -3,13 +3,14 @@
 # MCP server runs locally (not in Docker) for direct file access.
 # See: uv run memex
 #
+name: memex
 # Usage:
 #   ./setup.sh                    # one-command bootstrap
 #   docker compose up -d          # start backend services
 #   docker compose down           # stop everything
 #
 # Custom models via env:
-#   EMBED_MODEL=bge-m3 CHAT_MODEL=qwen2.5:0.5b docker compose up -d
+#   EMBED_MODEL=bge-m3 CHAT_MODEL=qwen3.5:0.8b docker compose up -d
 
 services:
   # ── Qdrant vector database ──────────────────────────────────────────────

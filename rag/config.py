@@ -78,7 +78,7 @@ COLLECTION_NAME: str = _env("COLLECTION_NAME", "memex")
 EMBED_MODEL: str = _env("EMBED_MODEL", "bge-m3")
 RERANK_MODEL: str = _env("RERANK_MODEL", "BAAI/bge-reranker-base")
 SPARSE_MODEL: str = _env("SPARSE_MODEL", "Qdrant/bm25")
-CHAT_MODEL: str = _env("CHAT_MODEL", "qwen2.5:0.5b")  # for context/query/metadata generation
+CHAT_MODEL: str = _env("CHAT_MODEL", "qwen3.5:0.8b")  # for context/query/metadata generation
 
 # Provider: "http" (Docker ML service) or "local" (load in-process)
 SPARSE_PROVIDER: str = _env("SPARSE_PROVIDER", "http")
@@ -88,12 +88,10 @@ DENSE_DIM: int = _env_int("DENSE_DIM", 1024)
 # ── Chunking ──────────────────────────────────────────────────────────────────
 CHUNK_TOKENIZER: str = _env("CHUNK_TOKENIZER", "BAAI/bge-m3")
 CHUNK_SIZE: int = _env_int("CHUNK_SIZE", 1024)
-CHUNK_OVERLAP: int = _env_int("CHUNK_OVERLAP", 128)
+CHUNK_OVERLAP: int = _env_int("CHUNK_OVERLAP", 128)  # Legacy-only; HybridChunker ignores this
 MIN_CHUNK_LEN: int = _env_int("MIN_CHUNK_LEN", 30)
 CHUNK_STRATEGY: str = _env("CHUNK_STRATEGY", "hybrid")
 CHUNK_MERGE_PEERS: bool = _env_bool("CHUNK_MERGE_PEERS", True)
-CHUNK_REPEAT_TABLE_HEADER: bool = _env_bool("CHUNK_REPEAT_TABLE_HEADER", True)
-CHUNK_TYPE_FORMAT: bool = _env_bool("CHUNK_TYPE_FORMAT", True)
 
 # ── HTTP client settings ──────────────────────────────────────────────────────
 HTTP_TIMEOUT: float = _env_float("HTTP_TIMEOUT", 60.0)  # seconds per request
@@ -106,8 +104,6 @@ QDRANT_TIMEOUT: float = _env_float("QDRANT_TIMEOUT", 10.0)
 QDRANT_MAX_RETRIES: int = _env_int("QDRANT_MAX_RETRIES", 3)
 
 # ── Search settings ──────────────────────────────────────────────────────────
-SEARCH_FUSION: str = _env("SEARCH_FUSION", "rrf")  # rrf | weighted
-RERANK_ENABLED: bool = _env_bool("RERANK_ENABLED", True)
 SEARCH_TOP_K: int = _env_int("SEARCH_TOP_K", 30)
 
 # ── MCP server settings ───────────────────────────────────────────────────────

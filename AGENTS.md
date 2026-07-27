@@ -54,9 +54,9 @@ OpenCode should proactively use the following features when working with this co
 
 ```bash
 ./setup.sh                    # Bootstrap Docker + models
-uv sync                       # Install all deps (includes docling for HybridChunker)
+uv sync                       # Install all deps (no local docling needed)
 uv run memex                  # Start MCP server
-make test                     # 299 tests (246 unit + 53 integration)
+make test                     # 310 tests (257 unit + 53 integration)
 make lint                     # Ruff linter
 make fmt                      # Auto-format
 ```
@@ -65,13 +65,82 @@ make fmt                      # Auto-format
 
 ```
 MCP Server (local, uv run memex)
-  ├── Docling HybridChunker (in-process, docling>=2)
   └── HTTP → Docker Services
-       ├── Docling Serve :5001 (GPU doc conversion)
+       ├── Docling Serve :5001 (GPU doc conversion + HybridChunker)
        ├── Ollama :11434 (embeddings + chat LLM)
        ├── Qdrant :6333 (vector DB)
        ├── ML Services :5002 (sparse BM25 + reranker)
        └── Redis :6379 (caching)
+```
+
+## Docker Ollama (required — no host Ollama)
+
+Ollama runs **exclusively in Docker**. Never install Ollama on the host.
+
+- All `localhost:11434` requests go through Docker port mapping to the `ollama/ollama:0.32.4` container
+- Models are persisted in the `ollama_data` Docker volume (survives `docker compose down`)
+- Model pulls happen inside the container: `docker compose exec -T ollama ollama pull <model>`
+- Health check: `curl http://localhost:11434/api/tags` (hits Docker container)
+
+## Practical Testing Setup
+
+### First-time setup
+```bash
+./setup.sh                    # bootstraps Docker, pulls models, verifies everything
+```
+
+### Start services
+```bash
+docker compose up -d          # start all backend services
+docker compose ps             # verify all healthy
+```
+
+### Pull / manage models
+```bash
+docker compose exec -T ollama ollama list           # list downloaded models
+docker compose exec -T ollama ollama pull bge-m3    # pull embedding model
+docker compose exec -T ollama ollama pull qwen3.5:0.8b  # pull chat model
+docker compose exec -T ollama ollama rm <model>     # remove a model
+```
+
+### Verify Ollama is working
+```bash
+# Health check
+curl http://localhost:11434/api/tags
+
+# Test embedding
+curl -s -X POST http://localhost:11434/api/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"model":"bge-m3","prompt":"test"}' | jq .
+
+# Test chat
+curl -s -X POST http://localhost:11434/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen3.5:0.8b","messages":[{"role":"user","content":"hi"}],"stream":false}' | jq .
+```
+
+### Run the MCP server
+```bash
+uv run memex                  # starts MCP server, connects to Docker services
+```
+
+### Run tests
+```bash
+make test                     # unit tests only (no Docker needed)
+make test-all                 # unit + integration tests
+make e2e                      # end-to-end verification (needs Docker)
+uv run python scripts/verify_features.py  # 55-check feature verification
+pytest tests/unit/ -v         # unit tests only
+pytest tests/integration/ -v  # integration tests (needs Docker services running)
+```
+
+### Useful Docker commands
+```bash
+docker compose logs -f ollama           # tail Ollama logs
+docker compose logs -f ml-services      # tail ML services logs
+docker compose restart ollama           # restart Ollama container
+docker compose down && docker compose up -d  # full restart
+docker volume ls                        # check ollama_data volume exists
 ```
 
 ## Logging

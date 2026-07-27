@@ -50,7 +50,22 @@ class QueryExpander:
 
         Techniques execute sequentially: rewrite → HyDE → multi-query.
         Each step is independent; failures are logged and skipped.
+        Results are cached in Redis using ``CACHE_TTL_EXPANSION``.
         """
+        from rag.services.cache import get_cached, set_cached
+
+        cache_key = f"expand:{query}"
+        if config.ENABLE_CACHE:
+            cached = get_cached("expansion", cache_key)
+            if cached is not None:
+                logger.debug("Query expansion cache hit for: %s", query[:50])
+                return ExpandedQuery(
+                    original=cached["original"],
+                    rewritten=cached.get("rewritten"),
+                    hyde_vector=cached.get("hyde_vector"),
+                    paraphrases=cached.get("paraphrases"),
+                )
+
         result = ExpandedQuery(original=query)
 
         if config.ENABLE_QUERY_REWRITE:
@@ -75,6 +90,17 @@ class QueryExpander:
                 logger.debug("Generated %d paraphrases", len(result.paraphrases))
             except Exception:
                 logger.warning("Multi-query failed, skipping", exc_info=True)
+
+        if config.ENABLE_CACHE:
+            try:
+                set_cached("expansion", cache_key, {
+                    "original": result.original,
+                    "rewritten": result.rewritten,
+                    "hyde_vector": result.hyde_vector,
+                    "paraphrases": result.paraphrases,
+                }, ttl=config.CACHE_TTL_EXPANSION)
+            except Exception:
+                logger.debug("Failed to cache query expansion", exc_info=True)
 
         return result
 

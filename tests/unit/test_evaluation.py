@@ -314,7 +314,7 @@ class TestEvalRunner:
         mock_config.EVAL_TOP_K = 5
         mock_config.EVAL_OUTPUT_DIR = str(tmp_path / "reports")
         mock_config.EVAL_RUN_RAGAS = False
-        mock_config.RERANK_ENABLED = False
+        mock_config.ENABLE_RERANKING = False
         mock_config.CHUNK_SIZE = 512
         mock_config.CHUNK_STRATEGY = "recursive"
 
@@ -344,7 +344,7 @@ class TestEvalRunner:
     def test_run_single_query(self, mock_config: MagicMock) -> None:
         mock_config.EVAL_TOP_K = 5
         mock_config.EVAL_RUN_RAGAS = False
-        mock_config.RERANK_ENABLED = False
+        mock_config.ENABLE_RERANKING = False
         mock_config.EVAL_DATASET_PATH = "/nonexistent"
         mock_config.EVAL_OUTPUT_DIR = "/tmp"
 

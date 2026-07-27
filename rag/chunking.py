@@ -1,8 +1,8 @@
-"""Docling HybridChunker integration — structure-aware, tokenizer-aligned chunking.
+"""Docling HybridChunker — via Docling Serve API.
 
-Replaces the old regex-based ``_recursive_chunk`` with Docling's native
-``HybridChunker`` that operates directly on the ``DoclingDocument`` structure.
-Preserves headings, captions, table boundaries, and list groupings.
+Uses the Docling Serve ``/v1/chunk/hybrid/source`` endpoint for
+structure-aware, tokenizer-aligned chunking. No local ``docling`` or
+``docling-core`` packages required — all heavy processing runs in Docker.
 """
 
 from __future__ import annotations
@@ -10,121 +10,230 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import httpx
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
+
 from rag import config
 
 logger = logging.getLogger("chunking")
 
 
-def _get_hybrid_chunker():
-    """Lazy-import and construct a HybridChunker configured from settings.
+# ── Chunking API helpers ─────────────────────────────────────────────────────
 
-    Returns None when ``docling`` is not installed, so callers can fall back
-    to the legacy chunker.
-    """
-    try:
-        from docling.chunking import HybridChunker
-    except ImportError:
-        logger.warning(
-            "docling package not installed — HybridChunker unavailable. Install with: uv sync --extra chunking"
-        )
-        return None
 
-    chunker = HybridChunker(
-        tokenizer=config.CHUNK_TOKENIZER,
-        max_tokens=config.CHUNK_SIZE,
-        overlap=config.CHUNK_OVERLAP,
-        merge_peers=config.CHUNK_MERGE_PEERS,
-        repeat_table_header=config.CHUNK_REPEAT_TABLE_HEADER,
+def _get_chunking_url() -> str:
+    """Build the chunking endpoint URL from the Docling base URL."""
+    base = config.DOCLING_URL.split("/v1/convert")[0]
+    return f"{base}/v1/chunk/hybrid/source"
+
+
+@retry(
+    retry=retry_if_exception_type((httpx.TransportError, httpx.TimeoutException)),
+    stop=stop_after_attempt(config.HTTP_MAX_RETRIES),
+    wait=wait_exponential(multiplier=config.HTTP_RETRY_BACKOFF, max=10),
+    reraise=True,
+)
+def _post_chunking(payload: dict) -> dict:
+    """POST to the Docling Serve chunking endpoint."""
+    url = _get_chunking_url()
+    client = httpx.Client(
+        timeout=httpx.Timeout(config.DOCLING_TIMEOUT, connect=10.0),
+        limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
     )
-    return chunker
+    try:
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if config.DOCLING_API_KEY:
+            headers["X-Api-Key"] = config.DOCLING_API_KEY
+        resp = client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
+    finally:
+        client.close()
 
 
-def chunk_docling_document(
-    docling_json: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Chunk a DoclingDocument JSON using HybridChunker.
+# ── Chunking options ─────────────────────────────────────────────────────────
+
+
+def _build_chunking_options() -> dict[str, Any]:
+    """Build HybridChunkerOptions for the Docling Serve chunking API."""
+    return {
+        "chunker": "hybrid",
+        "max_tokens": config.CHUNK_SIZE,
+        "tokenizer": config.CHUNK_TOKENIZER,
+        "merge_peers": config.CHUNK_MERGE_PEERS,
+    }
+
+
+def _build_convert_options() -> dict[str, Any]:
+    """Build conversion options for the chunking endpoint."""
+    opts: dict[str, Any] = {
+        "from_formats": ["docx", "pptx", "html", "image", "pdf", "md", "csv", "xlsx"],
+        "to_formats": ["md"],
+        "do_ocr": config.ENABLE_OCR,
+        "table_mode": "accurate",
+        "do_table_structure": True,
+        "image_export_mode": config.DOCLING_IMAGE_EXPORT,
+    }
+
+    if config.DOCLING_ENRICH_CODE:
+        opts["do_code_enrichment"] = True
+    if config.DOCLING_ENRICH_FORMULA:
+        opts["do_formula_enrichment"] = True
+    if config.DOCLING_PICTURE_CLASSIFY:
+        opts["do_picture_classification"] = True
+    if config.DOCLING_CHART_EXTRACT:
+        opts["do_chart_extraction"] = True
+    if config.DOCLING_PDF_BACKEND:
+        opts["pdf_backend"] = config.DOCLING_PDF_BACKEND.lower()
+
+    return opts
+
+
+# ── Public API ───────────────────────────────────────────────────────────────
+
+
+def chunk_url(url: str, include_doc: bool = False) -> dict[str, Any]:
+    """Convert and chunk a URL via Docling Serve chunking API.
+
+    Returns a dict with keys: ``chunks`` (list of chunk dicts),
+    and optionally ``markdown`` (converted document text) when *include_doc* is True.
+    """
+    payload = {
+        "convert_options": _build_convert_options(),
+        "chunking_options": _build_chunking_options(),
+        "sources": [{"kind": "http", "url": url}],
+        "include_converted_doc": include_doc,
+    }
+
+    try:
+        data = _post_chunking(payload)
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeError(
+            f"Docling chunking API returned HTTP {exc.response.status_code}: {exc.response.text[:500]}"
+        ) from exc
+    except httpx.TransportError as exc:
+        raise RuntimeError(f"Cannot reach Docling server at {config.DOCLING_URL}: {exc}") from exc
+
+    return _parse_chunk_response(data, include_doc=include_doc)
+
+
+def chunk_local_file(file_path: str, include_doc: bool = False) -> dict[str, Any]:
+    """Convert and chunk a local file via Docling Serve chunking API.
 
     Args:
-        docling_json: Raw ``json_content`` from Docling Serve response.
+        file_path: Absolute path to the file (e.g., /mnt/docs/report.pdf)
+        include_doc: If True, include the full markdown in the result.
 
-    Returns:
-        List of chunk dicts, each with keys: ``content``, ``section_header``,
-        ``heading_level``, ``chunk_type``, and any metadata from the chunker.
+    Raises:
+        FileNotFoundError: If the file does not exist.
     """
-    chunker = _get_hybrid_chunker()
-    if chunker is None:
-        raise RuntimeError("HybridChunker not available. Install docling: uv sync --extra chunking")
+    import base64
+    from pathlib import Path
+
+    p = Path(file_path)
+    if not p.is_file():
+        raise FileNotFoundError(f"File not found: {file_path}")
+    file_bytes = p.read_bytes()
+    b64 = base64.b64encode(file_bytes).decode("ascii")
+
+    payload = {
+        "convert_options": _build_convert_options(),
+        "chunking_options": _build_chunking_options(),
+        "sources": [
+            {
+                "kind": "file",
+                "base64_string": b64,
+                "filename": p.name,
+            }
+        ],
+        "include_converted_doc": include_doc,
+    }
 
     try:
-        from docling_core.docling_document import DoclingDocument
-    except ImportError as e:
-        raise RuntimeError("docling_core not available. Install docling: uv sync --extra chunking") from e
+        data = _post_chunking(payload)
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeError(
+            f"Docling chunking API returned HTTP {exc.response.status_code}: {exc.response.text[:500]}"
+        ) from exc
+    except httpx.TransportError as exc:
+        raise RuntimeError(f"Cannot reach Docling server at {config.DOCLING_URL}: {exc}") from exc
 
-    dl_doc = DoclingDocument.model_validate(docling_json)
+    return _parse_chunk_response(data, include_doc=include_doc)
+
+
+def chunk_file(file_path_or_url: str, include_doc: bool = False) -> dict[str, Any]:
+    """Unified entry point: detect URL vs local path and route accordingly."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(file_path_or_url)
+    if parsed.scheme in ("http", "https"):
+        return chunk_url(file_path_or_url, include_doc=include_doc)
+    return chunk_local_file(file_path_or_url, include_doc=include_doc)
+
+
+def _parse_chunk_response(data: dict, include_doc: bool = False) -> dict[str, Any]:
+    """Parse the Docling Serve chunk response into our chunk format.
+
+    Returns a dict with ``chunks`` (list) and optionally ``markdown`` (str).
+    """
+    chunks_raw = data.get("chunks", [])
+    documents = data.get("documents", [])
+
+    if not chunks_raw:
+        logger.warning("Docling chunking API returned no chunks")
+        result: dict[str, Any] = {"chunks": [], "markdown": ""}
+        if include_doc and documents:
+            doc = documents[0] if documents else {}
+            result["markdown"] = doc.get("md_content") or doc.get("markdown", "")
+        return result
 
     chunks: list[dict[str, Any]] = []
-    for base_chunk in chunker.chunk(dl_doc):
-        serialized = _serialize_chunk(base_chunk)
-        heading = base_chunk.meta.heading or ""
-        heading_text = heading.heading_text if hasattr(heading, "heading_text") else str(heading)
+    for item in chunks_raw:
+        text = item.get("text", "")
+        if not text.strip():
+            continue
+
+        headings = item.get("headings") or []
+        section_header = headings[0] if headings else ""
 
         chunks.append(
             {
-                "content": serialized,
-                "section_header": heading_text,
-                "heading_level": base_chunk.meta.heading_level or 0,
-                "chunk_type": base_chunk.meta.chunk_type or "text",
+                "content": text,
+                "section_header": section_header,
+                "headings": headings,
+                "chunk_index": item.get("chunk_index", len(chunks)),
             }
         )
 
-    if not chunks:
-        logger.warning("HybridChunker produced no chunks for document")
+    logger.info(
+        "Docling chunking complete — %d chunks from %d raw items",
+        len(chunks),
+        len(chunks_raw),
+    )
 
-    return chunks
-
-
-def _serialize_chunk(base_chunk: Any) -> str:
-    """Serialize a chunk for embedding, choosing format by chunk type."""
-    if not config.CHUNK_TYPE_FORMAT:
-        return base_chunk.text
-
-    chunk_type = getattr(base_chunk.meta, "chunk_type", "text")
-
-    if chunk_type == "table":
-        return _serialize_table_chunk(base_chunk)
-    elif chunk_type == "code":
-        return _serialize_code_chunk(base_chunk)
-    elif chunk_type == "image_description":
-        return _serialize_image_chunk(base_chunk)
-    else:
-        return base_chunk.text
-
-
-def _serialize_table_chunk(base_chunk: Any) -> str:
-    """Serialize a table chunk as HTML to preserve cell/column structure."""
-    text = base_chunk.text
-    if "<table>" in text or "<tr>" in text:
-        return text
-    return f"<table>\n{text}\n</table>"
-
-
-def _serialize_code_chunk(base_chunk: Any) -> str:
-    """Serialize a code chunk as a markdown fenced code block."""
-    text = base_chunk.text
-    if text.startswith("```"):
-        return text
-    language = getattr(base_chunk.meta, "code_language", "") or ""
-    return f"```{language}\n{text}\n```"
-
-
-def _serialize_image_chunk(base_chunk: Any) -> str:
-    """Serialize an image description chunk."""
-    caption = getattr(base_chunk.meta, "image_caption", "") or ""
-    if caption:
-        return f"[Image: {caption}]"
-    return base_chunk.text
+    result = {"chunks": chunks, "markdown": ""}
+    if include_doc and documents:
+        doc = documents[0] if documents else {}
+        result["markdown"] = doc.get("md_content") or doc.get("markdown", "")
+    return result
 
 
 def is_hybrid_chunker_available() -> bool:
-    """Check whether HybridChunker can be imported."""
-    return _get_hybrid_chunker() is not None
+    """Check whether the Docling Serve chunking endpoint is reachable."""
+    try:
+        url = _get_chunking_url()
+        base = url.split("/v1/chunk")[0]
+        health_url = f"{base}/health"
+        client = httpx.Client(timeout=5.0)
+        try:
+            resp = client.get(health_url)
+            return resp.status_code == 200
+        finally:
+            client.close()
+    except Exception:
+        return False

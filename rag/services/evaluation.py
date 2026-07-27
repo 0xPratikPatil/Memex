@@ -225,12 +225,36 @@ class EvalDataset:
             answer = (answer_el.text or "").strip()
             if not question:
                 continue
+
+            # Read expected_sources from attribute (comma-separated)
+            sources_attr = qa.get("expected_sources", "")
+            expected_sources = [s.strip() for s in sources_attr.split(",") if s.strip()]
+
+            # Read expected_keywords from attribute (comma-separated), fall back to answer
+            keywords_attr = qa.get("expected_keywords", "")
+            if keywords_attr:
+                expected_keywords = [k.strip() for k in keywords_attr.split(",") if k.strip()]
+            elif answer:
+                expected_keywords = [answer]
+            else:
+                expected_keywords = []
+
+            metadata: dict[str, str] = {"source": "xml"}
+            if answer:
+                metadata["expected_answer"] = answer
+            category = qa.get("category", "")
+            if category:
+                metadata["category"] = category
+            difficulty = qa.get("difficulty", "")
+            if difficulty:
+                metadata["difficulty"] = difficulty
+
             self.queries.append(
                 EvalQuery(
                     query=question,
-                    expected_sources=[],
-                    expected_keywords=[answer] if answer else [],
-                    metadata={"expected_answer": answer, "source": "xml"},
+                    expected_sources=expected_sources,
+                    expected_keywords=expected_keywords,
+                    metadata=metadata,
                 )
             )
 
@@ -402,7 +426,7 @@ class EvalRunner:
             results = self.engine.hybrid_search(
                 query=query_data.query,
                 top_k=k,
-                rerank=config.RERANK_ENABLED,
+                rerank=config.ENABLE_RERANKING,
             )
             elapsed_ms = (time.monotonic() - t0) * 1000
             self.benchmark.record("hybrid_search", elapsed_ms)
@@ -465,8 +489,8 @@ class EvalRunner:
         ]
         return query_metrics
 
+    @staticmethod
     def compare(
-        self,
         results_a: dict[str, Any],
         results_b: dict[str, Any],
         label_a: str = "config_a",

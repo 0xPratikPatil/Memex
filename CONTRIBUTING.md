@@ -10,18 +10,11 @@ Thank you for your interest in contributing to Memex! This document provides gui
    git clone https://github.com/yourusername/memex.git
    cd memex
    ```
-3. **Create a virtual environment**:
+3. **Install dependencies**:
    ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   uv sync --extra dev --extra test
    ```
-4. **Install dependencies**:
-   ```bash
-   uv sync
-   # Or with pip:
-   pip install -e ".[dev]"
-   ```
-5. **Install pre-commit hooks**:
+4. **Install pre-commit hooks**:
    ```bash
    pre-commit install
    ```
@@ -95,8 +88,8 @@ Then create a Pull Request on GitHub with:
 ```python
 def process_document(
     file_path: str,
-    chunk_size: int = 512,
-    overlap: int = 50,
+    chunk_size: int = 1024,
+    overlap: int = 128,
 ) -> list[dict[str, Any]]:
     """Process a document into chunks.
     
@@ -126,7 +119,7 @@ make test
 pytest tests/unit/test_config.py -v
 
 # Run with coverage
-pytest tests/ --cov=src --cov-report=html
+pytest tests/ --cov=memex --cov=rag --cov-report=html
 
 # Run only failed tests
 pytest --lf
