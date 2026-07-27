@@ -83,6 +83,7 @@ CHAT_MODEL: str = _env("CHAT_MODEL", "qwen3.5:0.8b")  # for context/query/metada
 # Provider: "http" (Docker ML service) or "local" (load in-process)
 SPARSE_PROVIDER: str = _env("SPARSE_PROVIDER", "http")
 RERANK_PROVIDER: str = _env("RERANK_PROVIDER", "http")
+RERANK_TYPE: str = _env("RERANK_TYPE", "cross-encoder")  # cross-encoder | causal-lm
 DENSE_DIM: int = _env_int("DENSE_DIM", 1024)
 
 # ── Chunking ──────────────────────────────────────────────────────────────────

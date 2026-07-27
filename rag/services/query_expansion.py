@@ -153,10 +153,22 @@ class QueryExpander:
         return resp.json()["message"]["content"]
 
     def _embed(self, text: str) -> list[float]:
-        """Embed text via Ollama."""
-        resp = self._ollama.post(
-            config.OLLAMA_EMBED_URL,
-            json={"model": config.EMBED_MODEL, "prompt": text},
-        )
-        resp.raise_for_status()
-        return resp.json()["embedding"]
+        """Embed text via Ollama.
+
+        Supports both /api/embed (new, batched) and /api/embeddings (legacy).
+        """
+        is_new_api = "/api/embed" in config.OLLAMA_EMBED_URL and "/api/embeddings" not in config.OLLAMA_EMBED_URL
+        if is_new_api:
+            resp = self._ollama.post(
+                config.OLLAMA_EMBED_URL,
+                json={"model": config.EMBED_MODEL, "input": text},
+            )
+            resp.raise_for_status()
+            return resp.json()["embeddings"][0]
+        else:
+            resp = self._ollama.post(
+                config.OLLAMA_EMBED_URL,
+                json={"model": config.EMBED_MODEL, "prompt": text},
+            )
+            resp.raise_for_status()
+            return resp.json()["embedding"]

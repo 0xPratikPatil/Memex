@@ -134,6 +134,7 @@ services:
     environment:
       SPARSE_MODEL: "${SPARSE_MODEL:-Qdrant/bm25}"
       RERANK_MODEL: "${RERANK_MODEL:-BAAI/bge-reranker-base}"
+      RERANK_TYPE: "${RERANK_TYPE:-cross-encoder}"
       NVIDIA_VISIBLE_DEVICES: all
     networks:
       - backend

@@ -31,6 +31,7 @@ ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 ARG SPARSE_MODEL=Qdrant/bm25
 ARG RERANK_MODEL=BAAI/bge-reranker-base
+ARG RERANK_TYPE=cross-encoder
 ENV HF_HOME=/app/.cache/huggingface
 ENV TRANSFORMERS_CACHE=/app/.cache/huggingface
 
@@ -40,10 +41,19 @@ m = SparseTextEmbedding(model_name='${SPARSE_MODEL}'); \
 list(m.embed(['warmup'])); \
 print('Sparse model cached')"
 
-RUN python -c "\
+# Pre-cache reranker based on type
+RUN if [ "$RERANK_TYPE" = "causal-lm" ]; then \
+      python -c "\
+from transformers import AutoModelForCausalLM, AutoTokenizer; \
+AutoTokenizer.from_pretrained('${RERANK_MODEL}', trust_remote_code=True); \
+AutoModelForCausalLM.from_pretrained('${RERANK_MODEL}', trust_remote_code=True); \
+print('Causal-LM reranker cached')" ; \
+    else \
+      python -c "\
 from sentence_transformers import CrossEncoder; \
 m = CrossEncoder('${RERANK_MODEL}', device='cpu'); \
-print('Reranker model cached')"
+print('Cross-encoder reranker cached')" ; \
+    fi
 
 # ── Stage 3: Runtime (minimal) ───────────────────────────────────────────────
 FROM deps AS ml
@@ -63,8 +73,10 @@ COPY --chown=appuser:appgroup rag/ml_server.py /app/server.py
 
 ARG SPARSE_MODEL=Qdrant/bm25
 ARG RERANK_MODEL=BAAI/bge-reranker-base
+ARG RERANK_TYPE=cross-encoder
 ENV SPARSE_MODEL=${SPARSE_MODEL}
 ENV RERANK_MODEL=${RERANK_MODEL}
+ENV RERANK_TYPE=${RERANK_TYPE}
 ENV HF_HOME=/app/.cache/huggingface
 ENV TRANSFORMERS_CACHE=/app/.cache/huggingface
 

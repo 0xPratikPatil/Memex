@@ -185,14 +185,22 @@ def invalidate_for_document(source_identifier: str) -> int:
 # ── Domain-specific helpers ──────────────────────────────────────────────────
 
 
-def cache_embedding(text: str, embedding: list[float]) -> None:
-    """Cache a text → embedding mapping."""
-    set_cached("emb", text, embedding, config.CACHE_TTL_EMBEDDING)
+def cache_embedding(text: str, embedding: list[float], model: str = "") -> None:
+    """Cache a text → embedding mapping, keyed by model name.
+
+    Including the model name prevents cross-model cache poisoning when
+    switching embedding models (e.g. bge-m3 → qwen3-embedding).
+    """
+    model = model or config.EMBED_MODEL
+    key = f"{model}:{text}"
+    set_cached("emb", key, embedding, config.CACHE_TTL_EMBEDDING)
 
 
-def get_cached_embedding(text: str) -> list[float] | None:
-    """Get cached embedding for text."""
-    return get_cached("emb", text)
+def get_cached_embedding(text: str, model: str = "") -> list[float] | None:
+    """Get cached embedding for text, keyed by model name."""
+    model = model or config.EMBED_MODEL
+    key = f"{model}:{text}"
+    return get_cached("emb", key)
 
 
 def cache_search_results(

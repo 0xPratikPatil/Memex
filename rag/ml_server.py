@@ -1,6 +1,11 @@
-"""ML Services — Sparse embeddings + Cross-encoder reranker.
+"""ML Services — Sparse embeddings + Reranker (multi-provider).
 
 Runs inside Docker with GPU access. MCP connects via HTTP.
+
+Supported reranker types (set RERANK_TYPE env var):
+  cross-encoder  — sentence-transformers CrossEncoder (bge-reranker-base, mxbai-rerank, etc.)
+  causal-lm      — Qwen3-Reranker style: P("yes") via chat template
+  ollama         — proxy to Ollama /api/embed for reranking (future)
 """
 
 from __future__ import annotations
@@ -18,8 +23,10 @@ logger = logging.getLogger("ml-services")
 
 _sparse_model = None
 _reranker = None
+_rerank_type = "cross-encoder"
 
 RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-base")
+RERANK_TYPE = os.getenv("RERANK_TYPE", "cross-encoder")
 SPARSE_MODEL = os.getenv("SPARSE_MODEL", "Qdrant/bm25")
 
 
@@ -45,12 +52,73 @@ class RerankResponse(BaseModel):
     indices: list[int]
 
 
+# ── Causal-LM Reranker (Qwen3-Reranker) ────────────────────────────────
+
+
+class CausalLMReranker:
+    """Reranker using causal-LM P("yes") scoring.
+
+    Used by Qwen3-Reranker models. Formats input as a chat template,
+    then extracts the logit for the "yes" token as relevance score.
+    """
+
+    def __init__(self, model_name: str, device: str = "cuda"):
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        logger.info("Loading causal-LM reranker: %s", model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16,
+            device_map=device,
+            trust_remote_code=True,
+        )
+        self.model.eval()
+
+        # Find the "yes" token id
+        self._yes_token_id = self.tokenizer.convert_tokens_to_ids("yes")
+        if self._yes_token_id == self.tokenizer.unk_token_id:
+            # Fallback: try "True" or first token
+            self._yes_token_id = self.tokenizer.convert_tokens_to_ids("True")
+
+    def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+        """Score query-document pairs using P("yes")."""
+        import torch
+
+        scores = []
+        for query, doc in pairs:
+            messages = [
+                {
+                    "role": "system",
+                    "content": "Determine whether the document is relevant to the query. "
+                    "Output only 'yes' or 'no'.",
+                },
+                {
+                    "role": "user",
+                    "content": f"Query: {query}\nDocument: {doc}\n\n"
+                    "Is this document relevant to the query?",
+                },
+            ]
+            text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
+
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                # Get the logit for the "yes" token at the last position
+                logits = outputs.logits[:, -1, :]
+                yes_logit = logits[0, self._yes_token_id].float()
+                score = torch.sigmoid(yes_logit).item()
+                scores.append(score)
+        return scores
+
+
 # ── Startup / shutdown ────────────────────────────────────────────────────
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _sparse_model, _reranker
+    global _sparse_model, _reranker, _rerank_type
     logger.info("Loading sparse model: %s", SPARSE_MODEL)
     from fastembed import SparseTextEmbedding
 
@@ -59,10 +127,18 @@ async def lifespan(app: FastAPI):
     _ = list(_sparse_model.embed(["warmup"]))
     logger.info("Sparse model loaded")
 
-    logger.info("Loading reranker: %s", RERANK_MODEL)
-    from sentence_transformers import CrossEncoder
+    _rerank_type = RERANK_TYPE.lower()
+    logger.info("Loading reranker: %s (type=%s)", RERANK_MODEL, _rerank_type)
 
-    _reranker = CrossEncoder(RERANK_MODEL, device="cuda")
+    if _rerank_type == "causal-lm":
+        _reranker = CausalLMReranker(RERANK_MODEL, device="cuda")
+    elif _rerank_type == "cross-encoder":
+        from sentence_transformers import CrossEncoder
+
+        _reranker = CrossEncoder(RERANK_MODEL, device="cuda")
+    else:
+        raise ValueError(f"Unknown RERANK_TYPE: {_rerank_type}. Use 'cross-encoder' or 'causal-lm'.")
+
     logger.info("Reranker loaded")
 
     yield
@@ -77,7 +153,7 @@ app = FastAPI(title="Memex ML Services", lifespan=lifespan)
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "sparse_model": SPARSE_MODEL, "reranker_model": RERANK_MODEL}
+    return {"status": "ok", "sparse_model": SPARSE_MODEL, "reranker_model": RERANK_MODEL, "rerank_type": _rerank_type}
 
 
 @app.post("/sparse/embed", response_model=SparseResponse)

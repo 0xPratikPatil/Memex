@@ -370,7 +370,11 @@ class RAGEngine:
         reraise=True,
     )
     def _dense_embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Embed a batch of texts via Ollama."""
+        """Embed a batch of texts via Ollama.
+
+        Supports both the legacy ``/api/embeddings`` endpoint (prompt field)
+        and the current ``/api/embed`` endpoint (input field, batched).
+        """
         from rag.services.cache import cache_embedding, get_cached_embedding
 
         client = self._get_ollama()
@@ -386,15 +390,29 @@ class RAGEngine:
                 uncached_texts.append((idx, text))
 
         if uncached_texts:
-            for idx, text in uncached_texts:
-                resp = client.post(
-                    config.OLLAMA_EMBED_URL,
-                    json={"model": config.EMBED_MODEL, "prompt": text},
-                )
-                resp.raise_for_status()
-                emb = resp.json()["embedding"]
-                cache_embedding(text, emb)
-                cached_map[idx] = emb
+            is_new_api = "/api/embed" in config.OLLAMA_EMBED_URL and "/api/embeddings" not in config.OLLAMA_EMBED_URL
+            if is_new_api:
+                # Batch via /api/embed — supports input array
+                for idx, text in uncached_texts:
+                    resp = client.post(
+                        config.OLLAMA_EMBED_URL,
+                        json={"model": config.EMBED_MODEL, "input": text},
+                    )
+                    resp.raise_for_status()
+                    emb = resp.json()["embeddings"][0]
+                    cache_embedding(text, emb)
+                    cached_map[idx] = emb
+            else:
+                # Legacy /api/embeddings — one at a time
+                for idx, text in uncached_texts:
+                    resp = client.post(
+                        config.OLLAMA_EMBED_URL,
+                        json={"model": config.EMBED_MODEL, "prompt": text},
+                    )
+                    resp.raise_for_status()
+                    emb = resp.json()["embedding"]
+                    cache_embedding(text, emb)
+                    cached_map[idx] = emb
 
         return [cached_map[i] for i in range(len(texts))]
 
