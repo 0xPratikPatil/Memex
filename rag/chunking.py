@@ -178,7 +178,13 @@ def chunk_file(file_path_or_url: str, include_doc: bool = False) -> dict[str, An
 def _parse_chunk_response(data: dict, include_doc: bool = False) -> dict[str, Any]:
     """Parse the Docling Serve chunk response into our chunk format.
 
-    Returns a dict with ``chunks`` (list) and optionally ``markdown`` (str).
+    Expects ``ChunkDocumentResponse`` per docs/docling-openapi.json:
+      - chunks: list[ChunkedDocumentResultItem] (text: str, headings: list[str]|null)
+      - documents: list[DocumentResultItem] (content.md_content: str|null)
+      - processing_time: float
+
+    Defensive isinstance checks handle Docling server version drift where
+    fields may arrive as dicts instead of expected types.
     """
     chunks_raw = data.get("chunks", [])
     documents = data.get("documents", [])
