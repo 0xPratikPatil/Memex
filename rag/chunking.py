@@ -8,6 +8,7 @@ structure-aware, tokenizer-aligned chunking. No local ``docling`` or
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 import httpx
@@ -24,6 +25,7 @@ logger = logging.getLogger("chunking")
 
 # Singleton httpx client for chunking API calls (reused across calls)
 _chunking_client: httpx.Client | None = None
+_chunking_client_lock = threading.Lock()
 
 
 # ── Chunking API helpers ─────────────────────────────────────────────────────
@@ -38,7 +40,11 @@ def _get_chunking_url() -> str:
 def _get_chunking_client() -> httpx.Client:
     """Return a singleton httpx client for chunking API calls."""
     global _chunking_client
-    if _chunking_client is None:
+    if _chunking_client is not None:
+        return _chunking_client
+    with _chunking_client_lock:
+        if _chunking_client is not None:
+            return _chunking_client
         _chunking_client = httpx.Client(
             timeout=httpx.Timeout(config.DOCLING_TIMEOUT, connect=10.0),
             limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),

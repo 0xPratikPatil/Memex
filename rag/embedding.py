@@ -154,9 +154,7 @@ class EmbeddingService:
         """
         url = config.OLLAMA_EMBED_URL
         if "/api/embeddings" in url:
-            from rag import config as cfg
-
-            default_embeddings = f"http://localhost:{cfg.OLLAMA_PORT}/api/embeddings"
+            default_embeddings = f"http://localhost:{config.OLLAMA_PORT}/api/embeddings"
             if url.rstrip("/") == default_embeddings.rstrip("/"):
                 new_url = url.replace("/api/embeddings", "/api/embed")
                 logger.info("Switching default OLLAMA_EMBED_URL to batched endpoint: %s", new_url)

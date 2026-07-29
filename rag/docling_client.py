@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from rag import config
 logger = logging.getLogger("docling-client")
 
 _client: httpx.Client | None = None
+_client_lock = threading.Lock()
 
 
 # ── Structured result ────────────────────────────────────────────────────────
@@ -54,7 +56,11 @@ class ConversionResult:
 
 def _get_client() -> httpx.Client:
     global _client
-    if _client is None or _client.is_closed:
+    if _client is not None and not _client.is_closed:
+        return _client
+    with _client_lock:
+        if _client is not None and not _client.is_closed:
+            return _client
         _client = httpx.Client(
             timeout=httpx.Timeout(config.DOCLING_TIMEOUT, connect=10.0),
             limits=httpx.Limits(
@@ -199,6 +205,10 @@ def parse_local_file(file_path: str) -> ConversionResult:
     if not p.is_file():
         raise FileNotFoundError(f"File not found: {file_path}")
     file_bytes = p.read_bytes()
+    if len(file_bytes) > 200 * 1024 * 1024:  # 200MB limit
+        raise ValueError(
+            f"File too large ({len(file_bytes) / 1024 / 1024:.0f}MB > 200MB). Use chunking module for large files."
+        )
     filename = p.name
     b64 = base64.b64encode(file_bytes).decode("ascii")
 

@@ -85,10 +85,16 @@ class ServiceChecker:
             )
 
     async def check_all(self) -> dict[str, ServiceStatus]:
-        """Check all registered services."""
+        """Check all registered services concurrently."""
+        import asyncio
+
+        async def _check(name: str, url: str) -> tuple[str, ServiceStatus]:
+            return name, await self.check_service(name, url)
+
+        tasks = [_check(name, url) for name, url in self.services.items()]
         results = {}
-        for name, url in self.services.items():
-            results[name] = await self.check_service(name, url)
+        for name, status in await asyncio.gather(*tasks):
+            results[name] = status
         return results
 
     def get_status_summary(self, statuses: dict[str, ServiceStatus]) -> str:

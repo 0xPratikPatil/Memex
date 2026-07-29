@@ -446,7 +446,7 @@ class EvalRunner:
         aggregated["num_queries"] = len(all_metrics)
         aggregated["config"] = {
             "top_k": k,
-            "rerank": config.RERANK_ENABLED,
+            "rerank": config.ENABLE_RERANKING,
             "chunk_size": config.CHUNK_SIZE,
             "chunk_strategy": config.CHUNK_STRATEGY,
         }
@@ -469,7 +469,7 @@ class EvalRunner:
         results = self.engine.hybrid_search(
             query=query,
             top_k=k,
-            rerank=config.RERANK_ENABLED,
+            rerank=config.ENABLE_RERANKING,
         )
         elapsed_ms = (time.monotonic() - t0) * 1000
 

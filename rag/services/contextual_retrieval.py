@@ -130,20 +130,49 @@ class ContextGenerator:
 
         # LLM-based strategies: batch chunks
         batch_size = config.CONTEXT_BATCH_SIZE
-        enriched = []
 
+        # Build all batches first
+        all_batches: list[tuple[list[dict[str, Any]], int]] = []
         for batch_start in range(0, len(chunks), batch_size):
             batch = chunks[batch_start : batch_start + batch_size]
+            all_batches.append((batch, batch_start))
 
-            if strategy == "summary":
+        # For summary strategy, all batches are independent — run concurrently
+        if strategy == "summary" and len(all_batches) > 1:
+            import concurrent.futures
+
+            def _process_summary_batch(
+                batch_info: tuple[list[dict[str, Any]], int],
+            ) -> tuple[int, list[str]]:
+                batch, batch_start = batch_info
                 contexts = self._batch_context_from_summary(batch, document_summary)
-            elif strategy == "surrounding":
+                return batch_start, contexts
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+                batch_results = dict(pool.map(_process_summary_batch, all_batches))
+
+            enriched = []
+            for batch_start in range(0, len(chunks), batch_size):
+                batch = chunks[batch_start : batch_start + batch_size]
+                contexts = batch_results[batch_start]
+                for chunk, context in zip(batch, contexts, strict=True):
+                    enriched_chunk = {**chunk}
+                    enriched_chunk["context_prefix"] = context
+                    if context:
+                        enriched_chunk["content"] = f"{context} {chunk['content']}".strip()
+                    enriched.append(enriched_chunk)
+            return enriched
+
+        # Sequential path for surrounding/header strategies
+        enriched = []
+        for batch, batch_start in all_batches:
+            if strategy == "surrounding":
                 contexts = self._batch_context_from_surrounding(chunks, batch_start, batch_size)
             else:
                 contexts = [self._context_from_header(c.get("section_header", "")) for c in batch]
 
             for chunk, context in zip(batch, contexts, strict=True):
-                enriched_chunk = {**chunk}  # shallow copy to avoid shared metadata mutation
+                enriched_chunk = {**chunk}
                 enriched_chunk["context_prefix"] = context
                 if context:
                     enriched_chunk["content"] = f"{context} {chunk['content']}".strip()
@@ -225,8 +254,6 @@ class ContextGenerator:
         )
         response = self._chat(prompt, num_predict=200 * len(batch))
         # Parse numbered lines
-        import re
-
         lines = re.findall(r"(?:^|\n)\s*\d+[.)]\s*(.+)", response)
         while len(lines) < len(batch):
             lines.append("")

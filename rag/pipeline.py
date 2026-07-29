@@ -54,6 +54,7 @@ logger = logging.getLogger("rag-pipeline")
 
 _eval_timings: dict[str, list[float]] = {}
 _eval_timings_lock = threading.Lock()
+_EVAL_TIMINGS_MAX_PER_STAGE = 1000  # cap per-stage entries to prevent unbounded growth
 
 
 def _record_eval_timing(stage: str, elapsed_ms: float) -> None:
@@ -64,6 +65,8 @@ def _record_eval_timing(stage: str, elapsed_ms: float) -> None:
         if stage not in _eval_timings:
             _eval_timings[stage] = []
         _eval_timings[stage].append(elapsed_ms)
+        if len(_eval_timings[stage]) > _EVAL_TIMINGS_MAX_PER_STAGE:
+            _eval_timings[stage] = _eval_timings[stage][-_EVAL_TIMINGS_MAX_PER_STAGE:]
     logger.debug("eval-timing|%s|%.2fms", stage, elapsed_ms)
 
 
@@ -598,8 +601,15 @@ class RAGEngine:
 
         _progress(f"Generating embeddings ({len(raw_chunks)} chunks)...", 75)
         chunk_texts = [c["content"] for c in raw_chunks]
-        dense_vecs = self._dense_embed_batch(chunk_texts)
-        sparse_vecs = self._sparse_embed(chunk_texts)
+
+        # Dense and sparse embedding are independent — run concurrently
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            dense_future = pool.submit(self._dense_embed_batch, chunk_texts)
+            sparse_future = pool.submit(self._sparse_embed, chunk_texts)
+            dense_vecs = dense_future.result()
+            sparse_vecs = sparse_future.result()
 
         # Generate contextual embeddings (enriched content) if enabled
         contextual_vecs: list[list[float]] | None = None
@@ -803,6 +813,7 @@ class RAGEngine:
         _merge_hits(sparse_hits, rrf_offset=len(dense_hits))
 
         # ── HyDE dense search ──────────────────────────────────────────────
+        hyde_hits: list = []
         if expanded_query and expanded_query.hyde_vector:
             try:
                 hyde_hits = qdrant.query_points(
@@ -820,11 +831,15 @@ class RAGEngine:
         if expanded_query and expanded_query.paraphrases:
             offset = len(dense_hits) + len(sparse_hits)
             if expanded_query.hyde_vector:
-                # Use actual hyde_hits count if available, else candidate_k
-                offset += len(hyde_hits) if "hyde_hits" in dir() else candidate_k
-            for idx, para in enumerate(expanded_query.paraphrases):
+                offset += len(hyde_hits) if hyde_hits else candidate_k
+            # Batch-embed all paraphrases in one call
+            try:
+                para_vecs = self._dense_embed_batch(expanded_query.paraphrases)
+            except Exception:
+                logger.warning("Paraphrase batch embedding failed, skipping", exc_info=True)
+                para_vecs = []
+            for idx, (para, para_dense) in enumerate(zip(expanded_query.paraphrases, para_vecs, strict=True)):
                 try:
-                    para_dense = self._dense_embed(para)
                     para_hits = qdrant.query_points(
                         collection_name=config.COLLECTION_NAME,
                         query=para_dense,

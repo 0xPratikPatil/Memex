@@ -369,7 +369,7 @@ class MetadataExtractor:
             )
 
         # For larger documents, process in parallel batches
-        results: list[dict[str, Any]] = [{}] * len(chunks)
+        results: list[dict[str, Any]] = [{} for _ in range(len(chunks))]
         doc_type_found = False
 
         batches = []
