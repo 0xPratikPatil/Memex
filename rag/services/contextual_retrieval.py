@@ -174,8 +174,6 @@ class ContextGenerator:
         )
         response = self._chat(prompt)
         # Parse numbered lines: "1. context" or "1) context"
-        import re
-
         lines = re.findall(r"(?:^|\n)\s*\d+[.)]\s*(.+)", response)
         # Pad or truncate to match batch size
         while len(lines) < len(batch):
@@ -218,28 +216,11 @@ class ContextGenerator:
         return contexts
 
     def _chat(self, prompt: str, num_predict: int = 200) -> str:
-        """Call Ollama chat API and return the assistant message content.
+        """Call Ollama chat API via shared helper."""
+        from rag.ollama_chat import ollama_chat
 
-        Handles models that return reasoning in a ``thinking`` field
-        (e.g. qwen3.5) by falling back to ``thinking`` when ``content``
-        is empty.
-        """
-        chat_url = config.OLLAMA_EMBED_URL.replace("/api/embeddings", "/api/chat")
-        resp = self._ollama.post(
-            chat_url,
-            json={
-                "model": config.CONTEXT_MODEL or config.CHAT_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": False,
-                "options": {"num_predict": num_predict, "temperature": 0},
-            },
-        )
-        resp.raise_for_status()
-        msg = resp.json()["message"]
-        content = msg.get("content", "")
-        if not content:
-            content = msg.get("thinking", "")
-        return content
+        model = config.CONTEXT_MODEL or config.CHAT_MODEL
+        return ollama_chat(prompt, model=model, num_predict=num_predict, ollama_client=self._ollama)
 
 
 def strip_context_prefix(content: str) -> str:

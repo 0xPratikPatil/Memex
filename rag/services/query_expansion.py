@@ -138,59 +138,15 @@ class QueryExpander:
         return lines[:count]
 
     def _chat(self, prompt: str, num_predict: int = 150) -> str:
-        """Call Ollama chat API and return the assistant message content.
+        """Call Ollama chat API via shared helper."""
+        from rag.ollama_chat import ollama_chat
 
-        Handles models with ``thinking`` field fallback (e.g. qwen3.5).
-        """
-        chat_url = config.OLLAMA_EMBED_URL.replace("/api/embeddings", "/api/chat")
         model = config.HYDE_MODEL or config.MULTI_QUERY_MODEL or config.QUERY_REWRITE_MODEL or config.CHAT_MODEL
-        resp = self._ollama.post(
-            chat_url,
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": False,
-                "options": {"num_predict": num_predict, "temperature": 0},
-            },
-        )
-        resp.raise_for_status()
-        msg = resp.json()["message"]
-        content = msg.get("content", "")
-        if not content:
-            content = msg.get("thinking", "")
-        return content
+        return ollama_chat(prompt, model=model, num_predict=num_predict, ollama_client=self._ollama)
 
     def _embed(self, text: str, model: str | None = None) -> list[float]:
-        """Embed text via Ollama with fallback.
+        """Embed text via EmbeddingService (batched transport, caching, fallback)."""
+        from rag.embedding import EmbeddingService
 
-        Supports both /api/embed (new, batched) and /api/embeddings (legacy).
-        Falls back to EMBED_MODEL_FALLBACK if primary model fails.
-        """
-        if model is None:
-            model = config.EMBED_MODEL
-        try:
-            return self._embed_single(text, model)
-        except Exception as e:
-            if model != config.EMBED_MODEL_FALLBACK:
-                logger.warning("Embedding with %s failed (%s), falling back to %s",
-                               model, e, config.EMBED_MODEL_FALLBACK)
-                return self._embed_single(text, config.EMBED_MODEL_FALLBACK)
-            raise
-
-    def _embed_single(self, text: str, model: str) -> list[float]:
-        """Embed text via Ollama using specified model."""
-        is_new_api = "/api/embed" in config.OLLAMA_EMBED_URL and "/api/embeddings" not in config.OLLAMA_EMBED_URL
-        if is_new_api:
-            resp = self._ollama.post(
-                config.OLLAMA_EMBED_URL,
-                json={"model": model, "input": text},
-            )
-            resp.raise_for_status()
-            return resp.json()["embeddings"][0]
-        else:
-            resp = self._ollama.post(
-                config.OLLAMA_EMBED_URL,
-                json={"model": model, "prompt": text},
-            )
-            resp.raise_for_status()
-            return resp.json()["embedding"]
+        svc = EmbeddingService(self._ollama)
+        return svc.embed([text], model=model)[0]
