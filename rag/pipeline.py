@@ -358,6 +358,31 @@ class RAGEngine:
             )
             logger.info("Created Qdrant collection: %s", config.COLLECTION_NAME)
 
+            # Create payload indexes for filtered searches
+            for field_name, field_type in [
+                ("source", "keyword"),
+                ("content_hash", "keyword"),
+                ("doc_type", "keyword"),
+                ("language", "keyword"),
+            ]:
+                try:
+                    qdrant.create_payload_index(
+                        collection_name=config.COLLECTION_NAME,
+                        field_name=field_name,
+                        field_schema=field_type,
+                    )
+                except Exception:
+                    logger.debug("Payload index already exists for %s", field_name)
+            for field_name in ["topics", "keywords"]:
+                try:
+                    qdrant.create_payload_index(
+                        collection_name=config.COLLECTION_NAME,
+                        field_name=field_name,
+                        field_schema="keyword",
+                    )
+                except Exception:
+                    logger.debug("Payload index already exists for %s", field_name)
+
     # ── Embedding helpers ─────────────────────────────────────────────────
 
     def _get_embedding_service(self) -> EmbeddingService:
@@ -541,13 +566,13 @@ class RAGEngine:
         if config.ENABLE_METADATA_EXTRACTION:
             metadata_extractor = MetadataExtractor(self._get_ollama())
             _progress("Extracting metadata...", 74)
-            for chunk in raw_chunks:
-                chunk_meta = metadata_extractor.extract_all(
-                    chunk=chunk,
-                    document_text=text,
-                    source_identifier=source_identifier,
-                )
-                chunk["metadata"] = chunk_meta
+            batch_meta = metadata_extractor.extract_batch(
+                chunks=raw_chunks,
+                document_text=text,
+                source_identifier=source_identifier,
+            )
+            for chunk, meta in zip(raw_chunks, batch_meta, strict=True):
+                chunk["metadata"] = meta
 
         _progress(f"Generating embeddings ({len(raw_chunks)} chunks)...", 75)
         chunk_texts = [c["content"] for c in raw_chunks]
@@ -654,7 +679,7 @@ class RAGEngine:
         """
         from rag.services.cache import cache_search_results, get_cached_search_results
 
-        cached = get_cached_search_results(query, top_k, source_filter)
+        cached = get_cached_search_results(query, top_k, source_filter, metadata_filter)
         if cached is not None:
             _record_eval_timing("search_cache_hit", 0.0)
             return cached
@@ -793,7 +818,7 @@ class RAGEngine:
             t_rerank = time.monotonic()
             contents = [item["content"] for item in results]
             try:
-                scores, _ = self._rerank(query, contents, top_k=min(top_k, len(contents)))
+                scores, _ = self._rerank(query, contents, top_k=len(contents))
                 for i, score in enumerate(scores):
                     results[i]["rerank_score"] = float(score)
                 results.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)
@@ -803,31 +828,31 @@ class RAGEngine:
 
         final_results = results[:top_k]
         _record_eval_timing("total_search", (time.monotonic() - t_search_start) * 1000)
-        cache_search_results(query, top_k, source_filter, final_results)
+        cache_search_results(query, top_k, source_filter, final_results, metadata_filter)
         return final_results
 
     def list_documents(self) -> list[dict[str, Any]]:
-        """List all unique documents with chunk counts and metadata."""
+        """List all unique documents with chunk counts and metadata.
+
+        Uses minimal payload retrieval to avoid loading full content.
+        For large collections (>100K chunks), this is O(N) but with small constant.
+        """
         qdrant = self._get_qdrant()
 
-        # Scroll through all points to collect source metadata
+        # Only request fields needed for aggregation (not content, which is huge)
         sources: dict[str, dict[str, Any]] = {}
         offset = None
         while True:
             result = qdrant.scroll(
                 collection_name=config.COLLECTION_NAME,
-                limit=100,
+                limit=500,
                 offset=offset,
                 with_payload=[
                     "source",
-                    "chunk_index",
                     "total_chunks",
                     "ingested_at",
-                    "section_header",
                     "doc_type",
-                    "topics",
                     "language",
-                    "keywords",
                 ],
                 with_vectors=False,
             )
@@ -841,33 +866,17 @@ class RAGEngine:
                         "chunk_count": 0,
                         "total_chunks": payload.get("total_chunks", 0),
                         "ingested_at": payload.get("ingested_at", ""),
-                        "sections": set(),
                         "doc_type": payload.get("doc_type", ""),
-                        "topics": set(),
                         "language": payload.get("language", ""),
-                        "keywords": set(),
                     }
                 sources[src]["chunk_count"] += 1
-                header = payload.get("section_header", "")
-                if header:
-                    sources[src]["sections"].add(header)
-                for t in payload.get("topics", []):
-                    sources[src]["topics"].add(t)
-                for kw in payload.get("keywords", []):
-                    sources[src]["keywords"].add(kw)
 
             if next_offset is None:
                 break
             offset = next_offset
 
-        # Convert sets to lists for JSON serialization
-        docs = []
-        for src_info in sources.values():
-            src_info["sections"] = sorted(src_info["sections"])
-            src_info["topics"] = sorted(src_info["topics"])
-            src_info["keywords"] = sorted(src_info["keywords"])
-            docs.append(src_info)
-
+        # Return sorted by ingestion time (newest first)
+        docs = list(sources.values())
         return sorted(docs, key=lambda x: x["ingested_at"], reverse=True)
 
     def get_document_info(self, source_identifier: str) -> dict[str, Any] | None:

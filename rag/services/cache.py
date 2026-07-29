@@ -208,9 +208,13 @@ def cache_search_results(
     top_k: int,
     source_filter: str | None,
     results: list[dict[str, Any]],
+    metadata_filter: dict[str, Any] | None = None,
 ) -> None:
     """Cache search results."""
-    key = f"{query}:{top_k}:{source_filter or ''}"
+    import json as _json
+
+    filter_key = _json.dumps(metadata_filter, sort_keys=True) if metadata_filter else ""
+    key = f"{query}:{top_k}:{source_filter or ''}:{filter_key}"
     set_cached("search", key, results, config.CACHE_TTL_SEARCH)
 
 
@@ -218,9 +222,13 @@ def get_cached_search_results(
     query: str,
     top_k: int,
     source_filter: str | None,
+    metadata_filter: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]] | None:
     """Get cached search results."""
-    key = f"{query}:{top_k}:{source_filter or ''}"
+    import json as _json
+
+    filter_key = _json.dumps(metadata_filter, sort_keys=True) if metadata_filter else ""
+    key = f"{query}:{top_k}:{source_filter or ''}:{filter_key}"
     return get_cached("search", key)
 
 

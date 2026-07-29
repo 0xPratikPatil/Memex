@@ -123,6 +123,7 @@ CHARACTER_LIMIT: int = _env_int("CHARACTER_LIMIT", 25000)
 # ── Feature toggles ──────────────────────────────────────────────────────────
 ENABLE_OCR: bool = _env_bool("ENABLE_OCR", True)
 ENABLE_RERANKING: bool = _env_bool("ENABLE_RERANKING", True)
+ENABLE_RERANKER: bool = _env_bool("ENABLE_RERANKER", True)  # used by prewarm
 
 # ── Docling enrichment ───────────────────────────────────────────────────────
 DOCLING_ENRICH_CODE: bool = _env_bool("DOCLING_ENRICH_CODE", False)  # needs CodeFormula model in serve

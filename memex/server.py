@@ -93,7 +93,7 @@ def _prewarm_models():
                 with httpx.Client(timeout=120) as client:
                     client.post(
                         config.OLLAMA_EMBED_URL,
-                        json={"model": config.EMBED_MODEL, "input": "prewarm"},
+                        json={"model": config.EMBED_MODEL, "input": ["prewarm"]},
                     )
                 logger.info("Embedding model pre-warmed: %s", config.EMBED_MODEL)
             except Exception as exc:
