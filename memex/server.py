@@ -64,24 +64,27 @@ def _get_engine():
 
 
 def _prewarm_models():
-    """Load sparse model, reranker, and Ollama models in background thread.
+    """Load Ollama embedding and chat models in background thread.
 
-    Sends a trivial embedding and chat request to force Ollama to load
-    models from disk into GPU memory.  Without this the first user query
-    incurs a 30-60 s cold-start penalty while the model weights are
-    transferred.
+    Sends a trivial request to force Ollama to load models from disk
+    into GPU memory. Without this the first user query incurs a cold-start
+    penalty while model weights transfer.
     """
     import httpx
 
     def _load():
         try:
             engine = _get_engine()
-            engine._get_sparse_model()
-            logger.info("Sparse model loaded")
-            engine._get_reranker()
-            logger.info("Reranker loaded")
 
-            # ── Prewarm Ollama embedding model (cold-start: ~25-30s) ───
+            # Prewarm local reranker (CrossEncoder, GPU)
+            if config.ENABLE_RERANKER:
+                try:
+                    engine._rerank("warmup", ["warmup"], top_k=1)
+                    logger.info("Reranker loaded")
+                except Exception as exc:
+                    logger.warning("Reranker prewarm failed: %s", exc)
+
+            # Prewarm Ollama embedding model (cold-start: ~25-30s)
             try:
                 with httpx.Client(timeout=120) as client:
                     client.post(
@@ -92,10 +95,10 @@ def _prewarm_models():
             except Exception as exc:
                 logger.warning("Embedding prewarm failed: %s", exc)
 
-            # ── Prewarm Ollama chat model (cold-start: ~50-60s) ────────
+            # Prewarm Ollama chat model (cold-start: ~50-60s)
             try:
                 with httpx.Client(timeout=120) as client:
-                    chat_url = config.OLLAMA_EMBED_URL.replace("/api/embeddings", "/api/chat")
+                    chat_url = config.OLLAMA_EMBED_URL.replace("/api/embed", "/api/chat")
                     client.post(
                         chat_url,
                         json={
@@ -208,19 +211,28 @@ async def rag_ingest_file(input: IngestFileInput, ctx: Context) -> str:
         def _progress(msg: str, pct: int) -> None:
             logger.info("ingest [%d%%] %s", pct, msg)
 
+        # Phase 1+2: Pre-check — skip if file unchanged
+        await ctx.report_progress(progress=2, total=100, message="Checking if already ingested...")
+        can_skip, chunk_count = engine.check_unmodified_local(file_path_or_url)
+        if can_skip:
+            return (
+                f"Already ingested '{file_path_or_url}' "
+                f"({chunk_count} chunks). File unchanged — skipping."
+            )
+
         await ctx.report_progress(progress=5, total=100, message="Reading file from disk...")
         result = parse_file(file_path_or_url)
 
         if not result.ok:
             return f"Error: Docling conversion returned status '{result.status}' with errors: {result.errors}"
 
-        await ctx.report_progress(progress=10, total=100, message="Checking if already ingested...")
+        await ctx.report_progress(progress=10, total=100, message="Checking content hash...")
         content_hash = engine.compute_file_hash(result.markdown.encode())
-        already, chunk_count = engine.is_already_ingested(file_path_or_url, content_hash)
+        already, existing_chunks = engine.is_already_ingested(file_path_or_url, content_hash)
         if already:
             return (
                 f"Already ingested '{file_path_or_url}' "
-                f"({chunk_count} chunks, hash: {content_hash[:12]}...). "
+                f"({existing_chunks} chunks, hash: {content_hash[:12]}...). "
                 f"File unchanged — skipping."
             )
 
@@ -346,38 +358,14 @@ Error Handling:
     ),
 )
 async def rag_ingest_batch(input: IngestBatchInput, ctx: Context) -> dict[str, str]:
-    from rag.docling_client import parse_file
+    from rag.ingestion import IngestionOrchestrator
 
     engine = _get_engine()
-    summary: dict[str, str] = {}
+    orchestrator = IngestionOrchestrator(engine)
+
     total = len(input.items)
-
-    for i, item in enumerate(input.items):
-        try:
-            await ctx.report_progress(progress=i, total=total, message=f"Processing {item}...")
-            result = parse_file(item)
-
-            if not result.ok:
-                summary[item] = f"Failed: Docling status '{result.status}', errors: {result.errors}"
-                continue
-
-            content_hash = engine.compute_file_hash(result.markdown.encode())
-            already, chunk_count = engine.is_already_ingested(item, content_hash)
-            if already:
-                summary[item] = f"Skipped ({chunk_count} chunks, unchanged)"
-                continue
-
-            count = engine.ingest_text(
-                result.markdown,
-                source_identifier=item,
-                metadata={"content_type": item.rsplit(".", 1)[-1] if "." in item else ""},
-                content_hash=content_hash,
-            )
-            summary[item] = f"Success ({count} chunks, {result.processing_time:.1f}s conversion)"
-        except Exception as exc:
-            logger.exception("rag_ingest_batch item failed")
-            summary[item] = f"Failed: {exc}"
-
+    await ctx.report_progress(progress=0, total=total, message="Starting batch ingestion...")
+    summary = await orchestrator.ingest_batch(input.items)
     await ctx.report_progress(progress=total, total=total, message="Batch complete")
     return summary
 
@@ -511,13 +499,13 @@ async def rag_query(input: QueryInput) -> str | QueryOutput:
             lines.append(f"**Score**: {score_str}")
 
             meta_parts = []
-            if r.get("doc_type"):
+            if r.get("doc_type") and r["doc_type"].strip():
                 meta_parts.append(f"Type: {r['doc_type']}")
-            if r.get("topics"):
+            if r.get("topics") and len(r["topics"]) > 0:
                 meta_parts.append(f"Topics: {', '.join(r['topics'])}")
-            if r.get("language"):
+            if r.get("language") and r["language"].strip():
                 meta_parts.append(f"Lang: {r['language']}")
-            if r.get("keywords"):
+            if r.get("keywords") and len(r["keywords"]) > 0:
                 meta_parts.append(f"Keywords: {', '.join(r['keywords'][:5])}")
             if meta_parts:
                 lines.append(f"**Metadata**: {' | '.join(meta_parts)}")
