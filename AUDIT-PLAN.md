@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-37 original issues + 30 new issues found across 9+ domains. All critical and high-severity issues fixed across 9 commits.
+37 original issues + 30 new issues = **67 total issues** found across 9+ domains. **ALL issues fixed** across 11 commits.
 
 ### Completed Commits (this session)
 
@@ -22,10 +22,12 @@
 | `218a96b` | fix: singleton httpx, thread-safe engine, path validation, .dockerignore |
 | `0458699` | refactor: ingestion pipeline (EmbeddingService, IngestionOrchestrator) |
 | `ee4f579` | fix(rag): 7 critical + 3 high pipeline bugs |
+| `7d4fdb6` | docs: AUDIT-PLAN.md updates |
+| `40c2365` | fix: 24 issues — enterprise-grade RAG pipeline hardening |
 
-### Remaining (medium/low severity)
+### Status: ALL ITEMS FIXED ✅
 
-See "Remaining Items" section at bottom of this file.
+See "Remaining Items" section at bottom of this file for detailed fix descriptions.
 
 ### Dependency Versions (Current → Target)
 
@@ -260,40 +262,58 @@ After all phases:
 
 ---
 
-## Remaining Items (medium/low severity, not yet fixed)
+## Remaining Items — ALL FIXED (commit `40c2365`)
 
-### Medium Priority
+### Medium Priority — All Fixed
 
-1. **RRF offset design choice** — `pipeline.py:748` adds `len(dense_hits)` as offset to sparse results. This is a deliberate design choice (dense-first ranking), not a bug. Document in code comments.
+1. **RRF offset design choice** ✅ — Documented in code comments explaining dense-first ranking design choice. Fixed HyDE offset to use actual hit count instead of `candidate_k` approximation.
 
-2. **CausalLMReranker one-pair-at-a-time** — `ml_server.py:87-114`. Causal-LM rerankers process pairs sequentially by design (different prompt lengths prevent true batching). For higher throughput, use vLLM or TGI for batched inference.
+2. **CausalLMReranker one-pair-at-a-time** ✅ — Refactored to batch all pairs into a single forward pass with padding. Eliminates per-pair Python loop overhead.
 
-3. **Contextual retrieval surrounding strategy N+1** — `contextual_retrieval.py:183-216`. The "batch" method actually processes one chunk at a time. True batching would require a different prompt design.
+3. **Contextual retrieval surrounding strategy N+1** ✅ — Refactored to use single LLM call with all chunk contexts. Parses numbered response lines.
 
-4. **Query expansion creates new EmbeddingService per call** — `query_expansion.py:147-152`. Minor object creation overhead.
+4. **Query expansion creates new EmbeddingService per call** ✅ — Changed to lazy singleton pattern, reused across calls.
 
-5. **No Qdrant collection optimization wait** — `pipeline.py:349`. After create_collection, no wait for optimizer. First query may be slow.
+5. **No Qdrant collection optimization wait** ✅ — Added 15s poll loop waiting for `optimizer_status == "ok"` after `create_collection`.
 
-6. **get_document_info truncates at 1000 chunks** — `pipeline.py:893`. Should use pagination or increase limit.
+6. **get_document_info truncates at 1000 chunks** ✅ — Replaced with full pagination using `scroll(next_offset)`. No truncation.
 
-7. **Sequential ingest in batch mode** — `ingestion.py:143-165`. After concurrent parsing, embedding runs sequentially per file.
+7. **Sequential ingest in batch mode** ✅ — Parallelized with `asyncio.Semaphore(MAX_CONCURRENT_PARSES)`. Single state save at end.
 
-### Low Priority
+### Low Priority — All Fixed
 
-8. **_eval_timings not thread-safe** — `pipeline.py:54-74`. Minor race condition in debug timing.
+8. **_eval_timings not thread-safe** ✅ — Added `threading.Lock` around all dict mutations.
 
-9. **_build_convert_options duplicated** — `chunking.py:80-102` and `docling_client.py:88-110`.
+9. **_build_convert_options duplicated** ✅ — Extracted shared `build_docling_options()` in `docling_client.py`. `chunking.py` delegates to it with `to_formats=["md"]`.
 
-10. **Missing entities/dates in SearchResult schema** — `schemas.py:122-135`. Pipeline populates them but schema doesn't expose them.
+10. **Missing entities/dates in SearchResult schema** ✅ — Added `entities: dict` and `dates: list[str]` fields.
 
-11. **_recursive_chunk overlap >2x max_tokens** — `pipeline.py:207-219`. Edge case with large overlap.
+11. **_recursive_chunk overlap >2x max_tokens** ✅ — Bounded to `max_tokens * 1.5` (was `* 2`).
 
-12. **Word-level fallback 77% overlap** — `pipeline.py:178-181`. Excessive redundancy.
+12. **Word-level fallback 77% overlap** ✅ — Fixed dead arithmetic `(x*4)//4` → `x`. Reduced overlap to ~25%.
 
-13. **No connection pool for Ollama in prewarm** — `server.py:92-117`. Creates throwaway clients.
+13. **No connection pool for Ollama in prewarm** ✅ — Parallel prewarm with dedicated `httpx.Client` per thread, proper `close()`.
 
-14. **extract_batch dead code** — `metadata_extractor.py:346-374`. Exists but was not called (now fixed to be called).
+14. **extract_batch dead code** ✅ — Already fixed in previous commit (called from `ingest_text`).
 
-15. **_recursive_chunk dead arithmetic** — `pipeline.py:231-232`. `(max_tokens * 4) // 4` = `max_tokens`.
+15. **_recursive_chunk dead arithmetic** ✅ — Simplified `(max_tokens * 4) // 4` → `max_tokens`, `(overlap_tokens * 4) // 4` → `overlap_tokens`.
 
-16. **Comment stripping truncates URLs with #** — `config.py:27`. Edge case for URLs with fragments.
+16. **Comment stripping truncates URLs with #** ✅ — Changed to regex `\s+#.*$` — only strips `#` when preceded by whitespace. URLs like `redis://host:6379/0#channel` preserved.
+
+### Additional Bugs Found & Fixed (RAG Tech Spec Review)
+
+17. **Reranker score misalignment** ✅ — Fixed to use returned `indices` from `_rerank()` instead of sequential enumeration.
+
+18. **Redis `max_connections` on wrong object** ✅ — Moved to `ConnectionPool.from_url(max_connections=10)`.
+
+19. **Cache invalidation nukes all docs** ✅ — Changed to document-scoped scan+delete (checks source_identifier in data/key).
+
+20. **No embedding dimension validation** ✅ — Added `len(vec) == DENSE_DIM` check after embed.
+
+21. **Query expansion model selection wrong** ✅ — Per-technique model routing (rewrite→QUERY_REWRITE_MODEL, hyde→HYDE_MODEL, multi→MULTI_QUERY_MODEL).
+
+22. **MCP_HOST defaults to 0.0.0.0** ✅ — Changed to `127.0.0.1`.
+
+23. **No retry on embedding HTTP calls** ✅ — Added `@retry` decorator with tenacity.
+
+24. **Chunking file size guard** ✅ — Added 200MB limit for base64 encoding.
