@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import logging
+import os
 import re
 import time
 import uuid
@@ -39,14 +40,9 @@ from qdrant_client.models import (
     SparseVectorParams,
     VectorParams,
 )
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
 
 from rag import config
+from rag.embedding import EmbeddingService
 from rag.services.contextual_retrieval import ContextGenerator, strip_context_prefix
 from rag.services.metadata_extractor import MetadataExtractor
 from rag.services.query_expansion import ExpandedQuery
@@ -299,6 +295,7 @@ class RAGEngine:
         self._qdrant: QdrantClient | None = None
         self._ollama: httpx.Client | None = None
         self._ml_services: httpx.Client | None = None
+        self._embedding_svc: EmbeddingService | None = None
 
     # ── Lazy singletons ───────────────────────────────────────────────────
 
@@ -363,91 +360,23 @@ class RAGEngine:
 
     # ── Embedding helpers ─────────────────────────────────────────────────
 
-    @retry(
-        retry=retry_if_exception_type((httpx.TransportError, httpx.TimeoutException)),
-        stop=stop_after_attempt(config.HTTP_MAX_RETRIES),
-        wait=wait_exponential(multiplier=config.HTTP_RETRY_BACKOFF, max=10),
-        reraise=True,
-    )
+    def _get_embedding_service(self) -> EmbeddingService:
+        """Lazy-init the EmbeddingService singleton."""
+        if self._embedding_svc is None:
+            self._embedding_svc = EmbeddingService(self._get_ollama())
+        return self._embedding_svc
+
     def _dense_embed_batch(self, texts: list[str], model: str | None = None) -> list[list[float]]:
-        """Embed a batch of texts via Ollama.
+        """Embed a batch of texts via the EmbeddingService.
 
-        Supports both the legacy ``/api/embeddings`` endpoint (prompt field)
-        and the current ``/api/embed`` endpoint (input field, batched).
-        Falls back to EMBED_MODEL_FALLBACK if primary model fails.
+        Delegates to ``EmbeddingService.embed()`` which handles caching,
+        batched transport via /api/embed, and model fallback.
         """
-        from rag.services.cache import get_cached_embedding
-
-        if model is None:
-            model = config.EMBED_MODEL
-        client = self._get_ollama()
-
-        uncached_texts: list[tuple[int, str]] = []
-        cached_map: dict[int, list[float]] = {}
-
-        for idx, text in enumerate(texts):
-            cached = get_cached_embedding(text, model=model)
-            if cached is not None:
-                cached_map[idx] = cached
-            else:
-                uncached_texts.append((idx, text))
-
-        if uncached_texts:
-            try:
-                self._embed_via_ollama(client, uncached_texts, cached_map, model)
-            except Exception as e:
-                if model != config.EMBED_MODEL_FALLBACK:
-                    logger.warning("Embedding with %s failed (%s), falling back to %s",
-                                   model, e, config.EMBED_MODEL_FALLBACK)
-                    self._embed_via_ollama(client, uncached_texts, cached_map, config.EMBED_MODEL_FALLBACK)
-                else:
-                    raise
-
-        return [cached_map[i] for i in range(len(texts))]
-
-    def _embed_via_ollama(
-        self,
-        client: httpx.Client,
-        uncached_texts: list[tuple[int, str]],
-        cached_map: dict[int, list[float]],
-        model: str,
-    ) -> None:
-        """Embed uncached texts via Ollama, storing results in cached_map."""
-        from rag.services.cache import cache_embedding
-
-        is_new_api = "/api/embed" in config.OLLAMA_EMBED_URL and "/api/embeddings" not in config.OLLAMA_EMBED_URL
-        if is_new_api:
-            for idx, text in uncached_texts:
-                resp = client.post(
-                    config.OLLAMA_EMBED_URL,
-                    json={"model": model, "input": text},
-                )
-                resp.raise_for_status()
-                emb = resp.json()["embeddings"][0]
-                cache_embedding(text, emb, model=model)
-                cached_map[idx] = emb
-        else:
-            for idx, text in uncached_texts:
-                resp = client.post(
-                    config.OLLAMA_EMBED_URL,
-                    json={"model": model, "prompt": text},
-                )
-                resp.raise_for_status()
-                emb = resp.json()["embedding"]
-                cache_embedding(text, emb, model=model)
-                cached_map[idx] = emb
+        return self._get_embedding_service().embed(texts, model=model)
 
     def _dense_embed(self, text: str) -> list[float]:
-        """Embed a single text."""
-        from rag.services.cache import cache_embedding, get_cached_embedding
-
-        cached = get_cached_embedding(text)
-        if cached is not None:
-            return cached
-
-        embedding = self._dense_embed_batch([text])[0]
-        cache_embedding(text, embedding)
-        return embedding
+        """Embed a single text via the EmbeddingService."""
+        return self._dense_embed_batch([text])[0]
 
     def _sparse_embed(self, texts: list[str]) -> list[dict[str, float]]:
         """Get sparse embeddings via configured provider (http or local)."""
@@ -522,6 +451,52 @@ class RAGEngine:
             return True, (points[0].payload or {}).get("total_chunks", 0)
         return False, 0
 
+    def source_exists(self, source_identifier: str) -> tuple[bool, int, float | None, int | None]:
+        """Check if a source exists in Qdrant (Phase 1 check).
+
+        Returns (exists, chunk_count, file_mtime, file_size).
+        Only the first matching point is queried for metadata.
+        """
+        qdrant = self._get_qdrant()
+        result = qdrant.scroll(
+            collection_name=config.COLLECTION_NAME,
+            limit=1,
+            scroll_filter=Filter(
+                must=[
+                    FieldCondition(key="source", match=MatchValue(value=source_identifier)),
+                ]
+            ),
+            with_payload=["total_chunks", "file_mtime", "file_size"],
+            with_vectors=False,
+        )
+        points, _ = result
+        if points:
+            payload = points[0].payload or {}
+            return True, payload.get("total_chunks", 0), payload.get("file_mtime"), payload.get("file_size")
+        return False, 0, None, None
+
+    def check_unmodified_local(self, source_identifier: str) -> tuple[bool, int]:
+        """Phase 2 check: is a local file unchanged since last ingestion?
+
+        Compares current os.stat mtime+size against stored payload values.
+        Returns (can_skip, chunk_count). If any stat call fails, returns False.
+        """
+        exists, chunk_count, stored_mtime, stored_size = self.source_exists(source_identifier)
+        if not exists:
+            return False, 0
+        try:
+            st = os.stat(source_identifier)
+            if (
+                stored_mtime is not None
+                and stored_size is not None
+                and abs(st.st_mtime - stored_mtime) < 1.0
+                and st.st_size == stored_size
+            ):
+                return True, chunk_count
+        except OSError:
+            pass
+        return False, 0
+
     def ingest_text(
         self,
         text: str,
@@ -589,6 +564,17 @@ class RAGEngine:
         now = datetime.now(UTC).isoformat()
         base_meta = metadata or {}
 
+        # Capture file stat if source is a local file
+        file_mtime: float | None = None
+        file_size: int | None = None
+        if os.path.isfile(source_identifier):
+            try:
+                st = os.stat(source_identifier)
+                file_mtime = st.st_mtime
+                file_size = st.st_size
+            except OSError:
+                pass
+
         points: list[PointStruct] = []
         for idx, (chunk, dense_vec, sparse_dict) in enumerate(zip(raw_chunks, dense_vecs, sparse_vecs, strict=True)):
             point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{source_identifier}_{idx}"))
@@ -604,6 +590,18 @@ class RAGEngine:
                 **(chunk.get("metadata", {})),
                 **base_meta,
             }
+            if file_mtime is not None:
+                point_meta["file_mtime"] = file_mtime
+            if file_size is not None:
+                point_meta["file_size"] = file_size
+
+            # Clear stale metadata when extraction is disabled
+            if not config.ENABLE_METADATA_EXTRACTION:
+                point_meta.setdefault("doc_type", "")
+                point_meta.setdefault("topics", [])
+                point_meta.setdefault("language", "")
+                point_meta.setdefault("keywords", [])
+                point_meta.setdefault("entities", {})
 
             vectors: dict[str, Any] = {
                 "dense": dense_vec,

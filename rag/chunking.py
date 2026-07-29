@@ -22,6 +22,9 @@ from rag import config
 
 logger = logging.getLogger("chunking")
 
+# Singleton httpx client for chunking API calls (reused across calls)
+_chunking_client: httpx.Client | None = None
+
 
 # ── Chunking API helpers ─────────────────────────────────────────────────────
 
@@ -30,6 +33,17 @@ def _get_chunking_url() -> str:
     """Build the chunking endpoint URL from the Docling base URL."""
     base = config.DOCLING_URL.split("/v1/convert")[0]
     return f"{base}/v1/chunk/hybrid/source"
+
+
+def _get_chunking_client() -> httpx.Client:
+    """Return a singleton httpx client for chunking API calls."""
+    global _chunking_client
+    if _chunking_client is None:
+        _chunking_client = httpx.Client(
+            timeout=httpx.Timeout(config.DOCLING_TIMEOUT, connect=10.0),
+            limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+        )
+    return _chunking_client
 
 
 @retry(
@@ -41,19 +55,13 @@ def _get_chunking_url() -> str:
 def _post_chunking(payload: dict) -> dict:
     """POST to the Docling Serve chunking endpoint."""
     url = _get_chunking_url()
-    client = httpx.Client(
-        timeout=httpx.Timeout(config.DOCLING_TIMEOUT, connect=10.0),
-        limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
-    )
-    try:
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if config.DOCLING_API_KEY:
-            headers["X-Api-Key"] = config.DOCLING_API_KEY
-        resp = client.post(url, json=payload, headers=headers)
-        resp.raise_for_status()
-        return resp.json()
-    finally:
-        client.close()
+    client = _get_chunking_client()
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if config.DOCLING_API_KEY:
+        headers["X-Api-Key"] = config.DOCLING_API_KEY
+    resp = client.post(url, json=payload, headers=headers)
+    resp.raise_for_status()
+    return resp.json()
 
 
 # ── Chunking options ─────────────────────────────────────────────────────────

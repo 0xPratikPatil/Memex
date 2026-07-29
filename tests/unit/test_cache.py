@@ -40,7 +40,7 @@ class TestHashKey:
 
     def test_length(self) -> None:
         h = _hash_key("test")
-        assert len(h) == 16
+        assert len(h) == 24
 
     def test_hex_only(self) -> None:
         h = _hash_key("test")

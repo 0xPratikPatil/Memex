@@ -91,7 +91,7 @@ def _get_redis() -> Any:
 def _hash_key(*parts: str) -> str:
     """Create a deterministic cache key hash from parts."""
     combined = ":".join(str(p) for p in parts)
-    return hashlib.sha256(combined.encode()).hexdigest()[:16]
+    return hashlib.sha256(combined.encode()).hexdigest()[:24]
 
 
 def get_cached(namespace: str, key_parts: str) -> Any | None:

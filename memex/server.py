@@ -45,10 +45,11 @@ CHARACTER_LIMIT = config.CHARACTER_LIMIT
 mcp = FastMCP("memex-rag")
 
 _engine = None
+_engine_lock = threading.Lock()
 
 
 def _get_engine():
-    """Return the RAGEngine singleton, creating it on first call.
+    """Return the RAGEngine singleton, creating it on first call (thread-safe).
 
     Also forces Qdrant connection and collection creation so the first
     tool call (ingest, query, stats, etc.) never fails with "collection
@@ -57,10 +58,12 @@ def _get_engine():
     """
     global _engine
     if _engine is None:
-        from rag.pipeline import RAGEngine
+        with _engine_lock:
+            if _engine is None:
+                from rag.pipeline import RAGEngine
 
-        _engine = RAGEngine()
-        _engine._get_qdrant()  # ensures collection exists before any tool runs
+                _engine = RAGEngine()
+                _engine._get_qdrant()  # ensures collection exists before any tool runs
     return _engine
 
 
@@ -222,6 +225,17 @@ async def rag_ingest_file(input: IngestFileInput, ctx: Context) -> str:
             )
 
         await ctx.report_progress(progress=5, total=100, message="Reading file from disk...")
+
+        # Validate local file path (reject relative paths and non-existent files)
+        import os
+
+        if not file_path_or_url.startswith(("http://", "https://")):
+            abs_path = os.path.abspath(file_path_or_url)
+            if not os.path.isfile(abs_path):
+                return f"Error: File not found: {file_path_or_url}"
+            if abs_path != file_path_or_url and not file_path_or_url.startswith("/"):
+                return f"Error: Relative paths not allowed. Use absolute path: {abs_path}"
+
         result = parse_file(file_path_or_url)
 
         if not result.ok:

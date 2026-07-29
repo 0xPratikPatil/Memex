@@ -1,87 +1,14 @@
-# ── Version control ──
-.git/
-**/.git/
-.gitattributes
-.gitignore
-.github/
-
-# ── Python artifacts ──
-__pycache__/
-*.py[cod]
+.git
+.venv
+.mypy_cache
+.pytest_cache
+.ruff_cache
+__pycache__
+node_modules
+tests
+docs
+*.pyc
 *.pyo
-*.egg-info/
-*.egg
-dist/
-build/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.tox/
-.coverage
-htmlcov/
-
-# ── Virtual environments ──
-.venv/
-venv/
-env/
-.cache/
-
-# ── Secrets & environment ──
 .env
 .env.*
-!env.example
-
-# ── IDE & editor ──
-.idea/
-.vscode/
-.vs/
-*.swp
-*.swo
-*~
-.DS_Store
-Thumbs.db
-
-# ── Project config files (not needed in image) ──
-.opencode/
-AGENTS.md
-Makefile
-pre-commit-config.yaml
-uv.lock
-
-# ── Docker (avoid recursive build context) ──
-Dockerfile
-.dockerignore
-docker-compose*.yml
-docker-compose*.yaml
-opencode-docker/
-
-# ── Tests ──
-tests/
-test_files/
-test_document.md
-pytest.ini
-
-# ── Documentation ──
-*.md
-docs/
-LICENSE
-
-# ── Runtime data (mounted volumes, not baked in) ──
-qdrant_data/
-ollama_data/
-redis_data/
-
-# ── Scripts ──
-scripts/
-
-# ── Logs & temp ──
-*.log
-tmp/
-temp/
-*.tmp
-
-# ── Archives ──
-*.tar
-*.tar.gz
-*.tgz
-*.zip
+!.env.example
