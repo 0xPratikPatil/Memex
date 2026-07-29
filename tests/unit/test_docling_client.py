@@ -116,6 +116,7 @@ class TestParseLocalFile:
             assert result.markdown == "Cached content"
             assert result.processing_time == 0.5
 
+    @patch("rag.docling_client.config.DOCLING_PICTURE_CLASSIFY", True)
     def test_uses_correct_docling_options(self, tmp_path: Path) -> None:
         """Should include proper conversion options in payload."""
         test_file = tmp_path / "test.pdf"

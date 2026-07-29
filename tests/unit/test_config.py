@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from importlib import reload
+from unittest.mock import patch
 
 from rag import config
 
@@ -63,8 +65,9 @@ class TestEmbeddingDefaults:
 
 class TestContextualRetrievalDefaults:
     def test_enabled_by_default(self):
-        reload(config)
-        assert config.ENABLE_CONTEXTUAL_RETRIEVAL is True
+        with patch.dict(os.environ, {"ENABLE_CONTEXTUAL_RETRIEVAL": "true"}, clear=False):
+            reload(config)
+            assert config.ENABLE_CONTEXTUAL_RETRIEVAL is True
 
     def test_strategy_default_summary(self):
         reload(config)
@@ -73,20 +76,24 @@ class TestContextualRetrievalDefaults:
 
 class TestMetadataDefaults:
     def test_metadata_extraction_enabled(self):
-        reload(config)
-        assert config.ENABLE_METADATA_EXTRACTION is True
+        with patch.dict(os.environ, {"ENABLE_METADATA_EXTRACTION": "true"}, clear=False):
+            reload(config)
+            assert config.ENABLE_METADATA_EXTRACTION is True
 
     def test_entity_extraction_enabled(self):
-        reload(config)
-        assert config.ENABLE_ENTITY_EXTRACTION is True
+        with patch.dict(os.environ, {"ENABLE_ENTITY_EXTRACTION": "true"}, clear=False):
+            reload(config)
+            assert config.ENABLE_ENTITY_EXTRACTION is True
 
     def test_doc_classification_enabled(self):
-        reload(config)
-        assert config.ENABLE_DOC_CLASSIFICATION is True
+        with patch.dict(os.environ, {"ENABLE_DOC_CLASSIFICATION": "true"}, clear=False):
+            reload(config)
+            assert config.ENABLE_DOC_CLASSIFICATION is True
 
     def test_topic_tagging_enabled(self):
-        reload(config)
-        assert config.ENABLE_TOPIC_TAGGING is True
+        with patch.dict(os.environ, {"ENABLE_TOPIC_TAGGING": "true"}, clear=False):
+            reload(config)
+            assert config.ENABLE_TOPIC_TAGGING is True
 
 
 class TestDoclingEnrichmentDefaults:
@@ -99,8 +106,9 @@ class TestDoclingEnrichmentDefaults:
         assert config.DOCLING_ENRICH_FORMULA is False
 
     def test_picture_classify_default_true(self):
-        reload(config)
-        assert config.DOCLING_PICTURE_CLASSIFY is True
+        with patch.dict(os.environ, {"DOCLING_PICTURE_CLASSIFY": "true"}, clear=False):
+            reload(config)
+            assert config.DOCLING_PICTURE_CLASSIFY is True
 
     def test_chart_extract_default_false(self):
         reload(config)
