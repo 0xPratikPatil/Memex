@@ -39,6 +39,7 @@ class TestRagIngestFile:
             mock_parse.return_value = mock_result
 
             with patch("memex.server._get_engine") as mock_engine:
+                mock_engine.return_value.check_unmodified_local.return_value = (False, 0)
                 mock_engine.return_value.compute_file_hash.return_value = "abc123def456"
                 mock_engine.return_value.is_already_ingested.return_value = (False, 0)
                 mock_engine.return_value.ingest_text.return_value = 5
@@ -71,26 +72,18 @@ class TestRagIngestFile:
 
     @pytest.mark.asyncio
     async def test_skips_already_ingested_file(self, tmp_path: Path, mock_ctx: MagicMock) -> None:
-        """Should skip ingestion if file already ingested with same hash."""
+        """Should skip ingestion if file unchanged (pre-check via check_unmodified_local)."""
         test_file = tmp_path / "test.txt"
         test_file.write_bytes(b"Test content")
 
-        with patch("rag.docling_client.parse_file") as mock_parse:
-            mock_result = MagicMock()
-            mock_result.ok = True
-            mock_result.markdown = "# Content"
-            mock_result.processing_time = 1.0
-            mock_parse.return_value = mock_result
+        with patch("memex.server._get_engine") as mock_engine:
+            mock_engine.return_value.check_unmodified_local.return_value = (True, 10)
 
-            with patch("memex.server._get_engine") as mock_engine:
-                mock_engine.return_value.compute_file_hash.return_value = "abc123def456"
-                mock_engine.return_value.is_already_ingested.return_value = (True, 10)
+            result = await rag_ingest_file(IngestFileInput(file_path_or_url=str(test_file)), mock_ctx)
 
-                result = await rag_ingest_file(IngestFileInput(file_path_or_url=str(test_file)), mock_ctx)
-
-                assert "Already ingested" in result
-                assert "10 chunks" in result
-                assert "skipping" in result
+            assert "Already ingested" in result
+            assert "10 chunks" in result
+            assert "skipping" in result
 
     @pytest.mark.asyncio
     async def test_handles_file_not_found_error(self, mock_ctx: MagicMock) -> None:
@@ -131,6 +124,7 @@ class TestRagIngestFile:
             mock_parse.return_value = mock_result
 
             with patch("memex.server._get_engine") as mock_engine:
+                mock_engine.return_value.check_unmodified_local.return_value = (False, 0)
                 mock_engine.return_value.compute_file_hash.return_value = "abc123def456"
                 mock_engine.return_value.is_already_ingested.return_value = (False, 0)
                 mock_engine.return_value.ingest_text.return_value = 3
@@ -156,6 +150,7 @@ class TestRagIngestFile:
             mock_parse.return_value = mock_result
 
             with patch("memex.server._get_engine") as mock_engine:
+                mock_engine.return_value.check_unmodified_local.return_value = (False, 0)
                 mock_engine.return_value.compute_file_hash.return_value = "abc123"
                 mock_engine.return_value.is_already_ingested.return_value = (False, 0)
                 mock_engine.return_value.ingest_text.return_value = 3
@@ -205,27 +200,19 @@ class TestRagIngestBatch:
     """Test MCP tool for batch ingesting multiple items."""
 
     @pytest.mark.asyncio
-    async def test_ingest_batch_not_called_with_docling_json(self, mock_ctx: MagicMock) -> None:
-        """ingest_text() must NOT receive docling_json from rag_ingest_batch."""
-        with patch("rag.docling_client.parse_file") as mock_parse:
-            mock_result = MagicMock()
-            mock_result.ok = True
-            mock_result.markdown = "# Content"
-            mock_result.json_content = {"some": "data"}
-            mock_result.processing_time = 1.0
-            mock_parse.return_value = mock_result
+    async def test_ingest_batch_delegates_to_orchestrator(self, mock_ctx: MagicMock) -> None:
+        """rag_ingest_batch should delegate to IngestionOrchestrator."""
+        items = ["https://example.com/doc"]
+        with patch("rag.ingestion.IngestionOrchestrator") as mock_orch_class:
+            mock_orch = mock_orch_class.return_value
+            mock_orch.ingest_batch = AsyncMock(return_value={
+                items[0]: "Success (2 chunks, 1.0s conversion)"
+            })
 
-            with patch("memex.server._get_engine") as mock_engine:
-                mock_engine.return_value.compute_file_hash.return_value = "abc123"
-                mock_engine.return_value.is_already_ingested.return_value = (False, 0)
-                mock_engine.return_value.ingest_text.return_value = 2
+            result = await rag_ingest_batch(
+                IngestBatchInput(items=items),
+                mock_ctx,
+            )
 
-                await rag_ingest_batch(
-                    IngestBatchInput(items=["https://example.com/doc"]),
-                    mock_ctx,
-                )
-
-                call_kwargs = mock_engine.return_value.ingest_text.call_args[1]
-                assert "docling_json" not in call_kwargs, (
-                    "ingest_text() received docling_json but pipeline doesn't accept it"
-                )
+            mock_orch.ingest_batch.assert_called_once_with(items)
+            assert "Success" in result[items[0]]

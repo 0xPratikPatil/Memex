@@ -26,7 +26,14 @@ def mock_ollama() -> httpx.Client:
             content = "This section discusses financial metrics."
             resp.json.return_value = {"message": {"role": "assistant", "content": content}}
         elif "/api/embeddings" in url:
-            resp.json.return_value = {"embedding": [0.1] * config.DENSE_DIM}
+            resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
+        elif "/api/embed" in url:
+            json_data = payload or kwargs.get("json") or {}
+            if isinstance(json_data, dict) and "messages" in json_data:
+                content = "This section discusses financial metrics."
+                resp.json.return_value = {"message": {"role": "assistant", "content": content}}
+            else:
+                resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
         else:
             resp.json.return_value = {}
 

@@ -26,7 +26,14 @@ def mock_ollama() -> httpx.Client:
             content = "mocked response from the LLM"
             resp.json.return_value = {"message": {"role": "assistant", "content": content}}
         elif "/api/embeddings" in url:
-            resp.json.return_value = {"embedding": [0.1] * config.DENSE_DIM}
+            resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
+        elif "/api/embed" in url:
+            json_data = payload or kwargs.get("json") or {}
+            if isinstance(json_data, dict) and "messages" in json_data:
+                content = "mocked response from the LLM"
+                resp.json.return_value = {"message": {"role": "assistant", "content": content}}
+            else:
+                resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
         else:
             resp.json.return_value = {}
 
@@ -157,7 +164,8 @@ class TestMultiQuery:
         def _multi_line_post(url: str, payload: dict | None = None, **kwargs: object) -> MagicMock:
             resp = MagicMock()
             resp.raise_for_status = MagicMock()
-            if "/api/chat" in url:
+            json_data = payload or kwargs.get("json") or {}
+            if ("/api/chat" in url or "/api/embed" in url) and isinstance(json_data, dict) and "messages" in json_data:
                 resp.json.return_value = {
                     "message": {
                         "role": "assistant",
@@ -165,7 +173,7 @@ class TestMultiQuery:
                     }
                 }
             else:
-                resp.json.return_value = {"embedding": [0.1] * config.DENSE_DIM}
+                resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
             return resp
 
         expander._ollama.post = MagicMock(side_effect=_multi_line_post)
@@ -179,7 +187,8 @@ class TestMultiQuery:
         def _post_with_blanks(url: str, payload: dict | None = None, **kwargs: object) -> MagicMock:
             resp = MagicMock()
             resp.raise_for_status = MagicMock()
-            if "/api/chat" in url:
+            json_data = payload or kwargs.get("json") or {}
+            if ("/api/chat" in url or "/api/embed" in url) and isinstance(json_data, dict) and "messages" in json_data:
                 resp.json.return_value = {
                     "message": {
                         "role": "assistant",
@@ -187,7 +196,7 @@ class TestMultiQuery:
                     }
                 }
             else:
-                resp.json.return_value = {"embedding": [0.1] * config.DENSE_DIM}
+                resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
             return resp
 
         expander._ollama.post = MagicMock(side_effect=_post_with_blanks)
@@ -206,14 +215,15 @@ class TestCombinedExpansion:
         def _post(url: str, payload: dict | None = None, **kwargs: object) -> MagicMock:
             resp = MagicMock()
             resp.raise_for_status = MagicMock()
-            if "/api/chat" in url:
-                content = payload["messages"][0]["content"] if payload else "response"
-                # For multi-query, return multiple lines
+            json_data = payload or kwargs.get("json") or {}
+            if ("/api/chat" in url or "/api/embed" in url) and isinstance(json_data, dict) and "messages" in json_data:
+                msg_content = json_data["messages"][0]["content"]
+                content = msg_content
                 if "paraphrase" in content.lower() or "Generate" in content:
                     content = "variation 1\nvariation 2\nvariation 3"
                 resp.json.return_value = {"message": {"role": "assistant", "content": content}}
             else:
-                resp.json.return_value = {"embedding": [0.5] * config.DENSE_DIM}
+                resp.json.return_value = {"embeddings": [[0.5] * config.DENSE_DIM]}
             return resp
 
         expander._ollama.post = MagicMock(side_effect=_post)

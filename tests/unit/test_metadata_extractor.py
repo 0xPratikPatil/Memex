@@ -53,8 +53,40 @@ def mock_ollama() -> httpx.Client:
                 }
             else:
                 resp.json.return_value = {"message": {"role": "assistant", "content": "report"}}
+        elif "/api/embed" in url:
+            json_data = kwargs.get("json") or {}
+            if isinstance(json_data, dict) and "messages" in json_data:
+                msg_content = ""
+                msgs = json_data.get("messages", [])
+                if msgs:
+                    msg_content = msgs[0].get("content", "")
+                if "Classify this document" in msg_content:
+                    resp.json.return_value = {"message": {"role": "assistant", "content": "report"}}
+                elif "Extract named entities" in msg_content:
+                    resp.json.return_value = {
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps(
+                                {
+                                    "people": ["Alice Smith"],
+                                    "organizations": ["Acme Corp"],
+                                    "dates": ["2026-01-15"],
+                                    "locations": ["New York"],
+                                    "products": ["Widget Pro"],
+                                }
+                            ),
+                        }
+                    }
+                elif "topic labels" in msg_content:
+                    resp.json.return_value = {
+                        "message": {"role": "assistant", "content": json.dumps(["finance", "revenue"])}
+                    }
+                else:
+                    resp.json.return_value = {"message": {"role": "assistant", "content": "report"}}
+            else:
+                resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
         elif "/api/embeddings" in url:
-            resp.json.return_value = {"embedding": [0.1] * config.DENSE_DIM}
+            resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
         else:
             resp.json.return_value = {}
 

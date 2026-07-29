@@ -64,7 +64,7 @@ MCP_PORT: int = _env_int("MCP_PORT", 8080)
 
 # ── Service URLs (constructed from ports, overridable via explicit *_URL env) ─
 DOCLING_URL: str = _env("DOCLING_URL", f"http://localhost:{DOCLING_PORT}/v1/convert/source")
-OLLAMA_EMBED_URL: str = _env("OLLAMA_EMBED_URL", f"http://localhost:{OLLAMA_PORT}/api/embeddings")
+OLLAMA_EMBED_URL: str = _env("OLLAMA_EMBED_URL", f"http://localhost:{OLLAMA_PORT}/api/embed")
 QDRANT_URL: str = _env("QDRANT_URL", f"http://localhost:{QDRANT_PORT}")
 ML_SERVICES_URL: str = _env("ML_SERVICES_URL", f"http://localhost:{ML_SERVICES_PORT}")
 REDIS_URL: str = _env("REDIS_URL", f"redis://localhost:{REDIS_PORT}/0")
@@ -76,7 +76,7 @@ DOCLING_API_KEY: str = _env("DOCLING_API_KEY", "")
 # ── Model / collection names ──────────────────────────────────────────────────
 COLLECTION_NAME: str = _env("COLLECTION_NAME", "memex")
 EMBED_MODEL: str = _env("EMBED_MODEL", "qwen3-embedding:0.6b")
-EMBED_MODEL_FALLBACK: str = _env("EMBED_MODEL_FALLBACK", "bge-m3")
+EMBED_MODEL_FALLBACK: str = _env("EMBED_MODEL_FALLBACK", "qwen3-embedding:0.6b")
 RERANK_MODEL: str = _env("RERANK_MODEL", "Qwen/Qwen3-Reranker-0.6B")
 RERANK_MODEL_FALLBACK: str = _env("RERANK_MODEL_FALLBACK", "BAAI/bge-reranker-base")
 SPARSE_MODEL: str = _env("SPARSE_MODEL", "Qdrant/bm25")
@@ -101,6 +101,11 @@ HTTP_TIMEOUT: float = _env_float("HTTP_TIMEOUT", 60.0)  # seconds per request
 DOCLING_TIMEOUT: float = _env_float("DOCLING_TIMEOUT", 300.0)  # doc conversion can be slow
 HTTP_MAX_RETRIES: int = _env_int("HTTP_MAX_RETRIES", 3)
 HTTP_RETRY_BACKOFF: float = _env_float("HTTP_RETRY_BACKOFF", 0.5)  # exponential base
+
+# ── Ingestion pipeline settings ────────────────────────────────────────────────
+INGEST_TIMEOUT_PARSE: float = _env_float("INGEST_TIMEOUT_PARSE", 120.0)
+INGEST_TIMEOUT_TOTAL: float = _env_float("INGEST_TIMEOUT_TOTAL", 300.0)
+MAX_CONCURRENT_PARSES: int = _env_int("MAX_CONCURRENT_PARSES", 3)
 
 # ── Qdrant client settings ────────────────────────────────────────────────────
 QDRANT_TIMEOUT: float = _env_float("QDRANT_TIMEOUT", 10.0)
@@ -128,10 +133,10 @@ DOCLING_IMAGE_EXPORT: str = _env("DOCLING_IMAGE_EXPORT", "embedded")
 DOCLING_PDF_BACKEND: str = _env("DOCLING_PDF_BACKEND", "")
 
 # ── Query Expansion ──────────────────────────────────────────────────────────
-ENABLE_QUERY_EXPANSION: bool = _env_bool("ENABLE_QUERY_EXPANSION", True)
-ENABLE_HYDE: bool = _env_bool("ENABLE_HYDE", True)
-ENABLE_MULTI_QUERY: bool = _env_bool("ENABLE_MULTI_QUERY", True)
-ENABLE_QUERY_REWRITE: bool = _env_bool("ENABLE_QUERY_REWRITE", True)
+ENABLE_QUERY_EXPANSION: bool = _env_bool("ENABLE_QUERY_EXPANSION", False)
+ENABLE_HYDE: bool = _env_bool("ENABLE_HYDE", False)
+ENABLE_MULTI_QUERY: bool = _env_bool("ENABLE_MULTI_QUERY", False)
+ENABLE_QUERY_REWRITE: bool = _env_bool("ENABLE_QUERY_REWRITE", False)
 
 HYDE_MODEL: str = _env("HYDE_MODEL", "")  # empty = use CHAT_MODEL
 MULTI_QUERY_COUNT: int = _env_int("MULTI_QUERY_COUNT", 3)
@@ -139,7 +144,7 @@ MULTI_QUERY_MODEL: str = _env("MULTI_QUERY_MODEL", "")  # empty = use CHAT_MODEL
 QUERY_REWRITE_MODEL: str = _env("QUERY_REWRITE_MODEL", "")  # empty = use CHAT_MODEL
 
 # ── Contextual Retrieval ────────────────────────────────────────────────────
-ENABLE_CONTEXTUAL_RETRIEVAL: bool = _env_bool("ENABLE_CONTEXTUAL_RETRIEVAL", True)
+ENABLE_CONTEXTUAL_RETRIEVAL: bool = _env_bool("ENABLE_CONTEXTUAL_RETRIEVAL", False)
 CONTEXT_STRATEGY: str = _env("CONTEXT_STRATEGY", "summary")
 CONTEXT_MODEL: str = _env("CONTEXT_MODEL", "")  # empty = use CHAT_MODEL
 CONTEXT_PREFIX_MAX_TOKENS: int = _env_int("CONTEXT_PREFIX_MAX_TOKENS", 50)
@@ -177,3 +182,39 @@ EVAL_OUTPUT_DIR: str = _env("EVAL_OUTPUT_DIR", "eval_reports")
 EVAL_TOP_K: int = _env_int("EVAL_TOP_K", 10)
 EVAL_RUN_RAGAS: bool = _env_bool("EVAL_RUN_RAGAS", False)
 EVAL_LOG_TIMING: bool = _env_bool("EVAL_LOG_TIMING", False)
+
+
+# ── Startup safety checks — run after all config is loaded ──────────────────
+
+def _run_startup_checks() -> None:
+    """Log warnings for misconfigured settings that hurt performance."""
+    import logging
+    _log = logging.getLogger("config")
+
+    if EMBED_MODEL == EMBED_MODEL_FALLBACK:
+        _log.warning(
+            "EMBED_MODEL and EMBED_MODEL_FALLBACK are identical (%s) — "
+            "fallback will have no effect. Set EMBED_MODEL_FALLBACK to a different model.",
+            EMBED_MODEL,
+        )
+    if RERANK_MODEL == RERANK_MODEL_FALLBACK:
+        _log.warning(
+            "RERANK_MODEL and RERANK_MODEL_FALLBACK are identical (%s) — "
+            "fallback will have no effect. Set RERANK_MODEL_FALLBACK to a different model.",
+            RERANK_MODEL,
+        )
+    if ENABLE_CONTEXTUAL_RETRIEVAL:
+        _log.warning(
+            "ENABLE_CONTEXTUAL_RETRIEVAL is on — doubles embedding cost. "
+            "Consider disabling for small document collections."
+        )
+    if ENABLE_QUERY_EXPANSION and (ENABLE_HYDE or ENABLE_MULTI_QUERY or ENABLE_QUERY_REWRITE):
+        expansion_count = sum([ENABLE_HYDE, ENABLE_MULTI_QUERY, ENABLE_QUERY_REWRITE])
+        _log.warning(
+            "Query expansion is on with %d sub-techniques — "
+            "this fires %d+ LLM calls per search. Consider disabling for small collections.",
+            expansion_count, expansion_count,
+        )
+
+
+_run_startup_checks()
