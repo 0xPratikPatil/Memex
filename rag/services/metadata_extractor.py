@@ -361,8 +361,11 @@ class MetadataExtractor:
         # For small documents (<=batch_size), single LLM call
         if len(chunks) <= batch_size:
             return self._extract_batch_metadata(
-                chunks, document_text, source_identifier,
-                doc_type=True, batch_start=0,
+                chunks,
+                document_text,
+                source_identifier,
+                doc_type=True,
+                batch_start=0,
             )
 
         # For larger documents, process in parallel batches
@@ -379,8 +382,11 @@ class MetadataExtractor:
         for batch, batch_start in batches:
             need_doc_type = not doc_type_found
             batch_meta = self._extract_batch_metadata(
-                batch, document_text, source_identifier,
-                doc_type=need_doc_type, batch_start=batch_start,
+                batch,
+                document_text,
+                source_identifier,
+                doc_type=need_doc_type,
+                batch_start=batch_start,
             )
             if need_doc_type and batch_meta and batch_meta[0].get("doc_type"):
                 doc_type_found = True
@@ -401,9 +407,7 @@ class MetadataExtractor:
         if not self._ollama:
             return [{} for _ in batch]
 
-        chunks_text = "\n\n".join(
-            f"[Chunk {i}]: {c['content'][:500]}" for i, c in enumerate(batch)
-        )
+        chunks_text = "\n\n".join(f"[Chunk {i}]: {c['content'][:500]}" for i, c in enumerate(batch))
 
         tasks = []
         if config.ENABLE_ENTITY_EXTRACTION:
@@ -485,9 +489,7 @@ class MetadataExtractor:
         result: dict[str, Any] = {}
         if "entities" in meta and isinstance(meta["entities"], dict):
             result["entities"] = {
-                k: v[: config.MAX_ENTITIES_PER_CHUNK]
-                for k, v in meta["entities"].items()
-                if isinstance(v, list)
+                k: v[: config.MAX_ENTITIES_PER_CHUNK] for k, v in meta["entities"].items() if isinstance(v, list)
             }
         if "topics" in meta and isinstance(meta["topics"], list):
             result["topics"] = [str(t) for t in meta["topics"][: config.MAX_TOPICS_PER_CHUNK]]

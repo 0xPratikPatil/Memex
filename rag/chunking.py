@@ -80,6 +80,7 @@ def _build_chunking_options() -> dict[str, Any]:
 def _build_convert_options() -> dict[str, Any]:
     """Build conversion options for the chunking endpoint."""
     from rag.docling_client import build_docling_options
+
     return build_docling_options(to_formats=["md"])
 
 

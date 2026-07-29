@@ -101,8 +101,8 @@ class TestCacheIntegration:
         assert get_cached(self._ns, "k1") is None
         assert get_cached(self._ns, "k2") is None
 
-    def test_invalidate_for_document_clears_search(self):
-        results = [{"id": "99", "text": "doc test"}]
+    def test_invalidate_for_document_clears_search_with_source_in_results(self):
+        results = [{"id": "99", "text": "doc test", "source": "/docs/test.pdf"}]
         cache_search_results("doc query", 3, None, results)
         cached = get_cached_search_results("doc query", 3, None)
         assert cached == results
@@ -110,6 +110,16 @@ class TestCacheIntegration:
         invalidate_for_document("/docs/test.pdf")
 
         assert get_cached_search_results("doc query", 3, None) is None
+
+    def test_invalidate_for_document_preserves_unrelated_search_cache(self):
+        results = [{"id": "99", "text": "doc test"}]
+        cache_search_results("doc query", 3, None, results)
+        cached = get_cached_search_results("doc query", 3, None)
+        assert cached == results
+
+        invalidate_for_document("/docs/test.pdf")
+
+        assert get_cached_search_results("doc query", 3, None) == results
 
     def test_overwrite_updates_value(self):
         set_cached(self._ns, "overwrite_key", "original", 60)

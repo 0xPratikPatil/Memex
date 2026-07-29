@@ -95,12 +95,17 @@ class QueryExpander:
 
         if config.ENABLE_CACHE:
             try:
-                set_cached("expansion", cache_key, {
-                    "original": result.original,
-                    "rewritten": result.rewritten,
-                    "hyde_vector": result.hyde_vector,
-                    "paraphrases": result.paraphrases,
-                }, ttl=config.CACHE_TTL_EXPANSION)
+                set_cached(
+                    "expansion",
+                    cache_key,
+                    {
+                        "original": result.original,
+                        "rewritten": result.rewritten,
+                        "hyde_vector": result.hyde_vector,
+                        "paraphrases": result.paraphrases,
+                    },
+                    ttl=config.CACHE_TTL_EXPANSION,
+                )
             except Exception:
                 logger.debug("Failed to cache query expansion", exc_info=True)
 
@@ -153,5 +158,6 @@ class QueryExpander:
         """Embed text via EmbeddingService (singleton, batched transport, caching)."""
         if self._embedding_svc is None:
             from rag.embedding import EmbeddingService
+
             self._embedding_svc = EmbeddingService(self._ollama)
         return self._embedding_svc.embed([text], model=model)[0]

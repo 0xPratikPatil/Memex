@@ -160,9 +160,7 @@ class ContextGenerator:
         if not summary:
             return [""] * len(batch)
 
-        chunks_text = "\n\n".join(
-            f"[Chunk {i}]: {c['content'][:500]}" for i, c in enumerate(batch)
-        )
+        chunks_text = "\n\n".join(f"[Chunk {i}]: {c['content'][:500]}" for i, c in enumerate(batch))
         prompt = (
             "Given this document summary and a batch of text chunks, write a short "
             "contextual prefix (under 30 words) for each chunk that situates it "
@@ -194,11 +192,13 @@ class ContextGenerator:
         batch = all_chunks[batch_start : batch_start + batch_size]
         if len(batch) == 1:
             # Single chunk — use direct prompt
-            return [self._context_from_surrounding(
-                batch[0]["content"],
-                all_chunks[batch_start - 1]["content"] if batch_start > 0 else "",
-                all_chunks[batch_start + 1]["content"] if batch_start + 1 < len(all_chunks) else "",
-            )]
+            return [
+                self._context_from_surrounding(
+                    batch[0]["content"],
+                    all_chunks[batch_start - 1]["content"] if batch_start > 0 else "",
+                    all_chunks[batch_start + 1]["content"] if batch_start + 1 < len(all_chunks) else "",
+                )
+            ]
 
         # Build a single prompt with all chunks and their surrounding context
         chunks_with_context = []
@@ -226,10 +226,11 @@ class ContextGenerator:
         response = self._chat(prompt, num_predict=200 * len(batch))
         # Parse numbered lines
         import re
+
         lines = re.findall(r"(?:^|\n)\s*\d+[.)]\s*(.+)", response)
         while len(lines) < len(batch):
             lines.append("")
-        return [f"[Context: {p.strip()}]" if p.strip() else "" for p in lines[:len(batch)]]
+        return [f"[Context: {p.strip()}]" if p.strip() else "" for p in lines[: len(batch)]]
 
     def _chat(self, prompt: str, num_predict: int = 200) -> str:
         """Call Ollama chat API via shared helper."""

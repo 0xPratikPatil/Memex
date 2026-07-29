@@ -104,7 +104,9 @@ class EmbeddingService:
             if fallback and fallback != model:
                 logger.warning(
                     "Embedding with %s failed (%s), falling back to %s",
-                    model, exc, fallback,
+                    model,
+                    exc,
+                    fallback,
                 )
                 vectors = self._post_batch(texts_to_embed, fallback)
                 model = fallback  # cache under fallback model name

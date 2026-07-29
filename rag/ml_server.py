@@ -101,18 +101,14 @@ class CausalLMReranker:
             messages = [
                 {
                     "role": "system",
-                    "content": "Determine whether the document is relevant to the query. "
-                    "Output only 'yes' or 'no'.",
+                    "content": "Determine whether the document is relevant to the query. Output only 'yes' or 'no'.",
                 },
                 {
                     "role": "user",
-                    "content": f"Query: {query}\nDocument: {doc}\n\n"
-                    "Is this document relevant to the query?",
+                    "content": f"Query: {query}\nDocument: {doc}\n\nIs this document relevant to the query?",
                 },
             ]
-            prompts.append(
-                self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            )
+            prompts.append(self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True))
 
         # Tokenize all prompts in one batch call
         inputs = self.tokenizer(

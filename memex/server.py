@@ -229,10 +229,7 @@ async def rag_ingest_file(input: IngestFileInput, ctx: Context) -> str:
         await ctx.report_progress(progress=2, total=100, message="Checking if already ingested...")
         can_skip, chunk_count = engine.check_unmodified_local(file_path_or_url)
         if can_skip:
-            return (
-                f"Already ingested '{file_path_or_url}' "
-                f"({chunk_count} chunks). File unchanged — skipping."
-            )
+            return f"Already ingested '{file_path_or_url}' ({chunk_count} chunks). File unchanged — skipping."
 
         await ctx.report_progress(progress=5, total=100, message="Reading file from disk...")
 

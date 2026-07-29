@@ -26,6 +26,7 @@ def _env(key: str, default: str) -> str:
     if val:
         # Strip inline comments: only if # is preceded by whitespace (not part of URL/password)
         import re as _re
+
         val = _re.sub(r"\s+#.*$", "", val).rstrip()
     return val or default
 
@@ -35,6 +36,7 @@ def _env_int(key: str, default: int) -> int:
         val = os.getenv(key, str(default))
         if val:
             import re as _re
+
             val = _re.sub(r"\s+#.*$", "", val).strip()
         return int(val)  # type: ignore[return-value]
     except (TypeError, ValueError):
@@ -46,6 +48,7 @@ def _env_float(key: str, default: float) -> float:
         val = os.getenv(key, str(default))
         if val:
             import re as _re
+
             val = _re.sub(r"\s+#.*$", "", val).strip()
         return float(val)  # type: ignore[return-value]
     except (TypeError, ValueError):
@@ -55,6 +58,7 @@ def _env_float(key: str, default: float) -> float:
 def _env_bool(key: str, default: bool) -> bool:
     val = os.getenv(key, str(default)).lower()
     import re as _re
+
     val = _re.sub(r"\s+#.*$", "", val).strip()
     return val in ("1", "true", "yes")
 
@@ -192,9 +196,11 @@ EVAL_LOG_TIMING: bool = _env_bool("EVAL_LOG_TIMING", False)
 
 # ── Startup safety checks — run after all config is loaded ──────────────────
 
+
 def _run_startup_checks() -> None:
     """Log warnings for misconfigured settings that hurt performance."""
     import logging
+
     _log = logging.getLogger("config")
 
     if EMBED_MODEL == EMBED_MODEL_FALLBACK:
@@ -219,7 +225,8 @@ def _run_startup_checks() -> None:
         _log.warning(
             "Query expansion is on with %d sub-techniques — "
             "this fires %d+ LLM calls per search. Consider disabling for small collections.",
-            expansion_count, expansion_count,
+            expansion_count,
+            expansion_count,
         )
 
 

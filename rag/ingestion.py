@@ -130,7 +130,10 @@ class IngestionOrchestrator:
         if completed_set:
             logger.info(
                 "Resuming batch %s — %d completed, %d failed, %d remaining",
-                bid, len(completed_set), len(failed_map), len(pending),
+                bid,
+                len(completed_set),
+                len(failed_map),
+                len(pending),
             )
         else:
             logger.info("Starting batch %s — %d items", bid, len(pending))
