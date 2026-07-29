@@ -254,15 +254,31 @@ def _parse_response(data: dict) -> ConversionResult:
 
     doc = data.get("document", {})
     markdown_text = doc.get("md_content") or doc.get("markdown", "")
+    # Docling may return content as dict in some formats — extract string
+    if isinstance(markdown_text, dict):
+        markdown_text = markdown_text.get("text", "") or markdown_text.get("content", "") or str(markdown_text)
+    if not isinstance(markdown_text, str):
+        markdown_text = str(markdown_text)
     json_content = doc.get("json_content") or {}
     html_content = doc.get("html_content") or ""
     text_content = doc.get("text_content") or ""
+    if isinstance(html_content, dict):
+        html_content = html_content.get("text", "") or html_content.get("content", "") or str(html_content)
+    if isinstance(text_content, dict):
+        text_content = text_content.get("text", "") or text_content.get("content", "") or str(text_content)
 
     if not markdown_text and status != "failure":
         raise ValueError(f"Docling converted the file but returned empty markdown. Status: {status}, errors: {errors}")
 
     if status == "failure":
-        error_msg = "; ".join(errors) if errors else "Unknown error"
+        # Errors may be list[str] or list[dict] — normalize to strings
+        error_parts = []
+        for e in errors:
+            if isinstance(e, dict):
+                error_parts.append(e.get("message", "") or e.get("error", "") or str(e))
+            else:
+                error_parts.append(str(e))
+        error_msg = "; ".join(error_parts) if error_parts else "Unknown error"
         raise RuntimeError(f"Docling conversion failed: {error_msg}")
 
     if status == "partial_success":

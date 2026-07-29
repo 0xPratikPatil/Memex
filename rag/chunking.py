@@ -194,11 +194,20 @@ def _parse_chunk_response(data: dict, include_doc: bool = False) -> dict[str, An
     chunks: list[dict[str, Any]] = []
     for item in chunks_raw:
         text = item.get("text", "")
-        if not text.strip():
+        # Docling may return text as a dict in some formats — extract string
+        if isinstance(text, dict):
+            text = text.get("text", "") or text.get("content", "") or str(text)
+        if not isinstance(text, str) or not text.strip():
             continue
 
         headings = item.get("headings") or []
-        section_header = headings[0] if headings else ""
+        # Headings may be list[str] or list[dict] — normalize to string
+        if headings and isinstance(headings[0], dict):
+            section_header = headings[0].get("text", "") or headings[0].get("content", "") or str(headings[0])
+        else:
+            section_header = headings[0] if headings else ""
+        if not isinstance(section_header, str):
+            section_header = str(section_header)
 
         chunks.append(
             {
