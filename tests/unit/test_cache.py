@@ -112,7 +112,7 @@ def mock_redis() -> MagicMock:
     r = MagicMock()
     r.ping = MagicMock(return_value=True)
     r.get = MagicMock(return_value=None)
-    r.setex = MagicMock(return_value=True)
+    r.set = MagicMock(return_value=True)
     r.delete = MagicMock(return_value=1)
     r.scan_iter = MagicMock(return_value=iter([]))
     r.dbsize = MagicMock(return_value=0)
@@ -129,7 +129,7 @@ class TestWithMockRedis:
         cache_mod._redis = mock_redis
 
         set_cached("test", "mykey", {"data": "value"}, 60)
-        mock_redis.setex.assert_called_once()
+        mock_redis.set.assert_called_once()
 
         # Simulate cache hit
         mock_redis.get.return_value = json.dumps({"data": "value"})
@@ -188,7 +188,7 @@ class TestDomainHelpers:
 
         embedding = [0.1, 0.2, 0.3]
         cache_embedding("hello world", embedding)
-        mock_redis.setex.assert_called_once()
+        mock_redis.set.assert_called_once()
 
         # Simulate hit
         mock_redis.get.return_value = json.dumps(embedding)
@@ -234,10 +234,10 @@ class TestDomainHelpers:
         cache_mod._redis = mock_redis
 
         cache_search_results("q", 5, "/docs/a.pdf", [])
-        key_with_filter = mock_redis.setex.call_args[0][0]
+        key_with_filter = mock_redis.set.call_args[1].get("name") or mock_redis.set.call_args[0][0]
 
         cache_search_results("q", 5, None, [])
-        key_no_filter = mock_redis.setex.call_args[0][0]
+        key_no_filter = mock_redis.set.call_args[1].get("name") or mock_redis.set.call_args[0][0]
 
         assert key_with_filter != key_no_filter
 
@@ -275,7 +275,7 @@ class TestErrorHandling:
         import rag.services.cache as cache_mod
 
         cache_mod._redis = mock_redis
-        mock_redis.setex.side_effect = Exception("connection lost")
+        mock_redis.set.side_effect = Exception("connection lost")
 
         # Should not raise
         set_cached("test", "key", "value", 60)

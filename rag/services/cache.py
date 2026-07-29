@@ -138,7 +138,7 @@ def set_cached(namespace: str, key_parts: str, value: Any, ttl: int) -> None:
     try:
         cache_key = f"rag:{namespace}:{_hash_key(key_parts)}"
         data = json.dumps(value)
-        r.setex(cache_key, ttl, data)
+        r.set(cache_key, data, ex=ttl)
         elapsed = (time.monotonic() - t0) * 1000
         metrics.sets += 1
         metrics.total_set_latency_ms += elapsed

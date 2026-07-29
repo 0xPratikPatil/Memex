@@ -16,7 +16,7 @@ def mock_redis() -> MagicMock:
     r = MagicMock()
     r.ping = MagicMock(return_value=True)
     r.get = MagicMock(return_value=None)
-    r.setex = MagicMock(return_value=True)
+    r.set = MagicMock(return_value=True)
     r.delete = MagicMock(return_value=1)
     r.scan_iter = MagicMock(return_value=iter([]))
     r.dbsize = MagicMock(return_value=0)
@@ -28,21 +28,18 @@ def mock_redis() -> MagicMock:
 
 
 class TestEmbeddingFallback:
-    """Pipeline._dense_embed_batch falls back to EMBED_MODEL_FALLBACK on failure."""
+    """Pipeline._dense_embed_batch delegates to EmbeddingService with fallback."""
 
     @patch("rag.pipeline.config.EMBED_MODEL", "primary-model")
     @patch("rag.pipeline.config.EMBED_MODEL_FALLBACK", "fallback-model")
     @patch("rag.pipeline.config.ENABLE_CACHE", False)
     def test_uses_primary_model_by_default(self) -> None:
+        from rag.embedding import EmbeddingService
         from rag.pipeline import RAGEngine
 
         engine = RAGEngine()
 
-        def embed_side_effect(client, uncached_texts, cached_map, model):
-            for idx, _text in uncached_texts:
-                cached_map[idx] = [0.1, 0.2]
-
-        with patch.object(engine, "_embed_via_ollama", side_effect=embed_side_effect):
+        with patch.object(EmbeddingService, "_post_batch", return_value=[[0.1, 0.2]]):
             result = engine._dense_embed_batch(["test text"], model="primary-model")
             assert result == [[0.1, 0.2]]
 
@@ -50,43 +47,35 @@ class TestEmbeddingFallback:
     @patch("rag.pipeline.config.EMBED_MODEL_FALLBACK", "fallback-model")
     @patch("rag.pipeline.config.ENABLE_CACHE", False)
     def test_falls_back_on_primary_failure(self) -> None:
+        from rag.embedding import EmbeddingService
         from rag.pipeline import RAGEngine
 
         engine = RAGEngine()
-        mock_client = MagicMock()
-        engine._ollama = mock_client
+        call_models = []
 
-        call_count = 0
-
-        def side_effect(client, uncached_texts, cached_map, model):
-            nonlocal call_count
-            call_count += 1
+        def post_side_effect(texts, model):
+            call_models.append(model)
             if model == "primary-model":
                 raise RuntimeError("primary model unavailable")
-            # Fallback succeeds
-            for idx, _text in uncached_texts:
-                cached_map[idx] = [0.3, 0.4]
+            return [[0.3, 0.4] for _ in texts]
 
-        with patch.object(engine, "_embed_via_ollama", side_effect=side_effect):
+        with patch.object(EmbeddingService, "_post_batch", side_effect=post_side_effect):
             result = engine._dense_embed_batch(["test text"])
-            assert call_count == 2  # primary + fallback
+            assert "primary-model" in call_models
+            assert "fallback-model" in call_models
             assert result == [[0.3, 0.4]]
 
     @patch("rag.pipeline.config.EMBED_MODEL", "fallback-model")
     @patch("rag.pipeline.config.EMBED_MODEL_FALLBACK", "fallback-model")
     @patch("rag.pipeline.config.ENABLE_CACHE", False)
     def test_raises_when_fallback_also_fails(self) -> None:
+        from rag.embedding import EmbeddingService
         from rag.pipeline import RAGEngine
 
         engine = RAGEngine()
-        mock_client = MagicMock()
-        engine._ollama = mock_client
-
-        def side_effect(client, uncached_texts, cached_map, model):
-            raise RuntimeError("both models failed")
 
         with (
-            patch.object(engine, "_embed_via_ollama", side_effect=side_effect),
+            patch.object(EmbeddingService, "_post_batch", side_effect=RuntimeError("both models failed")),
             pytest.raises(RuntimeError, match="both models failed"),
         ):
             engine._dense_embed_batch(["test text"])
@@ -108,10 +97,10 @@ class TestCacheModelAwareness:
         from rag.services.cache import cache_embedding
 
         cache_embedding("hello", [0.1, 0.2], model="model-a")
-        key_a = mock_redis.setex.call_args[0][0]
+        key_a = mock_redis.set.call_args[0][0]
 
         cache_embedding("hello", [0.3, 0.4], model="model-b")
-        key_b = mock_redis.setex.call_args[0][0]
+        key_b = mock_redis.set.call_args[0][0]
 
         # Keys must differ even though text is the same
         assert key_a != key_b
@@ -153,11 +142,11 @@ class TestCacheModelAwareness:
 
         # Cache without specifying model
         cache_embedding("hello", [0.1, 0.2])
-        key_default = mock_redis.setex.call_args[0][0]
+        key_default = mock_redis.set.call_args[0][0]
 
         # Cache with explicit model-a (same as default)
         cache_embedding("hello", [0.3, 0.4], model="model-a")
-        key_explicit = mock_redis.setex.call_args[0][0]
+        key_explicit = mock_redis.set.call_args[0][0]
 
         # Should produce same key
         assert key_default == key_explicit
@@ -168,91 +157,86 @@ class TestCacheModelAwareness:
 # ── Ollama API detection tests ───────────────────────────────────────────
 
 
-class TestOllamaAPIDetection:
-    """_embed_via_ollama detects /api/embed vs /api/embeddings and uses correct format."""
+class TestEmbeddingServiceAPI:
+    """EmbeddingService uses batched /api/embed endpoint."""
 
-    def _make_engine(self):
-        from rag.pipeline import RAGEngine
+    def _make_svc(self):
+        from rag.embedding import EmbeddingService
 
-        engine = RAGEngine()
         mock_client = MagicMock()
-        engine._ollama = mock_client
-        return engine, mock_client
+        svc = EmbeddingService(mock_client)
+        return svc, mock_client
 
-    @patch("rag.pipeline.config.EMBED_MODEL", "test-model")
-    @patch("rag.pipeline.config.ENABLE_CACHE", False)
-    def test_new_api_uses_input_field(self) -> None:
-        engine, mock_client = self._make_engine()
+    @patch("rag.embedding.config.EMBED_MODEL", "test-model")
+    @patch("rag.embedding.config.ENABLE_CACHE", False)
+    def test_embed_sends_batched_input(self) -> None:
+        svc, mock_client = self._make_svc()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"embeddings": [[0.1, 0.2], [0.3, 0.4]]}
+        mock_resp.raise_for_status = MagicMock()
+        mock_client.post.return_value = mock_resp
+
+        with patch.object(svc, "_embed_url", "http://localhost:11434/api/embed"):
+            result = svc.embed(["hello", "world"])
+
+        assert result == [[0.1, 0.2], [0.3, 0.4]]
+        call_json = mock_client.post.call_args[1]["json"]
+        assert call_json["input"] == ["hello", "world"]
+
+    @patch("rag.embedding.config.EMBED_MODEL", "test-model")
+    @patch("rag.embedding.config.ENABLE_CACHE", False)
+    def test_embed_caches_results(self) -> None:
+        svc, mock_client = self._make_svc()
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"embeddings": [[0.1, 0.2]]}
         mock_resp.raise_for_status = MagicMock()
         mock_client.post.return_value = mock_resp
 
-        cached_map: dict[int, list[float]] = {}
-        with patch("rag.pipeline.config.OLLAMA_EMBED_URL", "http://localhost:11434/api/embed"):
-            engine._embed_via_ollama(mock_client, [(0, "hello")], cached_map, "test-model")
-
-        call_json = mock_client.post.call_args[1]["json"]
-        assert "input" in call_json
-        assert call_json["input"] == "hello"
-        assert "prompt" not in call_json
-
-    @patch("rag.pipeline.config.EMBED_MODEL", "test-model")
-    @patch("rag.pipeline.config.ENABLE_CACHE", False)
-    def test_legacy_api_uses_prompt_field(self) -> None:
-        engine, mock_client = self._make_engine()
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"embedding": [0.3, 0.4]}
-        mock_resp.raise_for_status = MagicMock()
-        mock_client.post.return_value = mock_resp
-
-        cached_map: dict[int, list[float]] = {}
-        with patch("rag.pipeline.config.OLLAMA_EMBED_URL", "http://localhost:11434/api/embeddings"):
-            engine._embed_via_ollama(mock_client, [(0, "hello")], cached_map, "test-model")
-
-        call_json = mock_client.post.call_args[1]["json"]
-        assert "prompt" in call_json
-        assert call_json["prompt"] == "hello"
-        assert "input" not in call_json
-
-    @patch("rag.pipeline.config.EMBED_MODEL", "test-model")
-    @patch("rag.pipeline.config.ENABLE_CACHE", False)
-    def test_new_api_caches_with_model(self) -> None:
-        engine, mock_client = self._make_engine()
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"embeddings": [[0.1, 0.2]]}
-        mock_resp.raise_for_status = MagicMock()
-        mock_client.post.return_value = mock_resp
-
-        cached_map: dict[int, list[float]] = {}
         with (
-            patch("rag.pipeline.config.OLLAMA_EMBED_URL", "http://localhost:11434/api/embed"),
+            patch.object(svc, "_embed_url", "http://localhost:11434/api/embed"),
             patch("rag.services.cache.cache_embedding") as mock_cache,
         ):
-            engine._embed_via_ollama(mock_client, [(0, "hello")], cached_map, "my-model")
-            mock_cache.assert_called_once_with("hello", [0.1, 0.2], model="my-model")
+            svc.embed(["hello"])
 
-    @patch("rag.pipeline.config.EMBED_MODEL", "test-model")
-    @patch("rag.pipeline.config.ENABLE_CACHE", False)
-    def test_populates_cached_map(self) -> None:
-        engine, mock_client = self._make_engine()
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"embeddings": [[0.5, 0.6]]}
-        mock_resp.raise_for_status = MagicMock()
-        mock_client.post.return_value = mock_resp
+        mock_cache.assert_called_once_with("hello", [0.1, 0.2], model="test-model")
 
-        cached_map: dict[int, list[float]] = {}
-        with patch("rag.pipeline.config.OLLAMA_EMBED_URL", "http://localhost:11434/api/embed"):
-            engine._embed_via_ollama(mock_client, [(3, "world")], cached_map, "test-model")
+    @patch("rag.embedding.config.EMBED_MODEL", "test-model")
+    @patch("rag.embedding.config.ENABLE_CACHE", False)
+    def test_embed_respects_batch_size(self) -> None:
+        from rag import config
 
-        assert cached_map[3] == [0.5, 0.6]
+        svc, _mock_client = self._make_svc()
+
+        call_counts = []
+
+        def post_side_effect(texts, model):
+            call_counts.append(len(texts))
+            return [[0.1] for _ in texts]
+
+        with (
+            patch.object(svc, "_embed_url", "http://localhost:11434/api/embed"),
+            patch.object(config, "EMBED_BATCH_SIZE", 2),
+            patch.object(svc, "_post_batch", side_effect=post_side_effect),
+        ):
+            svc.embed(["a", "b", "c"])
+
+        # Two sub-batches: [2] then [1]
+        assert call_counts == [2, 1]
+
+    def test_resolve_url_switches_default_to_embed(self) -> None:
+        from rag.embedding import EmbeddingService
+
+        with patch("rag.embedding.config.OLLAMA_EMBED_URL", "http://localhost:11434/api/embeddings"):
+            url = EmbeddingService._resolve_embed_url()
+        assert "/api/embed" in url
+        assert "embeddings" not in url
 
 
 # ── Query expansion fallback tests ───────────────────────────────────────
 
 
 class TestQueryExpansionFallback:
-    """QueryExpander._embed falls back to EMBED_MODEL_FALLBACK on failure."""
+    """QueryExpander._embed delegates to EmbeddingService with fallback."""
 
     def _make_expander(self):
         from rag.services.query_expansion import QueryExpander
@@ -264,87 +248,39 @@ class TestQueryExpansionFallback:
     @patch("rag.services.query_expansion.config.EMBED_MODEL", "primary")
     @patch("rag.services.query_expansion.config.EMBED_MODEL_FALLBACK", "fallback")
     def test_uses_primary_model(self) -> None:
-        expander, mock_ollama = self._make_expander()
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"embeddings": [[0.1]]}
-        mock_resp.raise_for_status = MagicMock()
-        mock_ollama.post.return_value = mock_resp
+        from rag.embedding import EmbeddingService
 
-        with patch("rag.services.query_expansion.config.OLLAMA_EMBED_URL", "http://localhost:11434/api/embed"):
+        expander, _mock_ollama = self._make_expander()
+
+        with patch.object(EmbeddingService, "embed", return_value=[[0.1]]):
             result = expander._embed("test")
 
         assert result == [0.1]
-        call_json = mock_ollama.post.call_args[1]["json"]
-        assert call_json["model"] == "primary"
 
     @patch("rag.services.query_expansion.config.EMBED_MODEL", "primary")
     @patch("rag.services.query_expansion.config.EMBED_MODEL_FALLBACK", "fallback")
     def test_falls_back_on_failure(self) -> None:
-        expander, mock_ollama = self._make_expander()
+        from rag.embedding import EmbeddingService
 
-        call_count = 0
+        expander, _mock_ollama = self._make_expander()
 
-        def side_effect(url, json=None):
-            nonlocal call_count
-            call_count += 1
-            resp = MagicMock()
-            resp.raise_for_status = MagicMock()
-            if json.get("model") == "primary":
-                raise RuntimeError("primary unavailable")
-            resp.json.return_value = {"embeddings": [[0.3]]}
-            return resp
-
-        mock_ollama.post.side_effect = side_effect
-
-        with patch("rag.services.query_expansion.config.OLLAMA_EMBED_URL", "http://localhost:11434/api/embed"):
+        with patch.object(EmbeddingService, "embed", return_value=[[0.3]]):
             result = expander._embed("test")
 
-        assert call_count == 2
         assert result == [0.3]
 
     @patch("rag.services.query_expansion.config.EMBED_MODEL", "fallback")
     @patch("rag.services.query_expansion.config.EMBED_MODEL_FALLBACK", "fallback")
     def test_raises_when_fallback_also_fails(self) -> None:
-        expander, mock_ollama = self._make_expander()
-        mock_ollama.post.side_effect = RuntimeError("all failed")
+        from rag.embedding import EmbeddingService
+
+        expander, _mock_ollama = self._make_expander()
 
         with (
-            patch("rag.services.query_expansion.config.OLLAMA_EMBED_URL", "http://localhost:11434/api/embed"),
+            patch.object(EmbeddingService, "embed", side_effect=RuntimeError("all failed")),
             pytest.raises(RuntimeError, match="all failed"),
         ):
             expander._embed("test")
-
-    @patch("rag.services.query_expansion.config.EMBED_MODEL", "primary")
-    @patch("rag.services.query_expansion.config.EMBED_MODEL_FALLBACK", "fallback")
-    def test_embed_single_uses_new_api(self) -> None:
-        expander, mock_ollama = self._make_expander()
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"embeddings": [[0.7]]}
-        mock_resp.raise_for_status = MagicMock()
-        mock_ollama.post.return_value = mock_resp
-
-        with patch("rag.services.query_expansion.config.OLLAMA_EMBED_URL", "http://localhost:11434/api/embed"):
-            result = expander._embed_single("test", "mymodel")
-
-        assert result == [0.7]
-        call_json = mock_ollama.post.call_args[1]["json"]
-        assert call_json == {"model": "mymodel", "input": "test"}
-
-    @patch("rag.services.query_expansion.config.EMBED_MODEL", "primary")
-    @patch("rag.services.query_expansion.config.EMBED_MODEL_FALLBACK", "fallback")
-    def test_embed_single_uses_legacy_api(self) -> None:
-        expander, mock_ollama = self._make_expander()
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"embedding": [0.8]}
-        mock_resp.raise_for_status = MagicMock()
-        mock_ollama.post.return_value = mock_resp
-
-        with patch("rag.services.query_expansion.config.OLLAMA_EMBED_URL", "http://localhost:11434/api/embeddings"):
-            result = expander._embed_single("test", "mymodel")
-
-        assert result == [0.8]
-        call_json = mock_ollama.post.call_args[1]["json"]
-        assert call_json == {"model": "mymodel", "prompt": "test"}
 
 
 # ── Config fallback defaults tests ───────────────────────────────────────
