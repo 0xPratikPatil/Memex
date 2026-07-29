@@ -140,29 +140,34 @@ class IngestionOrchestrator:
         parse_tasks = [self._parse_one(item, parse_results) for item in pending]
         await asyncio.gather(*parse_tasks, return_exceptions=True)
 
-        # Sequential ingest phase (embedding is fast and batched)
-        for item in pending:
+        # Concurrent ingest phase with bounded concurrency
+        # Each ingest includes chunking, metadata extraction, embedding, and Qdrant upsert.
+        # Using a semaphore to limit concurrent ingests prevents Ollama overload.
+        ingest_semaphore = asyncio.Semaphore(config.MAX_CONCURRENT_PARSES)
+
+        async def _ingest_one(item: str) -> None:
             result = parse_results.get(item)
             if isinstance(result, Exception):
                 failed_map[item] = str(result)
-                self._save_state(state_file, state, failed_map)
-                continue
+                return
             if result is None:
                 failed_map[item] = "parse returned None"
-                self._save_state(state_file, state, failed_map)
-                continue
+                return
+            async with ingest_semaphore:
+                try:
+                    status = await self._ingest_parsed(item, result)
+                    if status.startswith("Success") or status.startswith("Skipped"):
+                        state["completed"].append(item)
+                    else:
+                        failed_map[item] = status
+                except Exception as exc:
+                    failed_map[item] = str(exc)
 
-            # result is a ConversionResult
-            try:
-                status = await self._ingest_parsed(item, result)
-                if status.startswith("Success") or status.startswith("Skipped"):
-                    state["completed"].append(item)
-                else:
-                    failed_map[item] = status
-                self._save_state(state_file, state, failed_map)
-            except Exception as exc:
-                failed_map[item] = str(exc)
-                self._save_state(state_file, state, failed_map)
+        ingest_tasks = [_ingest_one(item) for item in pending]
+        await asyncio.gather(*ingest_tasks, return_exceptions=True)
+
+        # Save final state once (not per-item)
+        self._save_state(state_file, state, failed_map)
 
         summary: dict[str, str] = {}
         for item in items:

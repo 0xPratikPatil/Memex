@@ -85,11 +85,15 @@ def _post(payload: dict) -> dict:
 # ── Conversion options ───────────────────────────────────────────────────────
 
 
-def _build_options() -> dict[str, Any]:
-    """Build Docling v1 conversion options from config."""
+def build_docling_options(to_formats: list[str] | None = None) -> dict[str, Any]:
+    """Build Docling conversion options from config. Single source of truth.
+
+    Args:
+        to_formats: Output formats. Defaults to ["md", "json", "html", "text"].
+    """
     opts: dict[str, Any] = {
         "from_formats": ["docx", "pptx", "html", "image", "pdf", "md", "csv", "xlsx"],
-        "to_formats": ["md", "json", "html", "text"],
+        "to_formats": to_formats or ["md", "json", "html", "text"],
         "do_ocr": config.ENABLE_OCR,
         "table_mode": "accurate",
         "do_table_structure": True,
@@ -108,6 +112,11 @@ def _build_options() -> dict[str, Any]:
         opts["pdf_backend"] = config.DOCLING_PDF_BACKEND.lower()
 
     return opts
+
+
+def _build_options() -> dict[str, Any]:
+    """Build Docling v1 conversion options from config."""
+    return build_docling_options()
 
 
 # ── Public API ───────────────────────────────────────────────────────────────

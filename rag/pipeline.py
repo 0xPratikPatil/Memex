@@ -19,6 +19,7 @@ import hashlib
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -52,26 +53,30 @@ logger = logging.getLogger("rag-pipeline")
 # ── Evaluation hooks ────────────────────────────────────────────────────────
 
 _eval_timings: dict[str, list[float]] = {}
+_eval_timings_lock = threading.Lock()
 
 
 def _record_eval_timing(stage: str, elapsed_ms: float) -> None:
     """Record pipeline stage timing when evaluation logging is enabled."""
     if not config.EVAL_ENABLED or not config.EVAL_LOG_TIMING:
         return
-    if stage not in _eval_timings:
-        _eval_timings[stage] = []
-    _eval_timings[stage].append(elapsed_ms)
+    with _eval_timings_lock:
+        if stage not in _eval_timings:
+            _eval_timings[stage] = []
+        _eval_timings[stage].append(elapsed_ms)
     logger.debug("eval-timing|%s|%.2fms", stage, elapsed_ms)
 
 
 def get_eval_timings() -> dict[str, list[float]]:
     """Return accumulated evaluation timing data."""
-    return dict(_eval_timings)
+    with _eval_timings_lock:
+        return dict(_eval_timings)
 
 
 def reset_eval_timings() -> None:
     """Clear accumulated evaluation timing data."""
-    _eval_timings.clear()
+    with _eval_timings_lock:
+        _eval_timings.clear()
 
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
@@ -174,11 +179,15 @@ def _recursive_chunk(
             return
 
         # Fallback: hard split by words with overlap
+        # word_step controls stride; chunk_words is the window size.
+        # With max_tokens=512, overlap_tokens=50: step=462, word_step≈115,
+        # producing ~25% overlap (not 77%). The overlap window is bounded
+        # to max_tokens to prevent runaway chunk growth.
         words = section_text.split()
-        step = max(1, (max_tokens * 4) // 4 - (overlap_tokens * 4) // 4)
+        step = max(1, max_tokens - overlap_tokens)
         word_step = max(1, step // 4)
         for i in range(0, len(words), word_step):
-            chunk_words = words[i : i + (max_tokens * 4) // 4]
+            chunk_words = words[i : i + max_tokens]
             chunk_text = " ".join(chunk_words)
             if _estimate_tokens(chunk_text) >= 10:
                 chunks.append(
@@ -204,7 +213,8 @@ def _recursive_chunk(
             _chunk_section(section, current_header)
         i += 1
 
-    # Apply overlap by duplicating tail/head between adjacent chunks
+    # Apply overlap by duplicating tail/head between adjacent chunks.
+    # Bounded to max_tokens * 1.5 to prevent runaway chunk growth.
     if overlap_tokens > 0 and len(chunks) > 1:
         overlapped: list[dict[str, Any]] = [chunks[0]]
         for idx in range(1, len(chunks)):
@@ -213,7 +223,7 @@ def _recursive_chunk(
             if overlap_word_count > 0:
                 overlap_text = " ".join(prev_words[-overlap_word_count:])
                 combined = f"{overlap_text} {chunks[idx]['content']}"
-                if _estimate_tokens(combined) <= max_tokens * 2:
+                if _estimate_tokens(combined) <= int(max_tokens * 1.5):
                     chunks[idx]["content"] = combined
             overlapped.append(chunks[idx])
         chunks = overlapped
@@ -228,12 +238,10 @@ def _fixed_chunk(
 ) -> list[dict[str, Any]]:
     """Simple fixed-size word splitting (fallback)."""
     words = text.split()
-    max_words = (max_tokens * 4) // 4
-    overlap_words = (overlap_tokens * 4) // 4
-    step = max(1, max_words - overlap_words)
+    step = max(1, max_tokens - overlap_tokens)
     chunks: list[dict[str, Any]] = []
     for i in range(0, len(words), step):
-        chunk_words = words[i : i + max_words]
+        chunk_words = words[i : i + max_tokens]
         chunk_text = " ".join(chunk_words)
         if len(chunk_text.strip()) >= config.MIN_CHUNK_LEN:
             chunks.append(
@@ -357,6 +365,20 @@ class RAGEngine:
                 },
             )
             logger.info("Created Qdrant collection: %s", config.COLLECTION_NAME)
+
+            # Wait for collection optimizer to finish initial indexing
+            import time as _time
+
+            for _attempt in range(30):
+                try:
+                    info = qdrant.get_collection(config.COLLECTION_NAME)
+                    if str(info.optimizer_status) == "ok":
+                        break
+                except Exception:
+                    pass
+                _time.sleep(0.5)
+            else:
+                logger.warning("Collection optimizer did not complete within 15s, proceeding anyway")
 
             # Create payload indexes for filtered searches
             for field_name, field_type in [
@@ -742,7 +764,15 @@ class RAGEngine:
         _record_eval_timing("sparse_search", (time.monotonic() - t_sparse) * 1000)
 
         # ── Reciprocal Rank Fusion ────────────────────────────────────────
-        k = 60  # RRF constant (standard default)
+        # Standard RRF: score = 1/(k + rank). The offset parameter shifts
+        # rank positions so each search source (dense, sparse, HyDE, paraphrase)
+        # occupies a distinct rank range. This is a deliberate design choice:
+        # dense results rank first (highest priority), sparse second, then
+        # HyDE and paraphrases. Without offsets, a document found by both
+        # dense and sparse would get two high rank positions, inflating its
+        # score disproportionately. The offset ensures each source contributes
+        # exactly one rank position per document.
+        k = 60  # RRF constant (standard default from original paper)
         rrf_scores: dict[str, float] = {}
         result_map: dict[str, dict[str, Any]] = {}
 
@@ -790,7 +820,8 @@ class RAGEngine:
         if expanded_query and expanded_query.paraphrases:
             offset = len(dense_hits) + len(sparse_hits)
             if expanded_query.hyde_vector:
-                offset += candidate_k  # approximate hyde offset
+                # Use actual hyde_hits count if available, else candidate_k
+                offset += len(hyde_hits) if "hyde_hits" in dir() else candidate_k
             for idx, para in enumerate(expanded_query.paraphrases):
                 try:
                     para_dense = self._dense_embed(para)
@@ -818,9 +849,13 @@ class RAGEngine:
             t_rerank = time.monotonic()
             contents = [item["content"] for item in results]
             try:
-                scores, _ = self._rerank(query, contents, top_k=len(contents))
-                for i, score in enumerate(scores):
-                    results[i]["rerank_score"] = float(score)
+                scores, indices = self._rerank(query, contents, top_k=len(contents))
+                # Use returned indices to correctly align scores with documents.
+                # The local CrossEncoder provider returns (scores, indices) sorted
+                # by score descending; the HTTP provider returns all scores in order.
+                for score, idx in zip(scores, indices, strict=False):
+                    if idx < len(results):
+                        results[idx]["rerank_score"] = float(score)
                 results.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)
             except Exception:
                 logger.warning("Reranking failed, skipping rerank step", exc_info=True)
@@ -880,44 +915,53 @@ class RAGEngine:
         return sorted(docs, key=lambda x: x["ingested_at"], reverse=True)
 
     def get_document_info(self, source_identifier: str) -> dict[str, Any] | None:
-        """Get detailed info about a specific document."""
+        """Get detailed info about a specific document with full pagination."""
         qdrant = self._get_qdrant()
-        result = qdrant.scroll(
-            collection_name=config.COLLECTION_NAME,
-            limit=1000,
-            scroll_filter=Filter(must=[FieldCondition(key="source", match=MatchValue(value=source_identifier))]),
-            with_payload=[
-                "source",
-                "chunk_index",
-                "total_chunks",
-                "ingested_at",
-                "section_header",
-                "content",
-                "doc_type",
-                "topics",
-                "language",
-                "keywords",
-            ],
-            with_vectors=False,
-        )
-        points, _ = result
-        if not points:
+        all_points: list[Any] = []
+        offset = None
+        while True:
+            result = qdrant.scroll(
+                collection_name=config.COLLECTION_NAME,
+                limit=500,
+                offset=offset,
+                scroll_filter=Filter(must=[FieldCondition(key="source", match=MatchValue(value=source_identifier))]),
+                with_payload=[
+                    "source",
+                    "chunk_index",
+                    "total_chunks",
+                    "ingested_at",
+                    "section_header",
+                    "content",
+                    "doc_type",
+                    "topics",
+                    "language",
+                    "keywords",
+                ],
+                with_vectors=False,
+            )
+            points, next_offset = result
+            all_points.extend(points)
+            if next_offset is None:
+                break
+            offset = next_offset
+
+        if not all_points:
             return None
 
         sections: set[str] = set()
-        for p in points:
+        for p in all_points:
             header = (p.payload or {}).get("section_header", "")
             if header:
                 sections.add(header)
 
-        first_payload = points[0].payload or {}
+        first_payload = all_points[0].payload or {}
 
         # Collect metadata across chunks
         all_topics: set[str] = set()
         all_keywords: set[str] = set()
         doc_type = first_payload.get("doc_type", "")
         language = first_payload.get("language", "")
-        for p in points:
+        for p in all_points:
             payload = p.payload or {}
             for t in payload.get("topics", []):
                 all_topics.add(t)
@@ -930,7 +974,7 @@ class RAGEngine:
 
         return {
             "source": source_identifier,
-            "chunk_count": len(points),
+            "chunk_count": len(all_points),
             "total_chunks": first_payload.get("total_chunks", 0),
             "ingested_at": first_payload.get("ingested_at", ""),
             "sections": sorted(sections),

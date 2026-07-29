@@ -79,27 +79,8 @@ def _build_chunking_options() -> dict[str, Any]:
 
 def _build_convert_options() -> dict[str, Any]:
     """Build conversion options for the chunking endpoint."""
-    opts: dict[str, Any] = {
-        "from_formats": ["docx", "pptx", "html", "image", "pdf", "md", "csv", "xlsx"],
-        "to_formats": ["md"],
-        "do_ocr": config.ENABLE_OCR,
-        "table_mode": "accurate",
-        "do_table_structure": True,
-        "image_export_mode": config.DOCLING_IMAGE_EXPORT,
-    }
-
-    if config.DOCLING_ENRICH_CODE:
-        opts["do_code_enrichment"] = True
-    if config.DOCLING_ENRICH_FORMULA:
-        opts["do_formula_enrichment"] = True
-    if config.DOCLING_PICTURE_CLASSIFY:
-        opts["do_picture_classification"] = True
-    if config.DOCLING_CHART_EXTRACT:
-        opts["do_chart_extraction"] = True
-    if config.DOCLING_PDF_BACKEND:
-        opts["pdf_backend"] = config.DOCLING_PDF_BACKEND.lower()
-
-    return opts
+    from rag.docling_client import build_docling_options
+    return build_docling_options(to_formats=["md"])
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -139,6 +120,7 @@ def chunk_local_file(file_path: str, include_doc: bool = False) -> dict[str, Any
 
     Raises:
         FileNotFoundError: If the file does not exist.
+        ValueError: If file exceeds 200MB size limit.
     """
     import base64
     from pathlib import Path
@@ -146,6 +128,15 @@ def chunk_local_file(file_path: str, include_doc: bool = False) -> dict[str, Any
     p = Path(file_path)
     if not p.is_file():
         raise FileNotFoundError(f"File not found: {file_path}")
+
+    # Guard against excessive memory usage from base64 encoding
+    file_size_mb = p.stat().st_size / (1024 * 1024)
+    if file_size_mb > 200:
+        raise ValueError(
+            f"File too large for chunking API: {file_size_mb:.0f}MB (max 200MB). "
+            "Consider splitting the file or using a streaming approach."
+        )
+
     file_bytes = p.read_bytes()
     b64 = base64.b64encode(file_bytes).decode("ascii")
 
@@ -237,11 +228,8 @@ def is_hybrid_chunker_available() -> bool:
         url = _get_chunking_url()
         base = url.split("/v1/chunk")[0]
         health_url = f"{base}/health"
-        client = httpx.Client(timeout=5.0)
-        try:
-            resp = client.get(health_url)
-            return resp.status_code == 200
-        finally:
-            client.close()
+        client = _get_chunking_client()
+        resp = client.get(health_url, timeout=5.0)
+        return resp.status_code == 200
     except Exception:
         return False

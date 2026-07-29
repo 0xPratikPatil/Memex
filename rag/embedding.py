@@ -13,6 +13,12 @@ import logging
 from typing import Any
 
 import httpx
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from rag import config
 
@@ -109,15 +115,32 @@ class EmbeddingService:
             cache_embedding(text, vec, model=model)
             cached_map[idx] = vec
 
+    @retry(
+        retry=retry_if_exception_type((httpx.TransportError, httpx.TimeoutException)),
+        stop=stop_after_attempt(config.HTTP_MAX_RETRIES),
+        wait=wait_exponential(multiplier=config.HTTP_RETRY_BACKOFF, max=10),
+        reraise=True,
+    )
     def _post_batch(self, texts: list[str], model: str) -> list[list[float]]:
-        """POST to Ollama /api/embed with batched input."""
+        """POST to Ollama /api/embed with batched input and dimension validation."""
         resp = self._client.post(
             self._embed_url,
             json={"model": model, "input": texts},
         )
         resp.raise_for_status()
         data: dict[str, Any] = resp.json()
-        return data["embeddings"]
+        vectors = data["embeddings"]
+
+        # Validate dimensions match expected DENSE_DIM
+        expected_dim = config.DENSE_DIM
+        for _i, vec in enumerate(vectors):
+            if len(vec) != expected_dim:
+                raise ValueError(
+                    f"Embedding dimension mismatch: model {model} returned {len(vec)}d, "
+                    f"expected {expected_dim}d (DENSE_DIM). Check model config."
+                )
+
+        return vectors
 
     @staticmethod
     def _resolve_embed_url() -> str:

@@ -208,13 +208,14 @@ class TestIsHybridChunkerAvailable:
 
             result = is_hybrid_chunker_available()
             assert result is True
-            mock_client.get.assert_called_once_with("http://localhost:5001/health")
-            mock_client.close.assert_called_once()
+            mock_client.get.assert_called_once_with("http://localhost:5001/health", timeout=5.0)
 
     def test_returns_false_on_error(self) -> None:
         with (
-            patch("rag.chunking.httpx.Client", side_effect=Exception("connection failed")),
+            patch("rag.chunking._chunking_client", None),
             patch("rag.chunking.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
+            patch("rag.chunking.config.DOCLING_TIMEOUT", 5.0),
+            patch("rag.chunking.httpx.Client", side_effect=Exception("connection failed")),
         ):
             result = is_hybrid_chunker_available()
             assert result is False

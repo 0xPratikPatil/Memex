@@ -358,18 +358,34 @@ class MetadataExtractor:
         if not chunks:
             return []
 
-        results: list[dict[str, Any]] = []
-        doc_type_done = False
+        # For small documents (<=batch_size), single LLM call
+        if len(chunks) <= batch_size:
+            return self._extract_batch_metadata(
+                chunks, document_text, source_identifier,
+                doc_type=True, batch_start=0,
+            )
 
+        # For larger documents, process in parallel batches
+        results: list[dict[str, Any]] = [{}] * len(chunks)
+        doc_type_found = False
+
+        batches = []
         for batch_start in range(0, len(chunks), batch_size):
             batch = chunks[batch_start : batch_start + batch_size]
+            batches.append((batch, batch_start))
+
+        # Process batches sequentially to maintain doc_type consistency
+        # (first batch extracts doc_type, subsequent batches skip it)
+        for batch, batch_start in batches:
+            need_doc_type = not doc_type_found
             batch_meta = self._extract_batch_metadata(
                 batch, document_text, source_identifier,
-                doc_type=not doc_type_done, batch_start=batch_start,
+                doc_type=need_doc_type, batch_start=batch_start,
             )
-            if not doc_type_done and batch_meta and batch_meta[0].get("doc_type"):
-                doc_type_done = True
-            results.extend(batch_meta)
+            if need_doc_type and batch_meta and batch_meta[0].get("doc_type"):
+                doc_type_found = True
+            for i, meta in enumerate(batch_meta):
+                results[batch_start + i] = meta
 
         return results
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -19,12 +20,14 @@ from rag import config
 logger = logging.getLogger("cache")
 
 _redis: Any = None
-_metrics = None
+_redis_lock = threading.Lock()
+_metrics: CacheMetrics | None = None
+_metrics_lock = threading.Lock()
 
 
 @dataclass
 class CacheMetrics:
-    """Collect cache hit/miss/latency metrics."""
+    """Collect cache hit/miss/latency metrics (thread-safe via external lock)."""
 
     hits: int = 0
     misses: int = 0
@@ -54,9 +57,12 @@ class CacheMetrics:
 
 def _get_metrics() -> CacheMetrics:
     global _metrics
-    if _metrics is None:
-        _metrics = CacheMetrics()
-    return _metrics
+    if _metrics is not None:
+        return _metrics
+    with _metrics_lock:
+        if _metrics is None:
+            _metrics = CacheMetrics()
+        return _metrics
 
 
 def _get_redis() -> Any:
@@ -66,26 +72,32 @@ def _get_redis() -> Any:
         return _redis
     if not config.ENABLE_CACHE:
         return None
-    try:
-        import redis
+    with _redis_lock:
+        if _redis is not None:
+            return _redis
+        try:
+            import redis
 
-        _redis = redis.Redis.from_url(
-            config.REDIS_URL,
-            decode_responses=True,
-            socket_connect_timeout=5,
-            socket_timeout=5,
-            max_connections=10,
-        )
-        _redis.ping()
-        logger.info("Connected to Redis at %s", config.REDIS_URL)
-        return _redis
-    except ImportError:
-        logger.warning("redis package not installed, caching disabled")
-        return None
-    except Exception as exc:
-        logger.warning("Redis unavailable, caching disabled: %s", exc)
-        _redis = None
-        return None
+            pool = redis.ConnectionPool.from_url(
+                config.REDIS_URL,
+                decode_responses=True,
+                max_connections=10,
+            )
+            _redis = redis.Redis(
+                connection_pool=pool,
+                socket_connect_timeout=5,
+                socket_timeout=5,
+            )
+            _redis.ping()
+            logger.info("Connected to Redis at %s", config.REDIS_URL)
+            return _redis
+        except ImportError:
+            logger.warning("redis package not installed, caching disabled")
+            return None
+        except Exception as exc:
+            logger.warning("Redis unavailable, caching disabled: %s", exc)
+            _redis = None
+            return None
 
 
 def _hash_key(*parts: str) -> str:
@@ -111,16 +123,20 @@ def get_cached(namespace: str, key_parts: str) -> Any | None:
         cache_key = f"rag:{namespace}:{_hash_key(key_parts)}"
         data = r.get(cache_key)
         elapsed = (time.monotonic() - t0) * 1000
-        metrics.total_get_latency_ms += elapsed
+        with _metrics_lock:
+            metrics.total_get_latency_ms += elapsed
+            if data:
+                metrics.hits += 1
+            else:
+                metrics.misses += 1
         if data:
-            metrics.hits += 1
             logger.debug("Cache hit: %s (%.1fms)", cache_key, elapsed)
             return json.loads(data)
-        metrics.misses += 1
         logger.debug("Cache miss: %s (%.1fms)", cache_key, elapsed)
         return None
     except Exception as exc:
-        metrics.errors += 1
+        with _metrics_lock:
+            metrics.errors += 1
         logger.warning("Cache get failed: %s", exc)
         return None
 
@@ -140,11 +156,13 @@ def set_cached(namespace: str, key_parts: str, value: Any, ttl: int) -> None:
         data = json.dumps(value)
         r.set(cache_key, data, ex=ttl)
         elapsed = (time.monotonic() - t0) * 1000
-        metrics.sets += 1
-        metrics.total_set_latency_ms += elapsed
+        with _metrics_lock:
+            metrics.sets += 1
+            metrics.total_set_latency_ms += elapsed
         logger.debug("Cache set: %s (ttl=%ds, %.1fms)", cache_key, ttl, elapsed)
     except Exception as exc:
-        metrics.errors += 1
+        with _metrics_lock:
+            metrics.errors += 1
         logger.warning("Cache set failed: %s", exc)
 
 
@@ -170,15 +188,47 @@ def invalidate_namespace(namespace: str) -> int:
 
 
 def invalidate_for_document(source_identifier: str) -> int:
-    """Invalidate all caches related to a document.
+    """Invalidate all caches related to a specific document.
 
-    Clears search results and parse cache entries.
+    Uses the source_identifier to scope invalidation to only this document's
+    cache entries, preserving caches for other documents.
     Returns total number of invalidated keys.
     """
+    if not config.ENABLE_CACHE:
+        return 0
+    r = _get_redis()
+    if r is None:
+        return 0
     count = 0
-    count += invalidate_namespace("search")
-    count += invalidate_namespace("parse")
-    logger.info("Invalidated %d caches for document: %s", count, source_identifier)
+    try:
+        # Invalidate search cache entries that contain this document's source
+        # Since search cache keys include query params, we scan and filter
+        pattern = "rag:search:*"
+        keys_to_delete = []
+        for key in r.scan_iter(match=pattern, count=1000):
+            try:
+                data = r.get(key)
+                if data and source_identifier.encode() in data.encode():
+                    keys_to_delete.append(key)
+            except Exception:
+                pass
+        # Invalidate parse cache entries for this document
+        parse_pattern = "rag:parse:*"
+        for key in r.scan_iter(match=parse_pattern, count=1000):
+            try:
+                if source_identifier.encode() in key.encode():
+                    keys_to_delete.append(key)
+            except Exception:
+                pass
+        if keys_to_delete:
+            r.delete(*keys_to_delete)
+            count = len(keys_to_delete)
+            logger.info("Invalidated %d cache keys for document: %s", count, source_identifier)
+        metrics = _get_metrics()
+        with _metrics_lock:
+            metrics.invalidations += count
+    except Exception as exc:
+        logger.warning("Cache invalidation failed: %s", exc)
     return count
 
 
@@ -261,11 +311,12 @@ def get_cache_stats() -> dict[str, Any]:
 
 
 def close() -> None:
-    """Close Redis connection."""
+    """Close Redis connection and pool."""
     global _redis
     if _redis is not None:
         import contextlib
 
         with contextlib.suppress(Exception):
             _redis.close()
+            _redis.connection_pool.disconnect()
         _redis = None

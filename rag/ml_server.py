@@ -85,10 +85,18 @@ class CausalLMReranker:
             self._yes_token_id = self.tokenizer.convert_tokens_to_ids("True")
 
     def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
-        """Score query-document pairs using P("yes")."""
+        """Score query-document pairs using P("yes").
+
+        Batches all pairs into a single forward pass by concatenating
+        prompts with padding, avoiding per-pair Python loop overhead.
+        """
         import torch
 
-        scores = []
+        if not pairs:
+            return []
+
+        # Build all prompts at once
+        prompts = []
         for query, doc in pairs:
             messages = [
                 {
@@ -102,16 +110,26 @@ class CausalLMReranker:
                     "Is this document relevant to the query?",
                 },
             ]
-            text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
+            prompts.append(
+                self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            )
 
-            with torch.no_grad():
-                outputs = self.model(**inputs)
-                logits = outputs.logits[:, -1, :]
-                yes_logit = logits[0, self._yes_token_id].float()
-                score = torch.sigmoid(yes_logit).item()
-                scores.append(score)
-        return scores
+        # Tokenize all prompts in one batch call
+        inputs = self.tokenizer(
+            prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=2048,
+        ).to(self.model.device)
+
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+            logits = outputs.logits[:, -1, :]
+            yes_logits = logits[:, self._yes_token_id].float()
+            scores = torch.sigmoid(yes_logits).cpu().tolist()
+
+        return [float(s) for s in scores]
 
 
 # ── Model loading with fallback ─────────────────────────────────────────

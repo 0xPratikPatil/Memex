@@ -121,7 +121,7 @@ class ContextGenerator:
             enriched: list[dict[str, Any]] = []
             for chunk in chunks:
                 context = self._context_from_header(chunk.get("section_header", ""))
-                enriched_chunk = chunk.copy()
+                enriched_chunk = {**chunk}  # shallow copy to avoid shared metadata mutation
                 enriched_chunk["context_prefix"] = context
                 if context:
                     enriched_chunk["content"] = f"{context} {chunk['content']}".strip()
@@ -143,7 +143,7 @@ class ContextGenerator:
                 contexts = [self._context_from_header(c.get("section_header", "")) for c in batch]
 
             for chunk, context in zip(batch, contexts, strict=True):
-                enriched_chunk = chunk.copy()
+                enriched_chunk = {**chunk}  # shallow copy to avoid shared metadata mutation
                 enriched_chunk["context_prefix"] = context
                 if context:
                     enriched_chunk["content"] = f"{context} {chunk['content']}".strip()
@@ -186,34 +186,50 @@ class ContextGenerator:
         batch_start: int,
         batch_size: int,
     ) -> list[str]:
-        """Generate context for a batch using surrounding chunks."""
+        """Generate context for a batch using surrounding chunks.
+
+        Uses a single LLM call with all chunk contexts to avoid N+1 pattern.
+        Falls back to per-chunk calls on parse failure.
+        """
         batch = all_chunks[batch_start : batch_start + batch_size]
-        contexts: list[str] = []
+        if len(batch) == 1:
+            # Single chunk — use direct prompt
+            return [self._context_from_surrounding(
+                batch[0]["content"],
+                all_chunks[batch_start - 1]["content"] if batch_start > 0 else "",
+                all_chunks[batch_start + 1]["content"] if batch_start + 1 < len(all_chunks) else "",
+            )]
 
-        for i, _chunk in enumerate(batch):
+        # Build a single prompt with all chunks and their surrounding context
+        chunks_with_context = []
+        for i, chunk in enumerate(batch):
             global_idx = batch_start + i
-            prev = all_chunks[global_idx - 1]["content"] if global_idx > 0 else ""
-            next_ = all_chunks[global_idx + 1]["content"] if global_idx < len(all_chunks) - 1 else ""
-
-            if not prev and not next_:
-                contexts.append("")
-                continue
-
+            prev = all_chunks[global_idx - 1]["content"][:200] if global_idx > 0 else ""
+            next_ = all_chunks[global_idx + 1]["content"][:200] if global_idx < len(all_chunks) - 1 else ""
             context_parts = []
             if prev:
-                context_parts.append(f"Previous content: {prev[:200]}")
+                context_parts.append(f"Previous: {prev}")
             if next_:
-                context_parts.append(f"Following content: {next_[:200]}")
+                context_parts.append(f"Following: {next_}")
+            context_str = " | ".join(context_parts) if context_parts else "(no surrounding context)"
+            chunks_with_context.append(f"[{i}] Context: {context_str}\nChunk: {chunk['content'][:300]}")
 
-            prompt = (
-                "Given the surrounding content of a text chunk, write a short contextual "
-                "prefix (under 30 words) that situates the chunk. Only output the prefix.\n\n"
-                + "\n".join(context_parts)
-            )
-            response = self._chat(prompt)
-            contexts.append(f"[Context: {response.strip()}]" if response.strip() else "")
-
-        return contexts
+        all_chunks_text = "\n\n".join(chunks_with_context)
+        prompt = (
+            f"Given the surrounding content of {len(batch)} text chunks, write a short contextual "
+            "prefix (under 30 words) for each chunk that situates it. "
+            "Do not repeat chunk content.\n\n"
+            f"{all_chunks_text}\n\n"
+            f"Output exactly {len(batch)} lines, one prefix per chunk, "
+            "numbered like: 1. prefix text\n2. prefix text\n..."
+        )
+        response = self._chat(prompt, num_predict=200 * len(batch))
+        # Parse numbered lines
+        import re
+        lines = re.findall(r"(?:^|\n)\s*\d+[.)]\s*(.+)", response)
+        while len(lines) < len(batch):
+            lines.append("")
+        return [f"[Context: {p.strip()}]" if p.strip() else "" for p in lines[:len(batch)]]
 
     def _chat(self, prompt: str, num_predict: int = 200) -> str:
         """Call Ollama chat API via shared helper."""

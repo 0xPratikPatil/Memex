@@ -133,6 +133,8 @@ class SearchResult(BaseModel):
     topics: list[str] = Field(default_factory=list)
     language: str = ""
     keywords: list[str] = Field(default_factory=list)
+    entities: dict[str, Any] = Field(default_factory=dict)
+    dates: list[str] = Field(default_factory=list)
 
 
 class QueryOutput(BaseModel):

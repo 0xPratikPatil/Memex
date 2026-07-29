@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 
@@ -42,6 +43,7 @@ class QueryExpander:
 
     def __init__(self, ollama_client: httpx.Client) -> None:
         self._ollama = ollama_client
+        self._embedding_svc: Any = None  # lazy singleton
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -113,7 +115,8 @@ class QueryExpander:
             "Keep it under 50 words. Only output the rewritten query.\n\n"
             f"Query: {query}"
         )
-        return self._chat(prompt)
+        model = config.QUERY_REWRITE_MODEL or config.CHAT_MODEL
+        return self._chat(prompt, model_override=model)
 
     def _hyde_embed(self, query: str) -> list[float]:
         """Generate a hypothetical answer document and return its embedding."""
@@ -122,7 +125,8 @@ class QueryExpander:
             "Be factual and specific. 3-5 sentences.\n\n"
             f"Query: {query}"
         )
-        hypothetical = self._chat(prompt)
+        model = config.HYDE_MODEL or config.CHAT_MODEL
+        hypothetical = self._chat(prompt, model_override=model)
         return self._embed(hypothetical)
 
     def _multi_query(self, query: str) -> list[str]:
@@ -133,20 +137,21 @@ class QueryExpander:
             "Each on a new line. Only the paraphrases, no numbering.\n\n"
             f"Query: {query}"
         )
-        response = self._chat(prompt)
+        model = config.MULTI_QUERY_MODEL or config.CHAT_MODEL
+        response = self._chat(prompt, model_override=model)
         lines = [line.strip() for line in response.strip().split("\n") if line.strip()]
         return lines[:count]
 
-    def _chat(self, prompt: str, num_predict: int = 150) -> str:
+    def _chat(self, prompt: str, num_predict: int = 150, model_override: str = "") -> str:
         """Call Ollama chat API via shared helper."""
         from rag.ollama_chat import ollama_chat
 
-        model = config.HYDE_MODEL or config.MULTI_QUERY_MODEL or config.QUERY_REWRITE_MODEL or config.CHAT_MODEL
+        model = model_override or config.CHAT_MODEL
         return ollama_chat(prompt, model=model, num_predict=num_predict, ollama_client=self._ollama)
 
     def _embed(self, text: str, model: str | None = None) -> list[float]:
-        """Embed text via EmbeddingService (batched transport, caching, fallback)."""
-        from rag.embedding import EmbeddingService
-
-        svc = EmbeddingService(self._ollama)
-        return svc.embed([text], model=model)[0]
+        """Embed text via EmbeddingService (singleton, batched transport, caching)."""
+        if self._embedding_svc is None:
+            from rag.embedding import EmbeddingService
+            self._embedding_svc = EmbeddingService(self._ollama)
+        return self._embedding_svc.embed([text], model=model)[0]

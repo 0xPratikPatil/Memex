@@ -88,20 +88,23 @@ def _prewarm_models():
                 except Exception as exc:
                     logger.warning("Reranker prewarm failed: %s", exc)
 
-            # Prewarm Ollama embedding model (cold-start: ~25-30s)
-            try:
-                with httpx.Client(timeout=120) as client:
+            # Prewarm Ollama embedding + chat models in parallel
+            import concurrent.futures
+
+            def _prewarm_embedding():
+                client = httpx.Client(timeout=120)
+                try:
                     client.post(
                         config.OLLAMA_EMBED_URL,
                         json={"model": config.EMBED_MODEL, "input": ["prewarm"]},
                     )
-                logger.info("Embedding model pre-warmed: %s", config.EMBED_MODEL)
-            except Exception as exc:
-                logger.warning("Embedding prewarm failed: %s", exc)
+                    logger.info("Embedding model pre-warmed: %s", config.EMBED_MODEL)
+                finally:
+                    client.close()
 
-            # Prewarm Ollama chat model (cold-start: ~50-60s)
-            try:
-                with httpx.Client(timeout=120) as client:
+            def _prewarm_chat():
+                client = httpx.Client(timeout=120)
+                try:
                     chat_url = config.OLLAMA_EMBED_URL.replace("/api/embed", "/api/chat")
                     client.post(
                         chat_url,
@@ -112,9 +115,16 @@ def _prewarm_models():
                             "options": {"num_predict": 1, "temperature": 0},
                         },
                     )
-                logger.info("Chat model pre-warmed: %s", config.CHAT_MODEL)
-            except Exception as exc:
-                logger.warning("Chat prewarm failed: %s", exc)
+                    logger.info("Chat model pre-warmed: %s", config.CHAT_MODEL)
+                finally:
+                    client.close()
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(_prewarm_embedding), pool.submit(_prewarm_chat)]
+                concurrent.futures.wait(futures)
+                for f in futures:
+                    if f.exception():
+                        logger.warning("Prewarm failed: %s", f.exception())
 
             logger.info("Model pre-warming complete")
         except Exception as exc:

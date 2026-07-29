@@ -168,6 +168,7 @@ class TestEmbeddingServiceAPI:
         return svc, mock_client
 
     @patch("rag.embedding.config.EMBED_MODEL", "test-model")
+    @patch("rag.embedding.config.DENSE_DIM", 2)
     @patch("rag.embedding.config.ENABLE_CACHE", False)
     def test_embed_sends_batched_input(self) -> None:
         svc, mock_client = self._make_svc()
@@ -184,6 +185,7 @@ class TestEmbeddingServiceAPI:
         assert call_json["input"] == ["hello", "world"]
 
     @patch("rag.embedding.config.EMBED_MODEL", "test-model")
+    @patch("rag.embedding.config.DENSE_DIM", 2)
     @patch("rag.embedding.config.ENABLE_CACHE", False)
     def test_embed_caches_results(self) -> None:
         svc, mock_client = self._make_svc()

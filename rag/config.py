@@ -24,7 +24,9 @@ except ImportError:
 def _env(key: str, default: str) -> str:
     val = os.getenv(key, default)
     if val:
-        val = val.split("#", 1)[0].rstrip()
+        # Strip inline comments: only if # is preceded by whitespace (not part of URL/password)
+        import re as _re
+        val = _re.sub(r"\s+#.*$", "", val).rstrip()
     return val or default
 
 
@@ -32,7 +34,8 @@ def _env_int(key: str, default: int) -> int:
     try:
         val = os.getenv(key, str(default))
         if val:
-            val = val.split("#", 1)[0].strip()
+            import re as _re
+            val = _re.sub(r"\s+#.*$", "", val).strip()
         return int(val)  # type: ignore[return-value]
     except (TypeError, ValueError):
         return default
@@ -42,7 +45,8 @@ def _env_float(key: str, default: float) -> float:
     try:
         val = os.getenv(key, str(default))
         if val:
-            val = val.split("#", 1)[0].strip()
+            import re as _re
+            val = _re.sub(r"\s+#.*$", "", val).strip()
         return float(val)  # type: ignore[return-value]
     except (TypeError, ValueError):
         return default
@@ -50,7 +54,8 @@ def _env_float(key: str, default: float) -> float:
 
 def _env_bool(key: str, default: bool) -> bool:
     val = os.getenv(key, str(default)).lower()
-    val = val.split("#", 1)[0].strip()
+    import re as _re
+    val = _re.sub(r"\s+#.*$", "", val).strip()
     return val in ("1", "true", "yes")
 
 
@@ -115,7 +120,7 @@ QDRANT_MAX_RETRIES: int = _env_int("QDRANT_MAX_RETRIES", 3)
 SEARCH_TOP_K: int = _env_int("SEARCH_TOP_K", 30)
 
 # ── MCP server settings ───────────────────────────────────────────────────────
-MCP_HOST: str = _env("MCP_HOST", "0.0.0.0")
+MCP_HOST: str = _env("MCP_HOST", "127.0.0.1")
 
 # ── Response limits ────────────────────────────────────────────────────────────
 CHARACTER_LIMIT: int = _env_int("CHARACTER_LIMIT", 25000)
@@ -152,7 +157,7 @@ CONTEXT_PREFIX_MAX_TOKENS: int = _env_int("CONTEXT_PREFIX_MAX_TOKENS", 50)
 CONTEXT_BATCH_SIZE: int = _env_int("CONTEXT_BATCH_SIZE", 10)
 
 # ── Embedding batch size ─────────────────────────────────────────────────────
-EMBED_BATCH_SIZE: int = _env_int("EMBED_BATCH_SIZE", 64)
+EMBED_BATCH_SIZE: int = max(1, _env_int("EMBED_BATCH_SIZE", 64))
 
 # ── Cache Settings ──────────────────────────────────────────────────────────
 ENABLE_CACHE: bool = _env_bool("ENABLE_CACHE", True)
