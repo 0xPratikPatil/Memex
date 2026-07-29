@@ -19,6 +19,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import ToolAnnotations
 
 from memex.schemas import (
+    CollectionStatsOutput,
     DeleteDocumentInput,
     DocumentInfo,
     IngestBatchInput,
@@ -163,9 +164,9 @@ def _friendly_error(exc: Exception) -> str:
     if "collection" in msg and "doesn't exist" in msg:
         return "Qdrant collection not found. The server will auto-create it on next connection."
     if "qdrant" in msg:
-        return f"Qdrant is unreachable at {config.QDRANT_URL}. Check: docker compose ps qdrant"
+        return "Qdrant is unreachable. Check: docker compose ps qdrant"
     if "ollama" in msg and "failed" in msg:
-        return f"Ollama request failed. Is Ollama running at {config.OLLAMA_EMBED_URL}?"
+        return "Ollama request failed. Is Ollama running? Check: docker compose ps ollama"
 
     return f"Error: {exc}"
 
@@ -666,7 +667,15 @@ async def rag_collection_stats() -> str:
     try:
         engine = _get_engine()
         stats = engine.get_collection_stats()
-        return json.dumps(stats, indent=2)
+        output = CollectionStatsOutput(
+            collection_name=stats.get("collection_name", ""),
+            total_points=stats.get("total_points", 0),
+            total_vectors=stats.get("total_vectors", 0),
+            status=stats.get("status", ""),
+            optimizer_status=stats.get("optimizer_status", ""),
+            config=stats.get("config", {}),
+        )
+        return output.model_dump_json(indent=2)
     except Exception as exc:
         logger.exception("rag_collection_stats failed")
         return _friendly_error(exc)
@@ -715,31 +724,31 @@ async def rag_service_status() -> str:
     }
 
     statuses: dict[str, dict[str, Any]] = {}
-    for name, url in services.items():
-        try:
-            parsed = urlparse(url)
-            base = f"{parsed.scheme}://{parsed.netloc}"
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        for name, url in services.items():
+            try:
+                parsed = urlparse(url)
+                base = f"{parsed.scheme}://{parsed.netloc}"
 
-            if name == "redis":
-                try:
-                    import redis
+                if name == "redis":
+                    try:
+                        import redis
 
-                    r = redis.Redis.from_url(url)
-                    r.ping()
-                    statuses[name] = {
-                        "healthy": True,
-                        "url": url,
-                        "latency_ms": 0.0,
-                    }
-                except Exception as e:
-                    statuses[name] = {
-                        "healthy": False,
-                        "url": url,
-                        "error": str(e),
-                    }
-                continue
+                        r = redis.Redis.from_url(url)
+                        r.ping()
+                        statuses[name] = {
+                            "healthy": True,
+                            "url": url,
+                            "latency_ms": 0.0,
+                        }
+                    except Exception as e:
+                        statuses[name] = {
+                            "healthy": False,
+                            "url": url,
+                            "error": str(e),
+                        }
+                    continue
 
-            async with httpx.AsyncClient(timeout=5.0) as client:
                 if name == "ollama":
                     health_url = f"{base}/api/tags"
                 elif name == "qdrant":
@@ -754,18 +763,18 @@ async def rag_service_status() -> str:
                     "url": url,
                     "latency_ms": round(latency_ms, 2),
                 }
-        except httpx.RequestError as e:
-            statuses[name] = {
-                "healthy": False,
-                "url": url,
-                "error": str(e),
-            }
-        except Exception as e:
-            statuses[name] = {
-                "healthy": False,
-                "url": url,
-                "error": str(e),
-            }
+            except httpx.RequestError as e:
+                statuses[name] = {
+                    "healthy": False,
+                    "url": url,
+                    "error": str(e),
+                }
+            except Exception as e:
+                statuses[name] = {
+                    "healthy": False,
+                    "url": url,
+                    "error": str(e),
+                }
 
     try:
         engine = _get_engine()
