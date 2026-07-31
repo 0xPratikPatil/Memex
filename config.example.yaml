@@ -1,0 +1,153 @@
+version: "1.0"
+
+vectorstore:
+  provider: qdrant
+  url: "http://localhost:6333"
+  collection: memex
+  api_key: ${QDRANT_API_KEY}
+
+embedding:
+  provider: ollama
+  model: qwen3-embedding:0.6b
+  fallback_model: qwen3-embedding:0.6b
+  dimensions: 1024
+  batch_size: 64
+  base_url: "http://localhost:11434"
+  api_key: ${OPENAI_API_KEY}
+
+sparse:
+  provider: http
+  model: Qdrant/bm25
+
+llm:
+  provider: ollama
+  model: qwen2.5:1.5b
+  base_url: "http://localhost:11434"
+  api_key: ${OPENAI_API_KEY}
+
+converter:
+  engine: docling
+  docling_url: "http://localhost:5001/v1/convert/source"
+  docling_api_key: ${DOCLING_API_KEY}
+  docling_timeout: 300.0
+  docling_picture_classify: true
+  docling_enrich_code: false
+  docling_enrich_formula: false
+  docling_chart_extract: false
+  docling_ocr: true
+  docling_image_export: embedded
+  docling_pdf_backend: ""
+  markitdown_url: "http://localhost:5003"
+  markitdown_extensions:
+    - .pdf
+    - .docx
+    - .xlsx
+    - .pptx
+    - .txt
+    - .md
+
+chunking:
+  strategy: hybrid
+  size: 1024
+  overlap: 128
+  min_length: 30
+  merge_peers: true
+  tokenizer: Qwen/Qwen3-Embedding-0.6B
+
+reranker:
+  enabled: true
+  provider: http
+  model: Qwen/Qwen3-Reranker-0.6B
+  fallback_model: BAAI/bge-reranker-base
+  type: auto
+
+query_expansion:
+  enabled: false
+  hyde: false
+  query_rewrite: false
+  multi_query: false
+  multi_query_count: 3
+  hyde_model: ""
+  multi_query_model: ""
+  query_rewrite_model: ""
+
+contextual_retrieval:
+  enabled: false
+  strategy: summary
+  model: ""
+  max_tokens: 50
+  batch_size: 10
+
+metadata:
+  extraction_enabled: true
+  entity_extraction: true
+  doc_classification: true
+  topic_tagging: true
+  language_detection: true
+  model: ""
+  max_entities_per_chunk: 10
+  max_topics_per_chunk: 5
+
+caching:
+  enabled: true
+  redis_url: "redis://localhost:6379/0"
+  ttl_embedding: 86400
+  ttl_search: 3600
+  ttl_parse: 604800
+  ttl_expansion: 21600
+  max_memory_mb: 256
+  eviction_policy: allkeys-lru
+
+http:
+  timeout: 60.0
+  max_retries: 3
+  retry_backoff: 0.5
+
+ingestion:
+  timeout_parse: 120.0
+  timeout_total: 300.0
+  max_concurrent_parses: 3
+
+qdrant:
+  timeout: 10.0
+  max_retries: 3
+
+mcp:
+  host: 127.0.0.1
+  port: 8080
+  character_limit: 25000
+
+search:
+  top_k: 30
+  mode: hybrid
+  mmr:
+    fetch_k: 20
+    lambda_mult: 0.5
+
+sources:
+  - type: local
+    name: docs
+    path: /mnt/documents
+    extensions:
+      - .pdf
+      - .docx
+      - .md
+    recursive: true
+
+sync:
+  auto_delete: true
+  dry_run: false
+
+answer:
+  enabled: true
+  max_context_chars: 12000
+  system_prompt: null
+  refusal_sentinel: "INSUFFICIENT_CONTEXT"
+
+evaluation:
+  enabled: false
+  golden_set_path: null
+  output_dir: eval_reports
+  top_k: 10
+  run_ragas: false
+  log_timing: false

@@ -572,6 +572,13 @@ class RAGEngine:
         if not raw_chunks:
             raise ValueError("No valid text chunks to ingest.")
 
+        # Remove exact duplicate chunks within the document
+        from rag.dedup import dedup_chunks
+
+        raw_chunks = dedup_chunks(raw_chunks)
+        if not raw_chunks:
+            raise ValueError("No valid text chunks after deduplication.")
+
         # ── Contextual retrieval ──────────────────────────────────────────
         ctx_gen: ContextGenerator | None = None
         document_summary = ""
@@ -879,6 +886,150 @@ class RAGEngine:
         final_results = results[:top_k]
         _record_eval_timing("total_search", (time.monotonic() - t_search_start) * 1000)
         cache_search_results(query, top_k, source_filter, final_results, metadata_filter)
+        return final_results
+
+    def mmr_search(
+        self,
+        query: str,
+        top_k: int = 5,
+        fetch_k: int = 20,
+        lambda_mult: float = 0.5,
+        rerank: bool = True,
+        source_filter: str | None = None,
+        metadata_filter: dict[str, Any] | None = None,
+        use_contextual_search: bool | None = None,
+    ) -> list[dict[str, Any]]:
+        """MMR search: dense similarity + diversity-aware selection.
+
+        Fetches *fetch_k* candidates via dense search, then applies MMR
+        selection to return *top_k* diverse results. Optionally reranks
+        the MMR-selected results.
+        """
+        from rag.search.mmr import mmr_select
+
+        t_search_start = time.monotonic()
+
+        t_embed = time.monotonic()
+        query_dense = self._dense_embed(query)
+        _record_eval_timing("embed_query", (time.monotonic() - t_embed) * 1000)
+
+        qdrant = self._get_qdrant()
+
+        # Determine which dense vector to search
+        if use_contextual_search is not None:
+            effective_contextual = use_contextual_search
+        else:
+            effective_contextual = config.ENABLE_CONTEXTUAL_RETRIEVAL
+        dense_vector_name = "contextual_dense" if effective_contextual else "dense"
+
+        # Build optional filter
+        filter_conditions: list[FieldCondition] = []
+        if source_filter:
+            filter_conditions.append(FieldCondition(key="source", match=MatchValue(value=source_filter)))
+        if metadata_filter:
+            for key, value in metadata_filter.items():
+                if isinstance(value, list):
+                    filter_conditions.append(FieldCondition(key=key, match=MatchAny(values=value)))
+                else:
+                    filter_conditions.append(FieldCondition(key=key, match=MatchValue(value=str(value))))
+        qdrant_filter = Filter(must=filter_conditions) if filter_conditions else None
+
+        # Dense search for fetch_k candidates
+        t_qdrant = time.monotonic()
+        dense_hits = qdrant.query_points(
+            collection_name=config.COLLECTION_NAME,
+            query=query_dense,
+            using=dense_vector_name,
+            limit=fetch_k,
+            query_filter=qdrant_filter,
+        ).points
+        _record_eval_timing("dense_search", (time.monotonic() - t_qdrant) * 1000)
+
+        if not dense_hits:
+            _record_eval_timing("total_search", (time.monotonic() - t_search_start) * 1000)
+            return []
+
+        # Build candidate list with embeddings for MMR
+        candidate_embeddings: list[list[float]] = []
+        candidate_scores: list[float] = []
+        result_map: dict[str, dict[str, Any]] = {}
+
+        for hit in dense_hits:
+            doc_id = str(hit.id)
+            payload = hit.payload or {}
+            score = hit.score if hit.score else 0.0
+
+            # Retrieve vector for MMR diversity computation
+            point = qdrant.retrieve(
+                collection_name=config.COLLECTION_NAME,
+                ids=[hit.id],
+                with_vectors=True,
+                with_payload=False,
+            )
+            if point:
+                vec_payload = point[0].vector
+                if isinstance(vec_payload, dict):
+                    vec = vec_payload.get(dense_vector_name, [])
+                else:
+                    vec = vec_payload if vec_payload else []
+                candidate_embeddings.append(vec)
+            else:
+                candidate_embeddings.append([])
+
+            candidate_scores.append(score)
+            result_map[doc_id] = {
+                "id": doc_id,
+                "source": payload.get("source", ""),
+                "content": payload.get("content", ""),
+                "section_header": payload.get("section_header", ""),
+                "context_prefix": payload.get("context_prefix", ""),
+                "dense_score": score,
+                "doc_type": payload.get("doc_type", ""),
+                "topics": payload.get("topics", []),
+                "language": payload.get("language", ""),
+                "keywords": payload.get("keywords", []),
+                "entities": payload.get("entities", {}),
+                "dates": payload.get("dates", []),
+                "structural": payload.get("structural", {}),
+            }
+
+        # MMR selection
+        t_mmr = time.monotonic()
+        selected_indices = mmr_select(
+            query_embedding=query_dense,
+            candidate_embeddings=candidate_embeddings,
+            candidate_scores=candidate_scores,
+            top_k=top_k,
+            lambda_mult=lambda_mult,
+        )
+        _record_eval_timing("mmr_select", (time.monotonic() - t_mmr) * 1000)
+
+        # Build results from MMR selection
+        all_ids = [str(h.id) for h in dense_hits]
+        results: list[dict[str, Any]] = []
+        for idx in selected_indices:
+            if idx < len(all_ids):
+                doc_id = all_ids[idx]
+                entry = result_map[doc_id]
+                entry["dense_score"] = candidate_scores[idx]
+                results.append(entry)
+
+        # Optional reranking
+        if rerank and results and config.ENABLE_RERANKING:
+            t_rerank = time.monotonic()
+            contents = [item["content"] for item in results]
+            try:
+                scores, indices = self._rerank(query, contents, top_k=len(contents))
+                for score, idx in zip(scores, indices, strict=False):
+                    if idx < len(results):
+                        results[idx]["rerank_score"] = float(score)
+                results.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)
+            except Exception:
+                logger.warning("Reranking failed, skipping rerank step", exc_info=True)
+            _record_eval_timing("rerank", (time.monotonic() - t_rerank) * 1000)
+
+        final_results = results[:top_k]
+        _record_eval_timing("total_search", (time.monotonic() - t_search_start) * 1000)
         return final_results
 
     def list_documents(self) -> list[dict[str, Any]]:

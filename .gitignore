@@ -42,3 +42,6 @@ redis_data/
 
 # Tool metadata
 .opencode/
+
+# Reference repos (not part of this project)
+ragwire-ref/

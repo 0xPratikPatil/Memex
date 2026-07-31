@@ -1,52 +1,53 @@
 # Memex Server
 
-Production-ready MCP server for Retrieval-Augmented Generation with Docling document conversion, Qdrant vector storage, and Ollama embeddings.
+Production-ready MCP server for Retrieval-Augmented Generation with Docling document conversion, Qdrant vector storage, Ollama embeddings, and a pluggable source system.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     HOST MACHINE                            │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │              MCP Server (Local)                     │   │
-│  │                                                     │   │
-│  │  - Runs directly on host                           │   │
-│  │  - Direct filesystem access                        │   │
-│  │  - HybridChunker via Docker Docling Serve            │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                           │                                 │
-│                           │ HTTP                            │
-│                           ▼                                 │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │              Docker Services                        │   │
-│  │                                                     │   │
-│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐  │   │
-│  │  │ Qdrant  │ │ Ollama  │ │ Docling │ │  Redis  │  │   │
-│  │  │ :6333   │ │ :11434  │ │ :5001   │ │ :6379   │  │   │
-│  │  └─────────┘ └─────────┘ └─────────┘ └─────────┘  │   │
-│  │                                                     │   │
-│  │  ┌─────────────────────────────────────────────┐   │   │
-│  │  │ ML Services :5002                           │   │   │
-│  │  │  - Sparse BM25 (Qdrant/bm25)                │   │   │
-│  │  │  - Causal-LM Reranker (Qwen/Qwen3-Reranker-0.6B)   │   │   │
-│  │  └─────────────────────────────────────────────┘   │   │
-│  └─────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                        HOST MACHINE                              │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │              MCP Server (uv run memex)                     │ │
+│  │                                                             │ │
+│  │  - 13 MCP tools + 3 CLI commands                           │ │
+│  │  - YAML config (config.yaml)                               │ │
+│  │  - Direct filesystem access for local sources              │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                           │                                      │
+│                           │ HTTP                                 │
+│                           ▼                                      │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │              Docker Services (7 containers)                │ │
+│  │                                                             │ │
+│  │  Qdrant :6333   Ollama :11434   Docling :5001   Redis :6379 │ │
+│  │  ML Services :5002   MarkItDown :5003   S3 Service :5004   │ │
+│  └────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Features
 
 - **Docling v1 API**: Document conversion (PDF, DOCX, PPTX, XLSX, HTML, images, CSV, Markdown) via Docling Serve
+- **MarkItDown Converter**: Lightweight alternative converter — user-selectable via config
 - **Hybrid Chunking**: Docling HybridChunker — tokenizer-aware, structure-preserving (headings, tables, captions, lists)
 - **Multi-format Embedding**: Table chunks → HTML, code chunks → fenced, text → Markdown
 - **Docling Enrichment**: Picture classification, image export, code/formula/chart extraction (opt-in)
-- **Contextual Retrieval**: LLM-generated context prefixes for each chunk (Anthropic's contextual retrieval)
-- **Hybrid Search**: Dense (qwen3-embedding:0.6b, 1024d) + Sparse (BM25) + RRF fusion + causal-LM rerank (Qwen/Qwen3-Reranker-0.6B)
-- **Query Expansion**: HyDE (hypothetical document), query rewrite, multi-query paraphrasing
-- **Metadata Extraction**: Entities, topics, document classification, language detection, dates, keywords — LLM-powered via qwen2.5:1.5b
-- **Redis Caching**: Embedding cache, search cache, parse cache — all enabled by default
-- **8 MCP Tools**: Ingest, search, list, stats, delete, status, batch, URL ingest
+- **Contextual Retrieval**: LLM-generated context prefixes for each chunk
+- **Hybrid Search**: Dense (qwen3-embedding:0.6b) + Sparse (BM25) + RRF fusion + causal-LM rerank
+- **MMR Search**: Maximal Marginal Relevance for diverse results
+- **Query Expansion**: HyDE, query rewrite, multi-query paraphrasing
+- **Metadata Extraction**: Entities, topics, document classification, language detection, dates, keywords
+- **Content-Hash Dedup**: SHA256 dedup + partial ingest recovery
+- **Cited Answers**: Structured answers with [N] citations, refusal detection, confidence scoring
+- **Document Sources & Sync**: Local directories + S3 buckets with sync engine
+- **Agent Filter Tools**: Natural language → metadata filter extraction
+- **Golden-Set Evaluation**: YAML-based eval with recall/precision/MRR/eval sweep
+- **Redis Caching**: Embedding, search, parse, and expansion caches
+- **YAML Config**: Single config.yaml replaces env vars, `${VAR}` substitution for secrets
+- **13 MCP Tools**: Ingest, query, sync, eval, filter tools, stats, status, and more
+- **CLI Commands**: `memex ingest`, `memex sync`, `memex eval`
 
 ## Quick Start
 

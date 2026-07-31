@@ -19,9 +19,21 @@ from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import ToolAnnotations
 
 from memex.schemas import (
+    AnswerOutput,
+    CitationInfo,
     CollectionStatsOutput,
     DeleteDocumentInput,
     DocumentInfo,
+    EvalInput,
+    EvalOutput,
+    EvalQueryResult,
+    EvalSweepInput,
+    EvalSweepOutput,
+    ExtractedFiltersOutput,
+    ExtractFiltersInput,
+    FieldInfoOutput,
+    FilterContextInput,
+    FilterContextOutput,
     IngestBatchInput,
     IngestFileInput,
     IngestUrlInput,
@@ -31,6 +43,8 @@ from memex.schemas import (
     QueryOutput,
     ResponseFormat,
     SearchResult,
+    SyncInput,
+    SyncStatsOutput,
 )
 from rag import config
 
@@ -237,11 +251,11 @@ async def rag_ingest_file(input: IngestFileInput, ctx: Context) -> str:
         import os
 
         if not file_path_or_url.startswith(("http://", "https://")):
-            abs_path = os.path.abspath(file_path_or_url)
+            if not file_path_or_url.startswith("/"):
+                return f"Error: Relative paths not allowed. Use absolute path: {os.path.abspath(file_path_or_url)}"
+            abs_path = os.path.realpath(file_path_or_url)
             if not os.path.isfile(abs_path):
                 return f"Error: File not found: {file_path_or_url}"
-            if abs_path != file_path_or_url and not file_path_or_url.startswith("/"):
-                return f"Error: Relative paths not allowed. Use absolute path: {abs_path}"
 
         result = parse_file(file_path_or_url)
 
@@ -410,6 +424,13 @@ Supports metadata filtering when metadata extraction is enabled. Filter by
 document type, topics, language, keywords, entities, or dates stored in the
 Qdrant payload.
 
+Supports search modes:
+- 'hybrid': Dense + BM25 with RRF fusion (default)
+- 'similarity': Dense only
+- 'mmr': Dense similarity + Maximal Marginal Relevance for diversity
+
+When answer generation is enabled, returns a structured answer with citations.
+
 Returns relevant document chunks ranked by relevance.
 
 Args:
@@ -427,19 +448,23 @@ Args:
     Example: {"doc_type": "report", "topics": ["finance", "revenue"]}.
   - offset (number): Pagination offset, skip first N results (default: 0).
   - limit (number): Max results per page, 1-50 (default: 10).
+  - search_mode ('similarity' | 'hybrid' | 'mmr', optional): Override search mode.
+  - generate_answer (boolean, optional): Override answer generation setting.
 
 Returns:
-  For JSON format: structured QueryOutput object.
-  For Markdown format: Formatted list of results with source and content.
+  For JSON format: structured AnswerOutput (when answer enabled) or QueryOutput.
+  For Markdown format: Formatted answer with citations or search results.
 
 Examples:
   - Use when: "Find revenue data" -> query="quarterly revenue figures"
   - Use when: "What did the contract say about termination?" -> query="contract termination clauses"
   - Use when: "Search only in report.pdf" -> query="revenue", source_filter="/docs/report.pdf"
   - Use when: "Find reports about finance" -> query="revenue", metadata_filter={"doc_type": "report"}
+  - Use when: "Diverse results for broad topic" -> query="AI trends", search_mode="mmr"
 
 Error Handling:
-  - Returns error message if search fails or Qdrant is unavailable.""",
+  - Returns error message if search fails or Qdrant is unavailable.
+  - If answer generation fails, falls back to raw search results.""",
     annotations=ToolAnnotations(
         readOnlyHint=True,
         destructiveHint=False,
@@ -447,32 +472,59 @@ Error Handling:
         openWorldHint=True,
     ),
 )
-async def rag_query(input: QueryInput) -> str | QueryOutput:
+async def rag_query(input: QueryInput) -> str | QueryOutput | AnswerOutput:
     try:
         engine = _get_engine()
+
+        # Determine search mode
+        search_mode = input.search_mode or config.SEARCH_MODE
 
         expansion_enabled = (
             input.use_query_expansion if input.use_query_expansion is not None else config.ENABLE_QUERY_EXPANSION
         )
 
         expanded = None
-        if expansion_enabled:
+        if expansion_enabled and search_mode != "mmr":
             from rag.services.query_expansion import QueryExpander
 
             expander = QueryExpander(engine._get_ollama())
             expanded = expander.expand(input.query)
 
-        results = engine.hybrid_search(
-            query=input.query,
-            top_k=input.top_k,
-            rerank=input.use_reranking,
-            source_filter=input.source_filter,
-            metadata_filter=input.metadata_filter,
-            expanded_query=expanded,
-            use_contextual_search=input.use_contextual_search,
-        )
+        # Execute search based on mode
+        if search_mode == "mmr":
+            results = engine.mmr_search(
+                query=input.query,
+                top_k=input.top_k,
+                fetch_k=config.MMR_FETCH_K,
+                lambda_mult=config.MMR_LAMBDA_MULT,
+                rerank=input.use_reranking,
+                source_filter=input.source_filter,
+                metadata_filter=input.metadata_filter,
+                use_contextual_search=input.use_contextual_search,
+            )
+        else:
+            results = engine.hybrid_search(
+                query=input.query,
+                top_k=input.top_k,
+                rerank=input.use_reranking,
+                source_filter=input.source_filter,
+                metadata_filter=input.metadata_filter,
+                expanded_query=expanded,
+                use_contextual_search=input.use_contextual_search,
+            )
+
         if not results:
             if input.response_format == ResponseFormat.JSON:
+                if _answer_enabled(input.generate_answer):
+                    return AnswerOutput(
+                        text="No results found.",
+                        refused=True,
+                        confidence=0.0,
+                        citations=[],
+                        sources=[],
+                        search_mode=search_mode,
+                        results=[],
+                    )
                 return QueryOutput(total=0, count=0, results=[])
             return f"No results found for '{input.query}'."
 
@@ -481,64 +533,169 @@ async def rag_query(input: QueryInput) -> str | QueryOutput:
 
         if not paged:
             if input.response_format == ResponseFormat.JSON:
+                if _answer_enabled(input.generate_answer):
+                    return AnswerOutput(
+                        text="No results found for this page.",
+                        refused=True,
+                        confidence=0.0,
+                        citations=[],
+                        sources=[],
+                        search_mode=search_mode,
+                        results=[],
+                    )
                 return QueryOutput(total=total, count=0, results=[])
             return f"No results found for page (offset={input.offset}, limit={input.limit})."
 
+        # Check if answer generation is requested
+        if _answer_enabled(input.generate_answer):
+            return await _generate_and_return_answer(
+                engine=engine,
+                query=input.query,
+                results=results,
+                search_mode=search_mode,
+                response_format=input.response_format,
+            )
+
+        # Standard search result format
         if input.response_format == ResponseFormat.JSON:
-            search_results = [
-                SearchResult(
-                    id=r["id"],
-                    rrf_score=r.get("rrf_score"),
-                    rerank_score=r.get("rerank_score"),
-                    source=r["source"],
-                    content=r["content"],
-                    section_header=r.get("section_header", ""),
-                    context_prefix=r.get("context_prefix", ""),
-                    doc_type=r.get("doc_type", ""),
-                    topics=r.get("topics", []),
-                    language=r.get("language", ""),
-                    keywords=r.get("keywords", []),
-                )
-                for r in paged
-            ]
+            search_results = _build_search_results(paged)
             return QueryOutput(total=total, count=len(paged), results=search_results)
 
-        lines = [f"# Search Results for '{input.query}'", ""]
-        for i, r in enumerate(paged, 1):
-            score_parts = []
-            if "rrf_score" in r:
-                score_parts.append(f"RRF: {r['rrf_score']:.4f}")
-            if "rerank_score" in r:
-                score_parts.append(f"rerank: {r['rerank_score']:.4f}")
-            score_str = " | ".join(score_parts) if score_parts else "N/A"
-
-            header = r.get("section_header", "")
-            source_label = f"{r['source']}"
-            if header:
-                source_label += f" — {header}"
-
-            lines.append(f"## {i}. {source_label}")
-            lines.append(f"**Score**: {score_str}")
-
-            meta_parts = []
-            if r.get("doc_type") and r["doc_type"].strip():
-                meta_parts.append(f"Type: {r['doc_type']}")
-            if r.get("topics") and len(r["topics"]) > 0:
-                meta_parts.append(f"Topics: {', '.join(r['topics'])}")
-            if r.get("language") and r["language"].strip():
-                meta_parts.append(f"Lang: {r['language']}")
-            if r.get("keywords") and len(r["keywords"]) > 0:
-                meta_parts.append(f"Keywords: {', '.join(r['keywords'][:5])}")
-            if meta_parts:
-                lines.append(f"**Metadata**: {' | '.join(meta_parts)}")
-
-            lines.append("")
-            lines.append(r["content"])
-            lines.append("")
-        return _truncate("\n".join(lines))
+        return _format_markdown_results(input.query, paged, total)
     except Exception as exc:
         logger.exception("rag_query failed")
         return _friendly_error(exc)
+
+
+def _answer_enabled(override: bool | None) -> bool:
+    """Check if answer generation is enabled (via override or config)."""
+    if override is not None:
+        return override
+    return config.ENABLE_ANSWER
+
+
+async def _generate_and_return_answer(
+    engine,
+    query: str,
+    results: list[dict],
+    search_mode: str,
+    response_format: ResponseFormat,
+) -> str | AnswerOutput:
+    """Generate a cited answer and return structured output."""
+    from rag.answer import generate_answer
+
+    async def _ollama_chat(prompt: str) -> str:
+        client = engine._get_ollama()
+        chat_url = config.OLLAMA_EMBED_URL.replace("/api/embed", "/api/chat")
+        resp = client.post(
+            chat_url,
+            json={
+                "model": config.CHAT_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "options": {"temperature": 0, "num_predict": 1024},
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()["message"]["content"]
+
+    answer = await generate_answer(
+        query=query,
+        chunks=results,
+        ollama_chat_fn=_ollama_chat,
+        max_context_chars=config.ANSWER_MAX_CONTEXT_CHARS,
+    )
+
+    if response_format == ResponseFormat.JSON:
+        citation_infos = [
+            CitationInfo(
+                index=c.index,
+                source=c.source,
+                snippet=c.chunk_text[:200] + ("..." if len(c.chunk_text) > 200 else ""),
+                score=c.rerank_score,
+            )
+            for c in answer.citations
+        ]
+        search_results = _build_search_results(results[: len(results)])
+        return AnswerOutput(
+            text=answer.text,
+            refused=answer.refused,
+            confidence=answer.confidence,
+            citations=citation_infos,
+            sources=answer.sources,
+            search_mode=search_mode,
+            results=search_results,
+        )
+
+    # Markdown format
+    lines = [answer.text, ""]
+    if answer.citations:
+        lines.append("Sources:")
+        seen: list[str] = []
+        for c in answer.citations:
+            if c.source not in seen:
+                seen.append(c.source)
+                lines.append(f"  [{c.index}] {c.source}")
+    return _truncate("\n".join(lines))
+
+
+def _build_search_results(paged: list[dict]) -> list[SearchResult]:
+    """Convert raw result dicts to SearchResult models."""
+    return [
+        SearchResult(
+            id=r["id"],
+            rrf_score=r.get("rrf_score"),
+            rerank_score=r.get("rerank_score"),
+            source=r["source"],
+            content=r["content"],
+            section_header=r.get("section_header", ""),
+            context_prefix=r.get("context_prefix", ""),
+            doc_type=r.get("doc_type", ""),
+            topics=r.get("topics", []),
+            language=r.get("language", ""),
+            keywords=r.get("keywords", []),
+        )
+        for r in paged
+    ]
+
+
+def _format_markdown_results(query: str, paged: list[dict], total: int) -> str:
+    """Format search results as markdown."""
+    lines = [f"# Search Results for '{query}'", ""]
+    for i, r in enumerate(paged, 1):
+        score_parts = []
+        if "rrf_score" in r:
+            score_parts.append(f"RRF: {r['rrf_score']:.4f}")
+        if "rerank_score" in r:
+            score_parts.append(f"rerank: {r['rerank_score']:.4f}")
+        if "dense_score" in r and "rrf_score" not in r:
+            score_parts.append(f"dense: {r['dense_score']:.4f}")
+        score_str = " | ".join(score_parts) if score_parts else "N/A"
+
+        header = r.get("section_header", "")
+        source_label = f"{r['source']}"
+        if header:
+            source_label += f" — {header}"
+
+        lines.append(f"## {i}. {source_label}")
+        lines.append(f"**Score**: {score_str}")
+
+        meta_parts = []
+        if r.get("doc_type") and r["doc_type"].strip():
+            meta_parts.append(f"Type: {r['doc_type']}")
+        if r.get("topics") and len(r["topics"]) > 0:
+            meta_parts.append(f"Topics: {', '.join(r['topics'])}")
+        if r.get("language") and r["language"].strip():
+            meta_parts.append(f"Lang: {r['language']}")
+        if r.get("keywords") and len(r["keywords"]) > 0:
+            meta_parts.append(f"Keywords: {', '.join(r['keywords'][:5])}")
+        if meta_parts:
+            lines.append(f"**Metadata**: {' | '.join(meta_parts)}")
+
+        lines.append("")
+        lines.append(r["content"])
+        lines.append("")
+    return _truncate("\n".join(lines))
 
 
 @mcp.tool(
@@ -808,6 +965,444 @@ async def rag_service_status() -> str:
         return json.dumps(statuses, indent=2)
     except Exception as exc:
         logger.exception("rag_service_status failed")
+        return _friendly_error(exc)
+
+
+@mcp.tool(
+    name="rag_sync",
+    title="Sync Document Sources",
+    description="""Sync the vector collection against configured document sources.
+
+Reconciles the collection with sources defined in config.yaml:
+- New files are ingested
+- Changed files (different content hash) replace old chunks
+- Deleted files (not in any source) have their chunks removed
+
+Safety: if any source fails to list, all deletions are suppressed for that run.
+
+Args:
+  - source_name (string, optional): Sync a specific source. Null = sync all.
+  - dry_run (boolean): Report what would change without writing (default: false).
+
+Returns:
+  JSON object with sync statistics (added, changed, deleted, unchanged, errors).
+
+Error Handling:
+  - Returns partial results if some sources fail.""",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
+async def rag_sync(input: SyncInput) -> str:
+    try:
+        from rag.sync import sync
+
+        result = await sync(
+            config_module=config,
+            source_name=input.source_name,
+            dry_run=input.dry_run,
+        )
+        output = SyncStatsOutput(
+            added=result.added,
+            changed=result.changed,
+            deleted=result.deleted,
+            unchanged=result.unchanged,
+            errors=result.errors,
+            dry_run=input.dry_run,
+        )
+        return output.model_dump_json(indent=2)
+    except Exception as exc:
+        logger.exception("rag_sync failed")
+        return _friendly_error(exc)
+
+
+@mcp.tool(
+    name="rag_get_filter_context",
+    title="Get Filter Context",
+    description="""Show available metadata fields, their stored values, and suggest filters.
+
+Discovers all metadata fields in the collection and their unique values.
+Optionally suggests filters for a given query using the LLM.
+
+Args:
+  - query (string, optional): Query to get filter suggestions for.
+
+Returns:
+  JSON object with available fields, their types/values, and suggested filters.
+
+Error Handling:
+  - Returns empty fields list if collection is empty.""",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
+async def rag_get_filter_context(input: FilterContextInput) -> str:
+    try:
+        from rag.filter_tools import get_filter_context
+
+        engine = _get_engine()
+        ctx = await get_filter_context(
+            config_module=config,
+            query=input.query,
+            qdrant_client=engine._get_qdrant(),
+            collection=config.COLLECTION_NAME,
+        )
+        output = FilterContextOutput(
+            fields=[
+                FieldInfoOutput(
+                    name=f.name,
+                    type=f.type,
+                    values=f.values,
+                    count=f.count,
+                )
+                for f in ctx.fields
+            ],
+            suggested_filters=ctx.suggested_filters,
+            sample_query=ctx.sample_query,
+        )
+        return output.model_dump_json(indent=2)
+    except Exception as exc:
+        logger.exception("rag_get_filter_context failed")
+        return _friendly_error(exc)
+
+
+@mcp.tool(
+    name="rag_extract_filters",
+    title="Extract Metadata Filters",
+    description="""Extract metadata filters from a natural language query.
+
+Parses a query into structured metadata filters without executing search.
+Useful for agents that want to inspect/modify filters before searching.
+
+Args:
+  - query (string): Natural language query to extract filters from.
+
+Returns:
+  JSON object with extracted filters, explanation, and confidence score.
+
+Error Handling:
+  - Returns empty filters if extraction fails.""",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
+async def rag_extract_filters(input: ExtractFiltersInput) -> str:
+    try:
+        from rag.filter_tools import extract_filters, get_filter_context
+
+        engine = _get_engine()
+        ctx = await get_filter_context(
+            config_module=config,
+            qdrant_client=engine._get_qdrant(),
+            collection=config.COLLECTION_NAME,
+        )
+        result = await extract_filters(
+            query=input.query,
+            available_fields=ctx.fields,
+        )
+        output = ExtractedFiltersOutput(
+            filters=result.filters,
+            explanation=result.explanation,
+            confidence=result.confidence,
+        )
+        return output.model_dump_json(indent=2)
+    except Exception as exc:
+        logger.exception("rag_extract_filters failed")
+        return _friendly_error(exc)
+
+
+@mcp.tool(
+    name="rag_eval",
+    title="Evaluate Retrieval Quality",
+    description="""Run golden-set evaluation against the RAG system.
+
+Loads a golden set of queries with expected sources, runs retrieval,
+and computes metrics (recall, precision, hit_rate, MRR, keyword_coverage).
+
+Args:
+  - golden_set_path (string): Path to golden set YAML/JSON file.
+  - top_k (number): Results per query (default: 5).
+  - compare_rerank (boolean): Compare with/without reranking (default: false).
+  - source_match_mode (string): Source matching mode (default: "basename").
+
+Returns:
+  JSON object with aggregate and per-query evaluation metrics.
+""",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
+async def rag_eval(input: EvalInput) -> str:
+    try:
+        from rag.evaluation import GoldenSet, keyword_coverage, match_source
+
+        # Load golden set
+        golden_path = input.golden_set_path
+        if golden_path.endswith(".json"):
+            golden_set = GoldenSet.from_json(golden_path)
+        else:
+            golden_set = GoldenSet.from_yaml(golden_path)
+
+        if not golden_set.queries:
+            return "Error: Golden set is empty — no queries to evaluate."
+
+        engine = _get_engine()
+        query_results: list[EvalQueryResult] = []
+        mode = input.source_match_mode
+
+        for gq in golden_set.queries:
+            try:
+                results = engine.hybrid_search(
+                    query=gq.query,
+                    top_k=input.top_k,
+                    rerank=True,
+                    metadata_filter=gq.filters,
+                )
+            except Exception as search_exc:
+                logger.warning("Eval query failed: %s (%s)", gq.query[:60], search_exc)
+                results = []
+
+            # Extract sources and content from results
+            retrieved_sources = [r["source"] for r in results]
+            retrieved_content = " ".join(r.get("content", "") for r in results)
+
+            # Compute metrics
+            k = input.top_k
+            recall = 0.0
+            precision = 0.0
+            hit_rate = 0.0
+            mrr = 0.0
+
+            if gq.expected_sources:
+                expected = gq.expected_sources
+                expected_set = set(expected)
+
+                # Recall: fraction of expected found in top k
+                window = set(retrieved_sources[:k])
+                recall = len(expected_set & window) / len(expected_set) if expected_set else 0.0
+
+                # Precision: fraction of top k that are correct
+                hits = sum(1 for s in retrieved_sources[:k] if s in expected_set)
+                precision = hits / k if k > 0 else 0.0
+
+                # Hit rate: 1.0 if any expected found
+                hit_rate = 1.0 if window & expected_set else 0.0
+
+                # MRR: 1/rank of first correct result
+                for position, s in enumerate(retrieved_sources[:k], start=1):
+                    if s in expected_set:
+                        mrr = 1.0 / position
+                        break
+
+            # Keyword coverage
+            kw_coverage = keyword_coverage(retrieved_content, gq.expected_keywords)
+
+            # Build matched expected sources for display
+            matched_expected = []
+            for es in gq.expected_sources:
+                for rs in retrieved_sources:
+                    if match_source(es, rs, mode=mode):
+                        if es not in matched_expected:
+                            matched_expected.append(es)
+                        break
+
+            query_results.append(
+                EvalQueryResult(
+                    query=gq.query,
+                    recall=recall,
+                    precision=precision,
+                    hit_rate=hit_rate,
+                    mrr=mrr,
+                    keyword_coverage=kw_coverage,
+                    expected_sources=gq.expected_sources,
+                    retrieved_sources=retrieved_sources[:k],
+                )
+            )
+
+        # Aggregate
+        n = len(query_results)
+        avg = lambda metric, _qr=query_results, _n=n: sum(getattr(q, metric) for q in _qr) / _n if _n else 0.0  # noqa: E731
+
+        output = EvalOutput(
+            total_queries=n,
+            avg_recall=avg("recall"),
+            avg_precision=avg("precision"),
+            avg_hit_rate=avg("hit_rate"),
+            avg_mrr=avg("mrr"),
+            avg_keyword_coverage=avg("keyword_coverage"),
+            queries=query_results,
+        )
+        return output.model_dump_json(indent=2)
+    except FileNotFoundError as exc:
+        return f"Error: Golden set not found — {exc}"
+    except Exception as exc:
+        logger.exception("rag_eval failed")
+        return _friendly_error(exc)
+
+
+@mcp.tool(
+    name="rag_eval_sweep",
+    title="Sweep Evaluation Configs",
+    description="""Compare multiple retrieval configurations side by side.
+
+Runs evaluation with different configs and shows delta comparison.
+
+Args:
+  - golden_set_path (string): Path to golden set file.
+  - variants (list): List of variant configs to compare.
+  - top_k (number): Results per query (default: 5).
+
+Returns:
+  Formatted comparison table with metrics and deltas.
+""",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
+async def rag_eval_sweep(input: EvalSweepInput) -> str:
+    try:
+        from rag.evaluation import GoldenSet, keyword_coverage
+
+        # Load golden set
+        golden_path = input.golden_set_path
+        if golden_path.endswith(".json"):
+            golden_set = GoldenSet.from_json(golden_path)
+        else:
+            golden_set = GoldenSet.from_yaml(golden_path)
+
+        if not golden_set.queries:
+            return "Error: Golden set is empty — no queries to evaluate."
+
+        engine = _get_engine()
+        all_variant_results: list[EvalOutput] = []
+
+        for variant in input.variants:
+            variant_name = variant.get("name", "unnamed")
+            rerank = variant.get("rerank", True)
+            top_k = variant.get("top_k", input.top_k)
+
+            query_results: list[EvalQueryResult] = []
+            for gq in golden_set.queries:
+                try:
+                    results = engine.hybrid_search(
+                        query=gq.query,
+                        top_k=top_k,
+                        rerank=rerank,
+                        metadata_filter=gq.filters,
+                    )
+                except Exception as search_exc:
+                    logger.warning("Eval query failed: %s (%s)", gq.query[:60], search_exc)
+                    results = []
+
+                retrieved_sources = [r["source"] for r in results]
+                retrieved_content = " ".join(r.get("content", "") for r in results)
+
+                k = top_k
+                recall = precision = hit_rate = mrr = 0.0
+
+                if gq.expected_sources:
+                    expected_set = set(gq.expected_sources)
+                    window = set(retrieved_sources[:k])
+                    recall = len(expected_set & window) / len(expected_set) if expected_set else 0.0
+                    hits = sum(1 for s in retrieved_sources[:k] if s in expected_set)
+                    precision = hits / k if k > 0 else 0.0
+                    hit_rate = 1.0 if window & expected_set else 0.0
+                    for position, s in enumerate(retrieved_sources[:k], start=1):
+                        if s in expected_set:
+                            mrr = 1.0 / position
+                            break
+
+                kw_coverage = keyword_coverage(retrieved_content, gq.expected_keywords)
+
+                query_results.append(
+                    EvalQueryResult(
+                        query=gq.query,
+                        recall=recall,
+                        precision=precision,
+                        hit_rate=hit_rate,
+                        mrr=mrr,
+                        keyword_coverage=kw_coverage,
+                        expected_sources=gq.expected_sources,
+                        retrieved_sources=retrieved_sources[:k],
+                    )
+                )
+
+            n = len(query_results)
+            avg = lambda metric, _qr=query_results, _n=n: sum(getattr(q, metric) for q in _qr) / _n if _n else 0.0  # noqa: E731
+
+            all_variant_results.append(
+                EvalOutput(
+                    total_queries=n,
+                    avg_recall=avg("recall"),
+                    avg_precision=avg("precision"),
+                    avg_hit_rate=avg("hit_rate"),
+                    avg_mrr=avg("mrr"),
+                    avg_keyword_coverage=avg("keyword_coverage"),
+                    queries=query_results,
+                )
+            )
+
+        # Build delta table
+        delta_lines: list[str] = []
+        metric_keys = ["avg_recall", "avg_precision", "avg_hit_rate", "avg_mrr", "avg_keyword_coverage"]
+        col_headers = ["recall", "precision", "hit_rate", "mrr", "kw_cov"]
+
+        name_width = max(len(variant.get("name", "unnamed")) for variant in input.variants)
+        name_width = max(name_width, len("variant"))
+        cell = 11
+
+        header = f"{'variant':<{name_width}}  " + "  ".join(f"{h:>{cell}}" for h in col_headers)
+        delta_lines.append(header)
+        delta_lines.append("-" * len(header))
+
+        if all_variant_results:
+            baseline = all_variant_results[0]
+            baseline_metrics = {k: getattr(baseline, k, 0.0) for k in metric_keys}
+
+            for i, (variant, result) in enumerate(zip(input.variants, all_variant_results, strict=True)):
+                variant_name = variant.get("name", "unnamed")
+                cells = []
+                for mk in metric_keys:
+                    value = getattr(result, mk, 0.0)
+                    if i == 0:
+                        cells.append(f"{value:.3f}".rjust(cell))
+                    else:
+                        delta = value - baseline_metrics.get(mk, 0.0)
+                        cells.append(f"{value:.3f}{delta:+.2f}".rjust(cell))
+                delta_lines.append(f"{variant_name:<{name_width}}  " + "  ".join(cells))
+
+            if len(all_variant_results) > 1:
+                best_variant, best_result = max(
+                    zip(input.variants, all_variant_results, strict=True),
+                    key=lambda x: x[1].avg_recall,
+                )
+                delta_lines.append("")
+                delta_lines.append(f"Best recall: {best_variant.get('name', 'unnamed')} ({best_result.avg_recall:.3f})")
+
+        sweep_output = EvalSweepOutput(
+            variants=all_variant_results,
+            delta_table="\n".join(delta_lines),
+        )
+        return sweep_output.model_dump_json(indent=2)
+    except FileNotFoundError as exc:
+        return f"Error: Golden set not found — {exc}"
+    except Exception as exc:
+        logger.exception("rag_eval_sweep failed")
         return _friendly_error(exc)
 
 

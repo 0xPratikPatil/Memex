@@ -19,6 +19,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from rag import config
+from rag.dedup import (
+    clear_source_chunks,
+    compute_content_hash,
+    is_already_ingested,
+)
 from rag.pipeline import RAGEngine
 
 logger = logging.getLogger("ingestion")
@@ -85,10 +90,19 @@ class IngestionOrchestrator:
         if not result.ok:
             return f"Failed: Docling status '{result.status}', errors: {result.errors}"
 
-        content_hash = self._engine.compute_file_hash(result.markdown.encode())
-        already, existing = self._engine.is_already_ingested(item, content_hash)
+        content_hash = compute_content_hash(result.markdown.encode())
+
+        # Content-hash dedup: skip if identical content already ingested
+        qdrant = self._engine._get_qdrant()
+        already, existing = await is_already_ingested(qdrant, config.COLLECTION_NAME, item, content_hash)
         if already:
             return f"Skipped ({existing} chunks, unchanged)"
+
+        # Check for partial prior ingest: if some chunks exist but content
+        # changed (not caught by dedup above), clear stale partial data.
+        deleted = await clear_source_chunks(qdrant, config.COLLECTION_NAME, item)
+        if deleted > 0:
+            logger.info("Cleared %d stale/partial chunks for %s before re-ingest", deleted, item)
 
         try:
             count = await asyncio.wait_for(
@@ -235,10 +249,18 @@ class IngestionOrchestrator:
             status = getattr(result, "status", "unknown")
             return f"Failed: Docling status '{status}', errors: {err}"
 
-        content_hash = self._engine.compute_file_hash(result.markdown.encode())
-        already, existing = self._engine.is_already_ingested(item, content_hash)
+        content_hash = compute_content_hash(result.markdown.encode())
+
+        # Content-hash dedup: skip if identical content already ingested
+        qdrant = self._engine._get_qdrant()
+        already, existing = await is_already_ingested(qdrant, config.COLLECTION_NAME, item, content_hash)
         if already:
             return f"Skipped ({existing} chunks, unchanged)"
+
+        # Clear stale/partial chunks before re-ingest
+        deleted = await clear_source_chunks(qdrant, config.COLLECTION_NAME, item)
+        if deleted > 0:
+            logger.info("Cleared %d stale/partial chunks for %s before re-ingest", deleted, item)
 
         try:
             count = await asyncio.wait_for(

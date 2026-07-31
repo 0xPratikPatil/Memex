@@ -173,6 +173,47 @@ services:
       - "com.memex.description=Document parsing and hybrid chunking (Docling HybridChunker)"
 
   # ══════════════════════════════════════════════════════════════════════════════
+  # MarkItDown — Document-to-markdown conversion (alternative to Docling)
+  # ══════════════════════════════════════════════════════════════════════════════
+  markitdown:
+    build:
+      context: ./docker/markitdown
+    container_name: memex-markitdown
+    init: true
+    ports:
+      - "127.0.0.1:5003:8000"
+    tmpfs:
+      - /tmp:exec,size=64M
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+    restart: unless-stopped
+    stop_grace_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - "com.memex.service=markitdown"
+      - "com.memex.description=Document-to-markdown conversion via MarkItDown"
+
+  # ══════════════════════════════════════════════════════════════════════════════
   # ML Services — Sparse BM25 embeddings + cross-encoder / causal-LM reranker
   # ══════════════════════════════════════════════════════════════════════════════
   ml-services:
@@ -227,6 +268,47 @@ services:
     labels:
       - "com.memex.service=ml-services"
       - "com.memex.description=Sparse BM25 embeddings + causal-LM reranker (Qwen3-Reranker)"
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # S3 Service — HTTP access to S3 buckets (list + download + hash)
+  # ══════════════════════════════════════════════════════════════════════════════
+  s3-service:
+    build:
+      context: ./docker/s3-service
+    container_name: memex-s3-service
+    init: true
+    ports:
+      - "127.0.0.1:5004:8000"
+    tmpfs:
+      - /tmp:exec,size=64M
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+    restart: unless-stopped
+    stop_grace_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - "com.memex.service=s3-service"
+      - "com.memex.description=HTTP gateway for S3 bucket listing, download, and content hashing"
 
   # ══════════════════════════════════════════════════════════════════════════════
   # Redis — Search + embedding cache (allkeys-lru, 256mb max)

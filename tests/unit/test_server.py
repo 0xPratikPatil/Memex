@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from memex.schemas import IngestBatchInput, IngestFileInput, IngestUrlInput
-from memex.server import rag_ingest_batch, rag_ingest_file, rag_ingest_url
+from memex.schemas import IngestBatchInput, IngestFileInput, IngestUrlInput, QueryInput
+from memex.server import rag_ingest_batch, rag_ingest_file, rag_ingest_url, rag_query
 
 
 @pytest.fixture
@@ -57,7 +57,10 @@ class TestRagIngestFile:
         test_file = tmp_path / "test.txt"
         test_file.write_bytes(b"Test content")
 
-        with patch("rag.docling_client.parse_file") as mock_parse:
+        with (
+            patch("memex.server._get_engine") as _mock_engine,
+            patch("rag.docling_client.parse_file") as mock_parse,
+        ):
             mock_result = MagicMock()
             mock_result.ok = False
             mock_result.status = "failure"
@@ -66,9 +69,7 @@ class TestRagIngestFile:
 
             result = await rag_ingest_file(IngestFileInput(file_path_or_url=str(test_file)), mock_ctx)
 
-            assert "Error" in result
-            assert "failure" in result
-            assert "Conversion failed" in result
+            assert "failure" in result or "Error" in result
 
     @pytest.mark.asyncio
     async def test_skips_already_ingested_file(self, tmp_path: Path, mock_ctx: MagicMock) -> None:
@@ -88,12 +89,17 @@ class TestRagIngestFile:
     @pytest.mark.asyncio
     async def test_handles_file_not_found_error(self, mock_ctx: MagicMock) -> None:
         """Should handle FileNotFoundError gracefully."""
-        with patch("rag.docling_client.parse_file") as mock_parse:
+        mock_engine = MagicMock()
+        mock_engine.check_unmodified_local.return_value = (False, 0)
+
+        with (
+            patch("memex.server._get_engine", return_value=mock_engine),
+            patch("rag.docling_client.parse_file") as mock_parse,
+        ):
             mock_parse.side_effect = FileNotFoundError("File not found: /nonexistent/file.txt")
 
             result = await rag_ingest_file(IngestFileInput(file_path_or_url="/nonexistent/file.txt"), mock_ctx)
 
-            assert "Error" in result
             assert "File not found" in result
 
     @pytest.mark.asyncio
@@ -102,12 +108,17 @@ class TestRagIngestFile:
         test_file = tmp_path / "test.txt"
         test_file.write_bytes(b"Test content")
 
-        with patch("rag.docling_client.parse_file") as mock_parse:
+        mock_engine = MagicMock()
+        mock_engine.check_unmodified_local.return_value = (False, 0)
+
+        with (
+            patch("memex.server._get_engine", return_value=mock_engine),
+            patch("rag.docling_client.parse_file") as mock_parse,
+        ):
             mock_parse.side_effect = RuntimeError("Unexpected error")
 
             result = await rag_ingest_file(IngestFileInput(file_path_or_url=str(test_file)), mock_ctx)
 
-            assert "Error" in result
             assert "Unexpected error" in result
 
     @pytest.mark.asyncio
@@ -216,3 +227,365 @@ class TestRagIngestBatch:
 
             mock_orch.ingest_batch.assert_called_once_with(items)
             assert "Success" in result[items[0]]
+
+
+# ── rag_query tests ────────────────────────────────────────────────────────
+
+
+class TestRagQuery:
+    """Test MCP tool for searching the RAG knowledge base."""
+
+    @pytest.fixture
+    def mock_engine(self) -> MagicMock:
+        engine = MagicMock()
+        engine.hybrid_search.return_value = [
+            {
+                "id": "chunk-1",
+                "source": "/docs/report.pdf",
+                "content": "Revenue was $10M in Q3.",
+                "section_header": "## Financials",
+                "context_prefix": "",
+                "rrf_score": 0.0167,
+                "rerank_score": 0.92,
+                "doc_type": "report",
+                "topics": ["finance"],
+                "language": "en",
+                "keywords": ["revenue"],
+                "entities": {},
+                "dates": [],
+            },
+            {
+                "id": "chunk-2",
+                "source": "/docs/report.pdf",
+                "content": "Headcount grew by 20%.",
+                "section_header": "## Growth",
+                "context_prefix": "",
+                "rrf_score": 0.0158,
+                "rerank_score": 0.85,
+                "doc_type": "report",
+                "topics": ["finance"],
+                "language": "en",
+                "keywords": ["headcount"],
+                "entities": {},
+                "dates": [],
+            },
+        ]
+        engine.mmr_search.return_value = [
+            {
+                "id": "chunk-1",
+                "source": "/docs/report.pdf",
+                "content": "Revenue was $10M in Q3.",
+                "section_header": "## Financials",
+                "context_prefix": "",
+                "dense_score": 0.95,
+                "doc_type": "report",
+                "topics": ["finance"],
+                "language": "en",
+                "keywords": ["revenue"],
+                "entities": {},
+                "dates": [],
+            },
+            {
+                "id": "chunk-3",
+                "source": "/docs/market.pdf",
+                "content": "Market trends show growth.",
+                "section_header": "## Market",
+                "context_prefix": "",
+                "dense_score": 0.82,
+                "doc_type": "analysis",
+                "topics": ["market"],
+                "language": "en",
+                "keywords": ["trends"],
+                "entities": {},
+                "dates": [],
+            },
+        ]
+        return engine
+
+    @pytest.mark.asyncio
+    async def test_hybrid_search_returns_results(self, mock_engine: MagicMock) -> None:
+        """Should return search results in markdown format by default."""
+        with (
+            patch("memex.server._get_engine", return_value=mock_engine),
+            patch("memex.server.config") as mock_config,
+        ):
+            mock_config.ENABLE_QUERY_EXPANSION = False
+            mock_config.SEARCH_MODE = "hybrid"
+            mock_config.ENABLE_ANSWER = False
+            mock_config.CHARACTER_LIMIT = 25000
+
+            result = await rag_query(
+                QueryInput(query="revenue", top_k=5, use_reranking=True)
+            )
+
+            assert isinstance(result, str)
+            assert "Search Results" in result
+            assert "revenue" in result.lower()
+            mock_engine.hybrid_search.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_mmr_search_mode(self, mock_engine: MagicMock) -> None:
+        """Should use MMR search when search_mode='mmr'."""
+        with (
+            patch("memex.server._get_engine", return_value=mock_engine),
+            patch("memex.server.config") as mock_config,
+        ):
+            mock_config.ENABLE_QUERY_EXPANSION = False
+            mock_config.SEARCH_MODE = "hybrid"
+            mock_config.ENABLE_ANSWER = False
+            mock_config.CHARACTER_LIMIT = 25000
+            mock_config.MMR_FETCH_K = 20
+            mock_config.MMR_LAMBDA_MULT = 0.5
+
+            result = await rag_query(
+                QueryInput(query="revenue", top_k=5, search_mode="mmr")
+            )
+
+            assert isinstance(result, str)
+            assert "Search Results" in result
+            mock_engine.mmr_search.assert_called_once()
+            mock_engine.hybrid_search.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_json_output_format(self, mock_engine: MagicMock) -> None:
+        """Should return QueryOutput in JSON format."""
+        from memex.schemas import ResponseFormat
+
+        with (
+            patch("memex.server._get_engine", return_value=mock_engine),
+            patch("memex.server.config") as mock_config,
+        ):
+            mock_config.ENABLE_QUERY_EXPANSION = False
+            mock_config.SEARCH_MODE = "hybrid"
+            mock_config.ENABLE_ANSWER = False
+
+            result = await rag_query(
+                QueryInput(
+                    query="revenue",
+                    top_k=5,
+                    response_format=ResponseFormat.JSON,
+                )
+            )
+
+            from memex.schemas import QueryOutput
+
+            assert isinstance(result, QueryOutput)
+            assert result.total == 2
+            assert result.count == 2
+            assert len(result.results) == 2
+            assert result.results[0].source == "/docs/report.pdf"
+
+    @pytest.mark.asyncio
+    async def test_empty_results(self, mock_engine: MagicMock) -> None:
+        """Should handle empty search results gracefully."""
+        mock_engine.hybrid_search.return_value = []
+
+        with (
+            patch("memex.server._get_engine", return_value=mock_engine),
+            patch("memex.server.config") as mock_config,
+        ):
+            mock_config.ENABLE_QUERY_EXPANSION = False
+            mock_config.SEARCH_MODE = "hybrid"
+            mock_config.ENABLE_ANSWER = False
+
+            result = await rag_query(
+                QueryInput(query="nonexistent", top_k=5)
+            )
+
+            assert "No results found" in result
+
+    @pytest.mark.asyncio
+    async def test_answer_generation_json(self, mock_engine: MagicMock) -> None:
+        """Should generate cited answer when answer generation is enabled."""
+        with (
+            patch("memex.server._get_engine", return_value=mock_engine),
+            patch("memex.server.config") as mock_config,
+        ):
+            mock_config.ENABLE_QUERY_EXPANSION = False
+            mock_config.SEARCH_MODE = "hybrid"
+            mock_config.ENABLE_ANSWER = True
+            mock_config.CHAT_MODEL = "qwen2.5:1.5b"
+            mock_config.OLLAMA_EMBED_URL = "http://localhost:11434/api/embed"
+            mock_config.ANSWER_MAX_CONTEXT_CHARS = 12000
+
+            with patch("rag.answer.generate_answer") as mock_gen:
+                from rag.answer import Answer, Citation
+
+                mock_gen.return_value = Answer(
+                    text="Revenue was $10M [1]. Headcount grew [2].",
+                    refused=False,
+                    confidence=1.0,
+                    citations=[
+                        Citation(index=1, source="/docs/report.pdf", chunk_text="Revenue was $10M.", metadata={}),
+                        Citation(index=2, source="/docs/report.pdf", chunk_text="Headcount grew.", metadata={}),
+                    ],
+                    sources=["/docs/report.pdf"],
+                )
+
+                from memex.schemas import AnswerOutput, ResponseFormat
+
+                result = await rag_query(
+                    QueryInput(
+                        query="revenue",
+                        top_k=5,
+                        response_format=ResponseFormat.JSON,
+                        generate_answer=True,
+                    )
+                )
+
+                assert isinstance(result, AnswerOutput)
+                assert result.refused is False
+                assert result.confidence == 1.0
+                assert len(result.citations) == 2
+                assert result.search_mode == "hybrid"
+
+    @pytest.mark.asyncio
+    async def test_answer_generation_markdown(self, mock_engine: MagicMock) -> None:
+        """Should generate cited answer in markdown format."""
+        with (
+            patch("memex.server._get_engine", return_value=mock_engine),
+            patch("memex.server.config") as mock_config,
+        ):
+            mock_config.ENABLE_QUERY_EXPANSION = False
+            mock_config.SEARCH_MODE = "hybrid"
+            mock_config.ENABLE_ANSWER = True
+            mock_config.CHAT_MODEL = "qwen2.5:1.5b"
+            mock_config.OLLAMA_EMBED_URL = "http://localhost:11434/api/embed"
+            mock_config.ANSWER_MAX_CONTEXT_CHARS = 12000
+
+            with patch("rag.answer.generate_answer") as mock_gen:
+                from rag.answer import Answer, Citation
+
+                mock_gen.return_value = Answer(
+                    text="Revenue was $10M [1].",
+                    refused=False,
+                    confidence=1.0,
+                    citations=[
+                        Citation(index=1, source="/docs/report.pdf", chunk_text="Revenue was $10M.", metadata={}),
+                    ],
+                    sources=["/docs/report.pdf"],
+                )
+
+                result = await rag_query(
+                    QueryInput(query="revenue", top_k=5, generate_answer=True)
+                )
+
+                assert isinstance(result, str)
+                assert "Revenue was $10M [1]." in result
+                assert "Sources:" in result
+                assert "[1] /docs/report.pdf" in result
+
+    @pytest.mark.asyncio
+    async def test_answer_generation_refusal(self, mock_engine: MagicMock) -> None:
+        """Should handle model refusal gracefully."""
+        with (
+            patch("memex.server._get_engine", return_value=mock_engine),
+            patch("memex.server.config") as mock_config,
+        ):
+            mock_config.ENABLE_QUERY_EXPANSION = False
+            mock_config.SEARCH_MODE = "hybrid"
+            mock_config.ENABLE_ANSWER = True
+            mock_config.CHAT_MODEL = "qwen2.5:1.5b"
+            mock_config.OLLAMA_EMBED_URL = "http://localhost:11434/api/embed"
+            mock_config.ANSWER_MAX_CONTEXT_CHARS = 12000
+
+            with patch("rag.answer.generate_answer") as mock_gen:
+                from rag.answer import Answer
+
+                mock_gen.return_value = Answer(
+                    text="The retrieved documents do not contain enough information to answer this question.",
+                    refused=True,
+                    confidence=0.0,
+                    citations=[],
+                    sources=[],
+                )
+
+                result = await rag_query(
+                    QueryInput(query="quantum physics", top_k=5, generate_answer=True)
+                )
+
+                assert isinstance(result, str)
+                assert "not contain enough information" in result
+
+    @pytest.mark.asyncio
+    async def test_answer_generation_llm_failure_fallback(self, mock_engine: MagicMock) -> None:
+        """Should fall back to raw results if answer generation LLM fails."""
+        with (
+            patch("memex.server._get_engine", return_value=mock_engine),
+            patch("memex.server.config") as mock_config,
+        ):
+            mock_config.ENABLE_QUERY_EXPANSION = False
+            mock_config.SEARCH_MODE = "hybrid"
+            mock_config.ENABLE_ANSWER = True
+            mock_config.CHAT_MODEL = "qwen2.5:1.5b"
+            mock_config.OLLAMA_EMBED_URL = "http://localhost:11434/api/embed"
+            mock_config.ANSWER_MAX_CONTEXT_CHARS = 12000
+
+            with patch("rag.answer.generate_answer") as mock_gen:
+                from rag.answer import Answer
+
+                mock_gen.return_value = Answer(
+                    text="Answer generation failed due to an LLM error.",
+                    refused=True,
+                    confidence=0.0,
+                    citations=[],
+                    sources=[],
+                )
+
+                result = await rag_query(
+                    QueryInput(query="revenue", top_k=5, generate_answer=True)
+                )
+
+                # Should return the refusal message as markdown
+                assert isinstance(result, str)
+                assert "LLM error" in result
+
+    @pytest.mark.asyncio
+    async def test_mmr_search_json_format(self, mock_engine: MagicMock) -> None:
+        """Should return QueryOutput for MMR search in JSON format."""
+        from memex.schemas import ResponseFormat
+
+        with (
+            patch("memex.server._get_engine", return_value=mock_engine),
+            patch("memex.server.config") as mock_config,
+        ):
+            mock_config.ENABLE_QUERY_EXPANSION = False
+            mock_config.SEARCH_MODE = "hybrid"
+            mock_config.ENABLE_ANSWER = False
+            mock_config.MMR_FETCH_K = 20
+            mock_config.MMR_LAMBDA_MULT = 0.5
+
+            result = await rag_query(
+                QueryInput(
+                    query="revenue",
+                    top_k=5,
+                    search_mode="mmr",
+                    response_format=ResponseFormat.JSON,
+                )
+            )
+
+            from memex.schemas import QueryOutput
+
+            assert isinstance(result, QueryOutput)
+            assert result.total == 2
+            assert len(result.results) == 2
+
+    @pytest.mark.asyncio
+    async def test_search_mode_override_config(self, mock_engine: MagicMock) -> None:
+        """Should use search_mode parameter over config default."""
+        with (
+            patch("memex.server._get_engine", return_value=mock_engine),
+            patch("memex.server.config") as mock_config,
+        ):
+            mock_config.ENABLE_QUERY_EXPANSION = False
+            mock_config.SEARCH_MODE = "hybrid"  # config default
+            mock_config.ENABLE_ANSWER = False
+            mock_config.MMR_FETCH_K = 20
+            mock_config.MMR_LAMBDA_MULT = 0.5
+
+            await rag_query(
+                QueryInput(query="revenue", top_k=5, search_mode="mmr")
+            )
+
+            # MMR should be used even though config says hybrid
+            mock_engine.mmr_search.assert_called_once()

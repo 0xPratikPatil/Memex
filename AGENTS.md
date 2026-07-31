@@ -12,43 +12,68 @@ OpenCode should proactively use the following features when working with this co
 
 ### Search
 - **Hybrid Search**: Dense (qwen3-embedding:0.6b, 1024d, fallback bge-m3) + Sparse (BM25 via Qdrant/bm25) + RRF fusion (k=60) + cross-encoder/causal-LM rerank (Qwen/Qwen3-Reranker-0.6B, fallback BAAI/bge-reranker-base).
+- **MMR Search**: Maximal Marginal Relevance mode for diverse results (exploratory queries). Balances relevance (λ) with diversity. Config: `search.mode=mmr`, `search.mmr.lambda_mult=0.5`.
 - **Contextual Retrieval** (ENABLE_CONTEXTUAL_RETRIEVAL=true, CONTEXT_STRATEGY=summary): LLM-generated context prefixes for each chunk, improving embedding quality.
 - **Search Cache**: Redis caches full result sets for repeated queries (CACHE_TTL_SEARCH=3600).
 
 ### Ingestion
 - **Docling HybridChunker** (CHUNK_STRATEGY=hybrid): Tokenizer-aware, structure-preserving chunking on DoclingDocument. Repeats table headers across boundaries.
+- **MarkItDown Converter**: Lightweight alternative converter — user-selectable via `converter.engine` config (docling | markitdown). No GPU, faster for simple docs.
 - **Multi-format Embedding**: Table chunks → HTML, code chunks → fenced markdown, images → [Image: caption].
 - **Docling Enrichment**: Picture classification (enabled), code/formula/chart extraction (opt-in, needs serve-side models).
 - **Metadata Extraction** (ENABLE_METADATA_EXTRACTION=true): Entities, topics, document classification, language detection, dates, keywords.
+- **Content-Hash Dedup**: SHA256-based dedup prevents re-indexing identical content. Partial ingest recovery on crash.
 - **Embedding Cache**: Redis caches dense vectors (CACHE_TTL_EMBEDDING=86400).
 
-## MCP Tools (8 available)
+### Document Sources & Sync
+- **Pluggable Sources**: Local directories + S3 buckets. Define in `config.yaml` → `sources` section.
+- **Sync Engine**: `rag_sync` reconciles collection against sources — adds new, replaces changed, removes deleted files. Safety rails suppress deletions if any source fails.
+
+### Answer Generation
+- **Cited Answers**: `rag_query` returns structured Answer objects with `[N]` citations, refusal detection (INSUFFICIENT_CONTEXT sentinel), and citation confidence scoring.
+- **Agent Filter Tools**: `rag_get_filter_context` shows available metadata fields/values; `rag_extract_filters` parses natural language into metadata filters.
+
+### Evaluation
+- **Golden-Set Evaluation**: YAML-based golden sets with recall@K, precision@K, hit_rate@K, MRR, keyword_coverage.
+- **Eval Sweep**: Compare multiple retrieval configs side by side with delta comparison. MCP tools + CLI.
+
+## MCP Tools (13 available)
 
 | Tool | Use when |
 |------|----------|
 | `rag_ingest_file` | Ingest a local document by path |
 | `rag_ingest_url` | Ingest a document from a URL |
 | `rag_ingest_batch` | Ingest multiple files/URLs at once |
-| `rag_query` | Hybrid search with expansion + reranking — use for all search needs |
+| `rag_query` | Hybrid/MMR search with expansion, reranking, citation answers — use for all search needs |
 | `rag_list_documents` | See what documents are indexed |
 | `rag_collection_stats` | Check collection size and config |
 | `rag_delete_document` | Remove a document and its chunks |
 | `rag_service_status` | Check Docker service health |
+| `rag_sync` | Sync collection against configured sources |
+| `rag_get_filter_context` | Show available metadata fields and values |
+| `rag_extract_filters` | Extract metadata filters from natural language |
+| `rag_eval` | Run golden-set evaluation |
+| `rag_eval_sweep` | Compare multiple retrieval configs side by side |
 
-## Key Config (env vars)
+## Key Config (config.yaml)
 
-| Variable | Default | Notes |
-|----------|---------|-------|
-| CHUNK_STRATEGY | hybrid | hybrid / recursive / fixed |
-| CHUNK_SIZE | 1024 | Target tokens per chunk |
-| ENABLE_QUERY_EXPANSION | true | Master for HyDE + rewrite + multi-query |
-| ENABLE_CONTEXTUAL_RETRIEVAL | true | Context prefixes on chunks |
-| ENABLE_CACHE | true | Redis caching layer |
-| ENABLE_METADATA_EXTRACTION | true | All metadata extractors |
-| DOCLING_PICTURE_CLASSIFY | true | Image classification in Docling |
-| DOCLING_ENRICH_CODE | false | Opt-in — needs CodeFormula model in serve |
-| DOCLING_ENRICH_FORMULA | false | Opt-in — needs CodeFormula model in serve |
-| DOCLING_CHART_EXTRACT | false | Opt-in — needs chart model in serve |
+All configuration lives in `config.yaml`. Copy `config.example.yaml` to `config.yaml` and customize.
+
+| Path | Default | Notes |
+|------|---------|-------|
+| `chunking.strategy` | hybrid | hybrid / recursive / fixed |
+| `chunking.size` | 1024 | Target tokens per chunk |
+| `query_expansion.enabled` | true | Master for HyDE + rewrite + multi-query |
+| `contextual_retrieval.enabled` | true | Context prefixes on chunks |
+| `caching.enabled` | true | Redis caching layer |
+| `metadata.enabled` | true | All metadata extractors |
+| `converter.engine` | docling | docling / markitdown |
+| `search.mode` | hybrid | similarity / hybrid / mmr |
+| `answer.enabled` | true | Citation-based answer generation |
+| `docling_picture_classify` | true | Image classification in Docling |
+| `docling_enrich_code` | false | Opt-in — needs CodeFormula model |
+| `docling_enrich_formula` | false | Opt-in — needs CodeFormula model |
+| `docling_chart_extract` | false | Opt-in — needs chart model |
 
 ## Development Commands
 
@@ -67,10 +92,20 @@ make fmt                      # Auto-format
 MCP Server (local, uv run memex)
   └── HTTP → Docker Services
        ├── Docling Serve :5001 (GPU doc conversion + HybridChunker)
+       ├── MarkItDown :5003 (lightweight doc conversion)
        ├── Ollama :11434 (embeddings + chat LLM)
        ├── Qdrant :6333 (vector DB)
        ├── ML Services :5002 (sparse BM25 + reranker)
-       └── Redis :6379 (caching)
+       ├── Redis :6379 (caching)
+       └── S3 Service :5004 (S3 source connector)
+```
+
+## CLI Commands
+
+```bash
+memex ingest /path/to/docs --recursive   # Ingest files or directories
+memex sync --dry-run                     # Sync collection against sources
+memex eval golden.yaml --top-k 5         # Evaluate retrieval quality
 ```
 
 ## Docker Ollama (required — no host Ollama)
@@ -118,6 +153,8 @@ Ollama runs **exclusively in Docker**. Never install Ollama on the host.
 | Change | Action |
 |--------|--------|
 | `rag/ml_server.py` | `docker compose build ml-services && docker compose up -d` |
+| `docker/markitdown/server.py` | `docker compose build markitdown && docker compose up -d` |
+| `docker/s3-service/server.py` | `docker compose build s3-service && docker compose up -d` |
 | Python packages in Dockerfile | `docker compose build --no-cache ml-services && docker compose up -d` |
 | System deps (apt-get) | `docker compose build --no-cache ml-services && docker compose up -d` |
 | Compose config, env vars, or labels | `docker compose up -d` (restart) |

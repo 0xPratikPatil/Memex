@@ -39,3 +39,8 @@ services:
     healthcheck:
       interval: 10s
       start_period: 5s
+
+  markitdown:
+    healthcheck:
+      interval: 15s
+      start_period: 5s
