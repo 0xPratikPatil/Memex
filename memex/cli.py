@@ -151,11 +151,21 @@ def eval(
     typer.echo("(evaluation framework not yet integrated)")
 
 
+@app.command()
+def serve(
+    config_path: str = typer.Option("config.yaml", "--config", "-c", help="Path to config.yaml"),
+) -> None:
+    """Start the MCP server (stdio transport)."""
+    from memex.server import mcp
+
+    mcp.run(transport="stdio")
+
+
 @app.callback(invoke_without_command=True)
 def main(
     version: bool = typer.Option(False, "--version", "-V", help="Show version and exit"),
 ) -> None:
-    """Memex RAG — CLI commands."""
+    """Memex RAG — CLI commands. Use `memex serve` to start the MCP server, or run subcommands directly."""
     if version:
         typer.echo(f"memex {__version__}")
         raise typer.Exit()
