@@ -327,7 +327,7 @@ class TestBenchmarkResult:
 
 
 class TestEvalRunner:
-    @patch("rag.services.evaluation.config")
+    @patch("memex.engine.evaluation.runner.config")
     def test_run_full_evaluation(self, mock_config: MagicMock, tmp_path: Path) -> None:
         mock_config.EVAL_DATASET_PATH = str(tmp_path / "eval.jsonl")
         mock_config.EVAL_TOP_K = 5
@@ -359,7 +359,7 @@ class TestEvalRunner:
         assert "config" in results
         assert "benchmarks" in results
 
-    @patch("rag.services.evaluation.config")
+    @patch("memex.engine.evaluation.runner.config")
     def test_run_single_query(self, mock_config: MagicMock) -> None:
         mock_config.EVAL_TOP_K = 5
         mock_config.EVAL_RUN_RAGAS = False
@@ -381,7 +381,7 @@ class TestEvalRunner:
         assert result["results_count"] == 1
         assert result["mrr"] == 1.0
 
-    @patch("rag.services.evaluation.config")
+    @patch("memex.engine.evaluation.runner.config")
     def test_compare_results(self, mock_config: MagicMock) -> None:
         mock_config.EVAL_TOP_K = 5
         mock_config.EVAL_RUN_RAGAS = False
@@ -408,7 +408,7 @@ class TestEvalRunner:
 
 class TestAggregation:
     def test_aggregate_averages(self) -> None:
-        mock_config_patcher = patch("rag.services.evaluation.config")
+        mock_config_patcher = patch("memex.engine.evaluation.runner.config")
         mock_config = mock_config_patcher.start()
         mock_config.EVAL_TOP_K = 5
         mock_config.EVAL_RUN_RAGAS = False
@@ -434,7 +434,7 @@ class TestAggregation:
             mock_config_patcher.stop()
 
     def test_aggregate_empty(self) -> None:
-        mock_config_patcher = patch("rag.services.evaluation.config")
+        mock_config_patcher = patch("memex.engine.evaluation.runner.config")
         mock_config = mock_config_patcher.start()
         mock_config.EVAL_DATASET_PATH = "/nonexistent"
         mock_config.EVAL_OUTPUT_DIR = "/tmp"
@@ -452,7 +452,7 @@ class TestAggregation:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# New evaluation framework: rag.evaluation
+# New evaluation framework: memex.engine.evaluation
 # ═══════════════════════════════════════════════════════════════════════════════
 
 

@@ -41,9 +41,9 @@ class TestCreateChunksHybridStrategy:
             },
         ]
         with (
-            patch("rag.pipeline.config.CHUNK_STRATEGY", "hybrid"),
-            patch("rag.pipeline.config.MIN_CHUNK_LEN", 5),
-            patch("rag.chunking.chunk_file", return_value={"chunks": mock_chunks, "markdown": ""}),
+            patch("memex.engine.core.pipeline.config.CHUNK_STRATEGY", "hybrid"),
+            patch("memex.engine.core.pipeline.config.MIN_CHUNK_LEN", 5),
+            patch("memex.engine.ingestion.splitter.chunk_file", return_value={"chunks": mock_chunks, "markdown": ""}),
         ):
             chunks = create_chunks(text="", source_identifier="/test/file.pdf")
             assert len(chunks) == 2
@@ -52,10 +52,10 @@ class TestCreateChunksHybridStrategy:
 
     def test_falls_back_to_recursive_on_hybrid_failure(self) -> None:
         with (
-            patch("rag.pipeline.config.CHUNK_STRATEGY", "hybrid"),
-            patch("rag.pipeline.config.MIN_CHUNK_LEN", 5),
+            patch("memex.engine.core.pipeline.config.CHUNK_STRATEGY", "hybrid"),
+            patch("memex.engine.core.pipeline.config.MIN_CHUNK_LEN", 5),
             patch(
-                "rag.chunking.chunk_file",
+                "memex.engine.ingestion.splitter.chunk_file",
                 side_effect=RuntimeError("fail"),
             ),
         ):
@@ -65,10 +65,10 @@ class TestCreateChunksHybridStrategy:
     def test_falls_back_to_recursive_on_import_error(self) -> None:
         short_text = "## Header\n\nSome text content that is long enough\n\nMore text"
         with (
-            patch("rag.pipeline.config.CHUNK_STRATEGY", "hybrid"),
-            patch("rag.pipeline.config.MIN_CHUNK_LEN", 5),
+            patch("memex.engine.core.pipeline.config.CHUNK_STRATEGY", "hybrid"),
+            patch("memex.engine.core.pipeline.config.MIN_CHUNK_LEN", 5),
             patch(
-                "rag.chunking.chunk_file",
+                "memex.engine.ingestion.splitter.chunk_file",
                 side_effect=ImportError("no docling"),
             ),
         ):

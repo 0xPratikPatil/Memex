@@ -30,9 +30,9 @@ def mock_redis() -> MagicMock:
 class TestEmbeddingFallback:
     """Pipeline._dense_embed_batch delegates to EmbeddingService with fallback."""
 
-    @patch("rag.pipeline.config.EMBED_MODEL", "primary-model")
-    @patch("rag.pipeline.config.EMBED_MODEL_FALLBACK", "fallback-model")
-    @patch("rag.pipeline.config.ENABLE_CACHE", False)
+    @patch("memex.engine.core.pipeline.config.EMBED_MODEL", "primary-model")
+    @patch("memex.engine.core.pipeline.config.EMBED_MODEL_FALLBACK", "fallback-model")
+    @patch("memex.engine.core.pipeline.config.ENABLE_CACHE", False)
     def test_uses_primary_model_by_default(self) -> None:
         from memex.engine.ingestion.embedding import EmbeddingService
         from memex.engine.core.pipeline import RAGEngine
@@ -43,9 +43,9 @@ class TestEmbeddingFallback:
             result = engine._dense_embed_batch(["test text"], model="primary-model")
             assert result == [[0.1, 0.2]]
 
-    @patch("rag.pipeline.config.EMBED_MODEL", "primary-model")
-    @patch("rag.pipeline.config.EMBED_MODEL_FALLBACK", "fallback-model")
-    @patch("rag.pipeline.config.ENABLE_CACHE", False)
+    @patch("memex.engine.core.pipeline.config.EMBED_MODEL", "primary-model")
+    @patch("memex.engine.core.pipeline.config.EMBED_MODEL_FALLBACK", "fallback-model")
+    @patch("memex.engine.core.pipeline.config.ENABLE_CACHE", False)
     def test_falls_back_on_primary_failure(self) -> None:
         from memex.engine.ingestion.embedding import EmbeddingService
         from memex.engine.core.pipeline import RAGEngine
@@ -65,9 +65,9 @@ class TestEmbeddingFallback:
             assert "fallback-model" in call_models
             assert result == [[0.3, 0.4]]
 
-    @patch("rag.pipeline.config.EMBED_MODEL", "fallback-model")
-    @patch("rag.pipeline.config.EMBED_MODEL_FALLBACK", "fallback-model")
-    @patch("rag.pipeline.config.ENABLE_CACHE", False)
+    @patch("memex.engine.core.pipeline.config.EMBED_MODEL", "fallback-model")
+    @patch("memex.engine.core.pipeline.config.EMBED_MODEL_FALLBACK", "fallback-model")
+    @patch("memex.engine.core.pipeline.config.ENABLE_CACHE", False)
     def test_raises_when_fallback_also_fails(self) -> None:
         from memex.engine.ingestion.embedding import EmbeddingService
         from memex.engine.core.pipeline import RAGEngine
@@ -87,8 +87,8 @@ class TestEmbeddingFallback:
 class TestCacheModelAwareness:
     """Embedding cache keys include model name to prevent cross-model poisoning."""
 
-    @patch("rag.services.cache.config.ENABLE_CACHE", True)
-    @patch("rag.services.cache.config.EMBED_MODEL", "model-a")
+    @patch("memex.engine.utils.cache.config.ENABLE_CACHE", True)
+    @patch("memex.engine.utils.cache.config.EMBED_MODEL", "model-a")
     def test_cache_key_includes_model(self, mock_redis: MagicMock) -> None:
         import memex.engine.utils.cache as cache_mod
 
@@ -107,8 +107,8 @@ class TestCacheModelAwareness:
 
         cache_mod._redis = None
 
-    @patch("rag.services.cache.config.ENABLE_CACHE", True)
-    @patch("rag.services.cache.config.EMBED_MODEL", "model-a")
+    @patch("memex.engine.utils.cache.config.ENABLE_CACHE", True)
+    @patch("memex.engine.utils.cache.config.EMBED_MODEL", "model-a")
     def test_get_uses_model_in_key(self, mock_redis: MagicMock) -> None:
         import memex.engine.utils.cache as cache_mod
 
@@ -131,8 +131,8 @@ class TestCacheModelAwareness:
 
         cache_mod._redis = None
 
-    @patch("rag.services.cache.config.ENABLE_CACHE", True)
-    @patch("rag.services.cache.config.EMBED_MODEL", "model-a")
+    @patch("memex.engine.utils.cache.config.ENABLE_CACHE", True)
+    @patch("memex.engine.utils.cache.config.EMBED_MODEL", "model-a")
     def test_default_model_used_when_not_specified(self, mock_redis: MagicMock) -> None:
         import memex.engine.utils.cache as cache_mod
 
@@ -167,9 +167,9 @@ class TestEmbeddingServiceAPI:
         svc = EmbeddingService(mock_client)
         return svc, mock_client
 
-    @patch("rag.embedding.config.EMBED_MODEL", "test-model")
-    @patch("rag.embedding.config.DENSE_DIM", 2)
-    @patch("rag.embedding.config.ENABLE_CACHE", False)
+    @patch("memex.engine.ingestion.embedding.config.EMBED_MODEL", "test-model")
+    @patch("memex.engine.ingestion.embedding.config.DENSE_DIM", 2)
+    @patch("memex.engine.ingestion.embedding.config.ENABLE_CACHE", False)
     def test_embed_sends_batched_input(self) -> None:
         svc, mock_client = self._make_svc()
         mock_resp = MagicMock()
@@ -184,9 +184,9 @@ class TestEmbeddingServiceAPI:
         call_json = mock_client.post.call_args[1]["json"]
         assert call_json["input"] == ["hello", "world"]
 
-    @patch("rag.embedding.config.EMBED_MODEL", "test-model")
-    @patch("rag.embedding.config.DENSE_DIM", 2)
-    @patch("rag.embedding.config.ENABLE_CACHE", False)
+    @patch("memex.engine.ingestion.embedding.config.EMBED_MODEL", "test-model")
+    @patch("memex.engine.ingestion.embedding.config.DENSE_DIM", 2)
+    @patch("memex.engine.ingestion.embedding.config.ENABLE_CACHE", False)
     def test_embed_caches_results(self) -> None:
         svc, mock_client = self._make_svc()
         mock_resp = MagicMock()
@@ -196,14 +196,14 @@ class TestEmbeddingServiceAPI:
 
         with (
             patch.object(svc, "_embed_url", "http://localhost:11434/api/embed"),
-            patch("rag.services.cache.cache_embedding") as mock_cache,
+            patch("memex.engine.utils.cache.cache_embedding") as mock_cache,
         ):
             svc.embed(["hello"])
 
         mock_cache.assert_called_once_with("hello", [0.1, 0.2], model="test-model")
 
-    @patch("rag.embedding.config.EMBED_MODEL", "test-model")
-    @patch("rag.embedding.config.ENABLE_CACHE", False)
+    @patch("memex.engine.ingestion.embedding.config.EMBED_MODEL", "test-model")
+    @patch("memex.engine.ingestion.embedding.config.ENABLE_CACHE", False)
     def test_embed_respects_batch_size(self) -> None:
         from memex.engine.core import config
 
@@ -228,7 +228,7 @@ class TestEmbeddingServiceAPI:
     def test_resolve_url_switches_default_to_embed(self) -> None:
         from memex.engine.ingestion.embedding import EmbeddingService
 
-        with patch("rag.embedding.config.OLLAMA_EMBED_URL", "http://localhost:11434/api/embeddings"):
+        with patch("memex.engine.ingestion.embedding.config.OLLAMA_EMBED_URL", "http://localhost:11434/api/embeddings"):
             url = EmbeddingService._resolve_embed_url()
         assert "/api/embed" in url
         assert "embeddings" not in url
@@ -247,8 +247,8 @@ class TestQueryExpansionFallback:
         expander = QueryExpander(mock_ollama)
         return expander, mock_ollama
 
-    @patch("rag.services.query_expansion.config.EMBED_MODEL", "primary")
-    @patch("rag.services.query_expansion.config.EMBED_MODEL_FALLBACK", "fallback")
+    @patch("memex.engine.retrieval.expansion.config.EMBED_MODEL", "primary")
+    @patch("memex.engine.retrieval.expansion.config.EMBED_MODEL_FALLBACK", "fallback")
     def test_uses_primary_model(self) -> None:
         from memex.engine.ingestion.embedding import EmbeddingService
 
@@ -259,8 +259,8 @@ class TestQueryExpansionFallback:
 
         assert result == [0.1]
 
-    @patch("rag.services.query_expansion.config.EMBED_MODEL", "primary")
-    @patch("rag.services.query_expansion.config.EMBED_MODEL_FALLBACK", "fallback")
+    @patch("memex.engine.retrieval.expansion.config.EMBED_MODEL", "primary")
+    @patch("memex.engine.retrieval.expansion.config.EMBED_MODEL_FALLBACK", "fallback")
     def test_falls_back_on_failure(self) -> None:
         from memex.engine.ingestion.embedding import EmbeddingService
 
@@ -271,8 +271,8 @@ class TestQueryExpansionFallback:
 
         assert result == [0.3]
 
-    @patch("rag.services.query_expansion.config.EMBED_MODEL", "fallback")
-    @patch("rag.services.query_expansion.config.EMBED_MODEL_FALLBACK", "fallback")
+    @patch("memex.engine.retrieval.expansion.config.EMBED_MODEL", "fallback")
+    @patch("memex.engine.retrieval.expansion.config.EMBED_MODEL_FALLBACK", "fallback")
     def test_raises_when_fallback_also_fails(self) -> None:
         from memex.engine.ingestion.embedding import EmbeddingService
 

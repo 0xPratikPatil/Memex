@@ -254,7 +254,7 @@ class TestErrorHandling:
 
         cache_mod._redis = None
         # Force _get_redis to attempt connection and fail
-        with patch("rag.services.cache._get_redis", return_value=None):
+        with patch("memex.engine.utils.cache._get_redis", return_value=None):
             result = get_cached("test", "key")
             assert result is None
 

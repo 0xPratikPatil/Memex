@@ -35,9 +35,9 @@ class TestLanguageDetection:
         if not _langdetect_available():
             pytest.skip("langdetect not installed")
 
-        monkeypatch.setattr("rag.config.ENABLE_METADATA_EXTRACTION", True)
-        monkeypatch.setattr("rag.config.ENABLE_LANGUAGE_DETECTION", True)
-        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen3.5:0.8b")
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_METADATA_EXTRACTION", True)
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_LANGUAGE_DETECTION", True)
+        monkeypatch.setattr("memex.engine.core.config.CHAT_MODEL", "qwen3.5:0.8b")
 
         extractor = MetadataExtractor(None)
         lang = extractor.detect_language(
@@ -223,9 +223,9 @@ class TestEntityExtractionLLM:
         return httpx.Client(timeout=60.0)
 
     def test_extract_entities_returns_dict(self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("rag.config.ENABLE_METADATA_EXTRACTION", True)
-        monkeypatch.setattr("rag.config.ENABLE_ENTITY_EXTRACTION", True)
-        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen3.5:0.8b")
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_METADATA_EXTRACTION", True)
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_ENTITY_EXTRACTION", True)
+        monkeypatch.setattr("memex.engine.core.config.CHAT_MODEL", "qwen3.5:0.8b")
 
         extractor = MetadataExtractor(ollama_client)
         entities = extractor.extract_entities("Alice Smith from Acme Corp reported revenue of $10M in New York.")
@@ -234,9 +234,9 @@ class TestEntityExtractionLLM:
     def test_extract_entities_returns_valid_structure(
         self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr("rag.config.ENABLE_METADATA_EXTRACTION", True)
-        monkeypatch.setattr("rag.config.ENABLE_ENTITY_EXTRACTION", True)
-        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen3.5:0.8b")
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_METADATA_EXTRACTION", True)
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_ENTITY_EXTRACTION", True)
+        monkeypatch.setattr("memex.engine.core.config.CHAT_MODEL", "qwen3.5:0.8b")
 
         extractor = MetadataExtractor(ollama_client)
         entities = extractor.extract_entities(
@@ -258,9 +258,9 @@ class TestTopicExtractionLLM:
         return httpx.Client(timeout=60.0)
 
     def test_extract_topics_returns_list(self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("rag.config.ENABLE_METADATA_EXTRACTION", True)
-        monkeypatch.setattr("rag.config.ENABLE_TOPIC_TAGGING", True)
-        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen3.5:0.8b")
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_METADATA_EXTRACTION", True)
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_TOPIC_TAGGING", True)
+        monkeypatch.setattr("memex.engine.core.config.CHAT_MODEL", "qwen3.5:0.8b")
 
         extractor = MetadataExtractor(ollama_client)
         topics = extractor.extract_topics("This document covers quarterly financial analysis and revenue forecasting.")
@@ -278,9 +278,9 @@ class TestDocumentClassificationLLM:
     def test_classify_document_returns_valid_type(
         self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr("rag.config.ENABLE_METADATA_EXTRACTION", True)
-        monkeypatch.setattr("rag.config.ENABLE_DOC_CLASSIFICATION", True)
-        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen3.5:0.8b")
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_METADATA_EXTRACTION", True)
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_DOC_CLASSIFICATION", True)
+        monkeypatch.setattr("memex.engine.core.config.CHAT_MODEL", "qwen3.5:0.8b")
 
         valid = {
             "report",
@@ -307,12 +307,12 @@ class TestExtractAllIntegration:
         if not _langdetect_available():
             pytest.skip("langdetect not installed")
 
-        monkeypatch.setattr("rag.config.ENABLE_METADATA_EXTRACTION", True)
-        monkeypatch.setattr("rag.config.ENABLE_ENTITY_EXTRACTION", False)
-        monkeypatch.setattr("rag.config.ENABLE_DOC_CLASSIFICATION", False)
-        monkeypatch.setattr("rag.config.ENABLE_TOPIC_TAGGING", False)
-        monkeypatch.setattr("rag.config.ENABLE_LANGUAGE_DETECTION", True)
-        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen3.5:0.8b")
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_METADATA_EXTRACTION", True)
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_ENTITY_EXTRACTION", False)
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_DOC_CLASSIFICATION", False)
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_TOPIC_TAGGING", False)
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_LANGUAGE_DETECTION", True)
+        monkeypatch.setattr("memex.engine.core.config.CHAT_MODEL", "qwen3.5:0.8b")
 
         extractor = MetadataExtractor(None)
         chunk = {
@@ -344,12 +344,12 @@ class TestExtractAllIntegration:
         if not _langdetect_available():
             pytest.skip("langdetect not installed")
 
-        monkeypatch.setattr("rag.config.ENABLE_METADATA_EXTRACTION", True)
-        monkeypatch.setattr("rag.config.ENABLE_ENTITY_EXTRACTION", True)
-        monkeypatch.setattr("rag.config.ENABLE_DOC_CLASSIFICATION", True)
-        monkeypatch.setattr("rag.config.ENABLE_TOPIC_TAGGING", True)
-        monkeypatch.setattr("rag.config.ENABLE_LANGUAGE_DETECTION", True)
-        monkeypatch.setattr("rag.config.CHAT_MODEL", "qwen3.5:0.8b")
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_METADATA_EXTRACTION", True)
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_ENTITY_EXTRACTION", True)
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_DOC_CLASSIFICATION", True)
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_TOPIC_TAGGING", True)
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_LANGUAGE_DETECTION", True)
+        monkeypatch.setattr("memex.engine.core.config.CHAT_MODEL", "qwen3.5:0.8b")
 
         extractor = MetadataExtractor(ollama_client)
         chunk = {

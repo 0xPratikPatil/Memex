@@ -19,29 +19,29 @@ from memex.engine.ingestion.splitter import (
 
 class TestGetChunkingUrl:
     def test_constructs_url_from_docling_url(self) -> None:
-        with patch("rag.chunking.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"):
+        with patch("memex.engine.ingestion.splitter.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"):
             url = _get_chunking_url()
         assert url == "http://localhost:5001/v1/chunk/hybrid/source"
 
     def test_strips_existing_chunk_path(self) -> None:
-        with patch("rag.chunking.config.DOCLING_URL", "http://host:5001/v1/convert/source"):
+        with patch("memex.engine.ingestion.splitter.config.DOCLING_URL", "http://host:5001/v1/convert/source"):
             url = _get_chunking_url()
         assert "/v1/chunk/hybrid/source" in url
 
 
 class TestBuildChunkingOptions:
     def test_includes_chunk_size(self) -> None:
-        with patch("rag.chunking.config.CHUNK_SIZE", 512):
+        with patch("memex.engine.ingestion.splitter.config.CHUNK_SIZE", 512):
             opts = _build_chunking_options()
         assert opts["max_tokens"] == 512
 
     def test_includes_tokenizer(self) -> None:
-        with patch("rag.chunking.config.CHUNK_TOKENIZER", "BAAI/bge-m3"):
+        with patch("memex.engine.ingestion.splitter.config.CHUNK_TOKENIZER", "BAAI/bge-m3"):
             opts = _build_chunking_options()
         assert opts["tokenizer"] == "BAAI/bge-m3"
 
     def test_includes_merge_peers(self) -> None:
-        with patch("rag.chunking.config.CHUNK_MERGE_PEERS", True):
+        with patch("memex.engine.ingestion.splitter.config.CHUNK_MERGE_PEERS", True):
             opts = _build_chunking_options()
         assert opts["merge_peers"] is True
 
@@ -52,16 +52,16 @@ class TestBuildConvertOptions:
         assert "md" in opts["to_formats"]
 
     def test_includes_ocr_setting(self) -> None:
-        with patch("rag.chunking.config.ENABLE_OCR", True):
+        with patch("memex.engine.ingestion.splitter.config.ENABLE_OCR", True):
             opts = _build_convert_options()
         assert opts["do_ocr"] is True
 
     def test_includes_enrichments_when_enabled(self) -> None:
         with (
-            patch("rag.chunking.config.DOCLING_ENRICH_CODE", True),
-            patch("rag.chunking.config.DOCLING_ENRICH_FORMULA", True),
-            patch("rag.chunking.config.DOCLING_PICTURE_CLASSIFY", True),
-            patch("rag.chunking.config.DOCLING_CHART_EXTRACT", True),
+            patch("memex.engine.ingestion.splitter.config.DOCLING_ENRICH_CODE", True),
+            patch("memex.engine.ingestion.splitter.config.DOCLING_ENRICH_FORMULA", True),
+            patch("memex.engine.ingestion.splitter.config.DOCLING_PICTURE_CLASSIFY", True),
+            patch("memex.engine.ingestion.splitter.config.DOCLING_CHART_EXTRACT", True),
         ):
             opts = _build_convert_options()
         assert opts["do_code_enrichment"] is True
@@ -71,10 +71,10 @@ class TestBuildConvertOptions:
 
     def test_omits_enrichments_when_disabled(self) -> None:
         with (
-            patch("rag.chunking.config.DOCLING_ENRICH_CODE", False),
-            patch("rag.chunking.config.DOCLING_ENRICH_FORMULA", False),
-            patch("rag.chunking.config.DOCLING_PICTURE_CLASSIFY", False),
-            patch("rag.chunking.config.DOCLING_CHART_EXTRACT", False),
+            patch("memex.engine.ingestion.splitter.config.DOCLING_ENRICH_CODE", False),
+            patch("memex.engine.ingestion.splitter.config.DOCLING_ENRICH_FORMULA", False),
+            patch("memex.engine.ingestion.splitter.config.DOCLING_PICTURE_CLASSIFY", False),
+            patch("memex.engine.ingestion.splitter.config.DOCLING_CHART_EXTRACT", False),
         ):
             opts = _build_convert_options()
         assert "do_code_enrichment" not in opts
@@ -150,8 +150,8 @@ class TestParseChunkResponse:
 class TestChunkUrl:
     def test_sends_correct_payload(self) -> None:
         with (
-            patch("rag.chunking._post_chunking") as mock_post,
-            patch("rag.chunking.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
+            patch("memex.engine.ingestion.splitter._post_chunking") as mock_post,
+            patch("memex.engine.ingestion.splitter.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
         ):
             mock_post.return_value = {
                 "chunks": [{"text": "chunk content", "headings": ["Header"], "chunk_index": 0}],
@@ -173,8 +173,8 @@ class TestChunkLocalFile:
         test_file.write_bytes(b"PDF content")
 
         with (
-            patch("rag.chunking._post_chunking") as mock_post,
-            patch("rag.chunking.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
+            patch("memex.engine.ingestion.splitter._post_chunking") as mock_post,
+            patch("memex.engine.ingestion.splitter.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
         ):
             mock_post.return_value = {
                 "chunks": [{"text": "chunk", "headings": [], "chunk_index": 0}],
@@ -199,8 +199,8 @@ class TestIsHybridChunkerAvailable:
         mock_response.status_code = 200
 
         with (
-            patch("rag.chunking.httpx.Client") as mock_client_cls,
-            patch("rag.chunking.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
+            patch("memex.engine.ingestion.splitter.httpx.Client") as mock_client_cls,
+            patch("memex.engine.ingestion.splitter.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
         ):
             mock_client = MagicMock()
             mock_client.get.return_value = mock_response
@@ -212,10 +212,10 @@ class TestIsHybridChunkerAvailable:
 
     def test_returns_false_on_error(self) -> None:
         with (
-            patch("rag.chunking._chunking_client", None),
-            patch("rag.chunking.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
-            patch("rag.chunking.config.DOCLING_TIMEOUT", 5.0),
-            patch("rag.chunking.httpx.Client", side_effect=Exception("connection failed")),
+            patch("memex.engine.ingestion.splitter._chunking_client", None),
+            patch("memex.engine.ingestion.splitter.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
+            patch("memex.engine.ingestion.splitter.config.DOCLING_TIMEOUT", 5.0),
+            patch("memex.engine.ingestion.splitter.httpx.Client", side_effect=Exception("connection failed")),
         ):
             result = is_hybrid_chunker_available()
             assert result is False

@@ -24,7 +24,7 @@ class TestParseLocalFile:
         test_content = b"Hello, World!"
         test_file.write_bytes(test_content)
 
-        with patch("rag.docling_client._post") as mock_post:
+        with patch("memex.engine.ingestion.loader._post") as mock_post:
             mock_post.return_value = {
                 "document": {"md_content": "# Converted"},
                 "processing_time": 1.0,
@@ -32,7 +32,7 @@ class TestParseLocalFile:
                 "errors": [],
             }
 
-            with patch("rag.services.cache.get_cached_parse_result", return_value=None):
+            with patch("memex.engine.utils.cache.get_cached_parse_result", return_value=None):
                 parse_local_file(str(test_file))
 
             # Verify _post was called with base64-encoded file content
@@ -56,7 +56,7 @@ class TestParseLocalFile:
         test_file = tmp_path / "test.md"
         test_file.write_bytes(b"# Test Document")
 
-        with patch("rag.docling_client._post") as mock_post:
+        with patch("memex.engine.ingestion.loader._post") as mock_post:
             mock_post.return_value = {
                 "document": {"md_content": "# Converted Document"},
                 "processing_time": 2.5,
@@ -64,7 +64,7 @@ class TestParseLocalFile:
                 "errors": [],
             }
 
-            with patch("rag.services.cache.get_cached_parse_result", return_value=None):
+            with patch("memex.engine.utils.cache.get_cached_parse_result", return_value=None):
                 result = parse_local_file(str(test_file))
 
             assert isinstance(result, ConversionResult)
@@ -78,7 +78,7 @@ class TestParseLocalFile:
         test_file = tmp_path / "test.txt"
         test_file.write_bytes(b"Test content")
 
-        with patch("rag.docling_client._post") as mock_post:
+        with patch("memex.engine.ingestion.loader._post") as mock_post:
             mock_post.return_value = {
                 "document": {"md_content": "Converted"},
                 "processing_time": 1.0,
@@ -87,8 +87,8 @@ class TestParseLocalFile:
             }
 
             with (
-                patch("rag.services.cache.get_cached_parse_result", return_value=None),
-                patch("rag.services.cache.cache_parse_result") as mock_cache,
+                patch("memex.engine.utils.cache.get_cached_parse_result", return_value=None),
+                patch("memex.engine.utils.cache.cache_parse_result") as mock_cache,
             ):
                 parse_local_file(str(test_file))
 
@@ -110,19 +110,19 @@ class TestParseLocalFile:
             "errors": [],
         }
 
-        with patch("rag.services.cache.get_cached_parse_result", return_value=cached_result):
+        with patch("memex.engine.utils.cache.get_cached_parse_result", return_value=cached_result):
             result = parse_local_file(str(test_file))
 
             assert result.markdown == "Cached content"
             assert result.processing_time == 0.5
 
-    @patch("rag.docling_client.config.DOCLING_PICTURE_CLASSIFY", True)
+    @patch("memex.engine.ingestion.loader.config.DOCLING_PICTURE_CLASSIFY", True)
     def test_uses_correct_docling_options(self, tmp_path: Path) -> None:
         """Should include proper conversion options in payload."""
         test_file = tmp_path / "test.pdf"
         test_file.write_bytes(b"PDF content")
 
-        with patch("rag.docling_client._post") as mock_post:
+        with patch("memex.engine.ingestion.loader._post") as mock_post:
             mock_post.return_value = {
                 "document": {"md_content": "Converted"},
                 "processing_time": 1.0,
@@ -130,7 +130,7 @@ class TestParseLocalFile:
                 "errors": [],
             }
 
-            with patch("rag.services.cache.get_cached_parse_result", return_value=None):
+            with patch("memex.engine.utils.cache.get_cached_parse_result", return_value=None):
                 parse_local_file(str(test_file))
 
             call_args = mock_post.call_args[0][0]
@@ -155,62 +155,62 @@ class TestParseLocalFile:
 
 class TestBuildOptionsCodeEnrichment:
     def test_enrich_code_enabled_by_default(self):
-        with patch("rag.docling_client.config.DOCLING_ENRICH_CODE", True):
+        with patch("memex.engine.ingestion.loader.config.DOCLING_ENRICH_CODE", True):
             opts = _build_options()
         assert opts["do_code_enrichment"] is True
 
     def test_enrich_code_disabled_via_config(self):
-        with patch("rag.docling_client.config.DOCLING_ENRICH_CODE", False):
+        with patch("memex.engine.ingestion.loader.config.DOCLING_ENRICH_CODE", False):
             opts = _build_options()
         assert "do_code_enrichment" not in opts
 
 
 class TestBuildOptionsFormulaEnrichment:
     def test_enrich_formula_enabled_by_default(self):
-        with patch("rag.docling_client.config.DOCLING_ENRICH_FORMULA", True):
+        with patch("memex.engine.ingestion.loader.config.DOCLING_ENRICH_FORMULA", True):
             opts = _build_options()
         assert opts["do_formula_enrichment"] is True
 
     def test_enrich_formula_disabled_via_config(self):
-        with patch("rag.docling_client.config.DOCLING_ENRICH_FORMULA", False):
+        with patch("memex.engine.ingestion.loader.config.DOCLING_ENRICH_FORMULA", False):
             opts = _build_options()
         assert "do_formula_enrichment" not in opts
 
 
 class TestBuildOptionsPictureClassification:
     def test_picture_classify_enabled_by_default(self):
-        with patch("rag.docling_client.config.DOCLING_PICTURE_CLASSIFY", True):
+        with patch("memex.engine.ingestion.loader.config.DOCLING_PICTURE_CLASSIFY", True):
             opts = _build_options()
         assert opts["do_picture_classification"] is True
 
     def test_picture_classify_disabled_via_config(self):
-        with patch("rag.docling_client.config.DOCLING_PICTURE_CLASSIFY", False):
+        with patch("memex.engine.ingestion.loader.config.DOCLING_PICTURE_CLASSIFY", False):
             opts = _build_options()
         assert "do_picture_classification" not in opts
 
 
 class TestBuildOptionsChartExtraction:
     def test_chart_extraction_enabled_by_default(self):
-        with patch("rag.docling_client.config.DOCLING_CHART_EXTRACT", True):
+        with patch("memex.engine.ingestion.loader.config.DOCLING_CHART_EXTRACT", True):
             opts = _build_options()
         assert opts["do_chart_extraction"] is True
 
 
 class TestBuildOptionsImageExport:
     def test_image_export_mode_embedded_by_default(self):
-        with patch("rag.docling_client.config.DOCLING_IMAGE_EXPORT", "embedded"):
+        with patch("memex.engine.ingestion.loader.config.DOCLING_IMAGE_EXPORT", "embedded"):
             opts = _build_options()
         assert opts["image_export_mode"] == "embedded"
 
 
 class TestBuildOptionsPdfBackend:
     def test_no_pdf_backend_when_empty(self):
-        with patch("rag.docling_client.config.DOCLING_PDF_BACKEND", ""):
+        with patch("memex.engine.ingestion.loader.config.DOCLING_PDF_BACKEND", ""):
             opts = _build_options()
         assert "pdf_backend" not in opts
 
     def test_pdf_backend_included_when_set(self):
-        with patch("rag.docling_client.config.DOCLING_PDF_BACKEND", "DLPARSE_V4"):
+        with patch("memex.engine.ingestion.loader.config.DOCLING_PDF_BACKEND", "DLPARSE_V4"):
             opts = _build_options()
         assert opts["pdf_backend"] == "dlparse_v4"
 

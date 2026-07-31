@@ -176,7 +176,7 @@ class TestClearSourceChunks:
 
     async def test_deletes_in_batches(self) -> None:
         mock_client = MagicMock()
-        with patch("rag.dedup.config.EMBED_BATCH_SIZE", 2):
+        with patch("memex.engine.ingestion.hashing.config.EMBED_BATCH_SIZE", 2):
             points = [_make_mock_point(f"p{i}") for i in range(5)]
             mock_client.scroll.return_value = _mock_scroll_return(points)
             count = await clear_source_chunks(mock_client, "col", "/doc.pdf")

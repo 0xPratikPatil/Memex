@@ -1,4 +1,4 @@
-"""Unit tests for rag.sync — sync engine."""
+"""Unit tests for memex.engine.sources.sync — sync engine."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ class TestGetStoredHashes:
             None,
         )
 
-        with patch("rag.sync.config") as mock_config:
+        with patch("memex.engine.sources.sync.config") as mock_config:
             mock_config.COLLECTION_NAME = "memex"
             result = _get_stored_hashes(mock_engine, "test-source")
 
@@ -63,7 +63,7 @@ class TestGetStoredHashes:
         mock_engine = MagicMock()
         mock_engine._get_qdrant.return_value.scroll.return_value = ([], None)
 
-        with patch("rag.sync.config") as mock_config:
+        with patch("memex.engine.sources.sync.config") as mock_config:
             mock_config.COLLECTION_NAME = "memex"
             result = _get_stored_hashes(mock_engine, "test-source")
 
@@ -81,7 +81,7 @@ class TestGetStoredHashes:
             None,
         )
 
-        with patch("rag.sync.config") as mock_config:
+        with patch("memex.engine.sources.sync.config") as mock_config:
             mock_config.COLLECTION_NAME = "memex"
             result = _get_stored_hashes(mock_engine, "test-source")
 
@@ -105,7 +105,7 @@ class TestIngestFile:
         mock_result.markdown = "# Converted"
         mock_result.processing_time = 1.0
 
-        with patch("rag.docling_client.parse_file", return_value=mock_result):
+        with patch("memex.engine.ingestion.loader.parse_file", return_value=mock_result):
             count = _ingest_file(mock_engine, str(test_file), "my-source")
 
         assert count == 5
@@ -125,7 +125,7 @@ class TestIngestFile:
         mock_result.status = "failure"
         mock_result.errors = ["conversion error"]
 
-        with patch("rag.docling_client.parse_file", return_value=mock_result), \
+        with patch("memex.engine.ingestion.loader.parse_file", return_value=mock_result), \
              pytest.raises(RuntimeError, match="Docling conversion failed"):
             _ingest_file(mock_engine, str(test_file), "my-source")
 
@@ -181,10 +181,10 @@ class TestSync:
         mock_parse_result.markdown = "# Report"
         mock_parse_result.processing_time = 1.0
 
-        with patch("rag.sync.get_source", return_value=mock_source), \
-             patch("rag.pipeline.RAGEngine", return_value=mock_engine), \
-             patch("rag.docling_client.parse_file", return_value=mock_parse_result), \
-             patch("rag.sync.config") as mock_config:
+        with patch("memex.engine.sources.sync.get_source", return_value=mock_source), \
+             patch("memex.engine.core.pipeline.RAGEngine", return_value=mock_engine), \
+             patch("memex.engine.ingestion.loader.parse_file", return_value=mock_parse_result), \
+             patch("memex.engine.sources.sync.config") as mock_config:
             mock_config.COLLECTION_NAME = "memex"
             stats = await sync(mock_yaml_config)
 
@@ -224,10 +224,10 @@ class TestSync:
         mock_parse_result.markdown = "# Updated"
         mock_parse_result.processing_time = 1.0
 
-        with patch("rag.sync.get_source", return_value=mock_source), \
-             patch("rag.pipeline.RAGEngine", return_value=mock_engine), \
-             patch("rag.docling_client.parse_file", return_value=mock_parse_result), \
-             patch("rag.sync.config") as mock_config:
+        with patch("memex.engine.sources.sync.get_source", return_value=mock_source), \
+             patch("memex.engine.core.pipeline.RAGEngine", return_value=mock_engine), \
+             patch("memex.engine.ingestion.loader.parse_file", return_value=mock_parse_result), \
+             patch("memex.engine.sources.sync.config") as mock_config:
             mock_config.COLLECTION_NAME = "memex"
             stats = await sync(mock_yaml_config)
 
@@ -257,9 +257,9 @@ class TestSync:
         mock_engine = MagicMock()
         mock_engine._get_qdrant.return_value = mock_qdrant
 
-        with patch("rag.sync.get_source", return_value=mock_source), \
-             patch("rag.pipeline.RAGEngine", return_value=mock_engine), \
-             patch("rag.sync.config") as mock_config:
+        with patch("memex.engine.sources.sync.get_source", return_value=mock_source), \
+             patch("memex.engine.core.pipeline.RAGEngine", return_value=mock_engine), \
+             patch("memex.engine.sources.sync.config") as mock_config:
             mock_config.COLLECTION_NAME = "memex"
             stats = await sync(mock_yaml_config)
 
@@ -287,9 +287,9 @@ class TestSync:
         mock_engine = MagicMock()
         mock_engine._get_qdrant.return_value = mock_qdrant
 
-        with patch("rag.sync.get_source", return_value=mock_source), \
-             patch("rag.pipeline.RAGEngine", return_value=mock_engine), \
-             patch("rag.sync.config") as mock_config:
+        with patch("memex.engine.sources.sync.get_source", return_value=mock_source), \
+             patch("memex.engine.core.pipeline.RAGEngine", return_value=mock_engine), \
+             patch("memex.engine.sources.sync.config") as mock_config:
             mock_config.COLLECTION_NAME = "memex"
             stats = await sync(mock_yaml_config)
 
@@ -314,9 +314,9 @@ class TestSync:
         mock_engine = MagicMock()
         mock_engine._get_qdrant.return_value = mock_qdrant
 
-        with patch("rag.sync.get_source", return_value=mock_source), \
-             patch("rag.pipeline.RAGEngine", return_value=mock_engine), \
-             patch("rag.sync.config") as mock_config:
+        with patch("memex.engine.sources.sync.get_source", return_value=mock_source), \
+             patch("memex.engine.core.pipeline.RAGEngine", return_value=mock_engine), \
+             patch("memex.engine.sources.sync.config") as mock_config:
             mock_config.COLLECTION_NAME = "memex"
             stats = await sync(mock_yaml_config, dry_run=True)
 
@@ -352,9 +352,9 @@ class TestSync:
                 return failing_source
             return good_source
 
-        with patch("rag.sync.get_source", side_effect=get_source_side_effect), \
-             patch("rag.pipeline.RAGEngine", return_value=mock_engine), \
-             patch("rag.sync.config") as mock_config:
+        with patch("memex.engine.sources.sync.get_source", side_effect=get_source_side_effect), \
+             patch("memex.engine.core.pipeline.RAGEngine", return_value=mock_engine), \
+             patch("memex.engine.sources.sync.config") as mock_config:
             mock_config.COLLECTION_NAME = "memex"
             stats = await sync(mock_yaml_config)
 
@@ -379,9 +379,9 @@ class TestSync:
         mock_engine = MagicMock()
         mock_engine._get_qdrant.return_value = mock_qdrant
 
-        with patch("rag.sync.get_source", return_value=mock_source), \
-             patch("rag.pipeline.RAGEngine", return_value=mock_engine), \
-             patch("rag.sync.config") as mock_config:
+        with patch("memex.engine.sources.sync.get_source", return_value=mock_source), \
+             patch("memex.engine.core.pipeline.RAGEngine", return_value=mock_engine), \
+             patch("memex.engine.sources.sync.config") as mock_config:
             mock_config.COLLECTION_NAME = "memex"
             stats = await sync(mock_yaml_config, source_name="docs")
 
