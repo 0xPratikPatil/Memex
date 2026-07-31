@@ -183,7 +183,7 @@ docker compose up    # 3 services
 
 ## 4. Bug Fixes & Missing Features
 
-From the RAGWire comparison audit:
+From the reference comparison audit:
 
 | #   | Issue                                                             | Fix                                                                             |
 | --- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------- |
@@ -207,7 +207,7 @@ From the RAGWire comparison audit:
 
 ## 5. Config Consolidation
 
-Match the RAGWire config structure — top-level sections that map to components:
+Match the reference config structure — top-level sections that map to components:
 
 ```yaml
 version: "1.0"
