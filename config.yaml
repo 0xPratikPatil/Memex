@@ -12,7 +12,7 @@ embedding:
   fallback_model: qwen3-embedding:0.6b
   dimensions: 1024
   batch_size: 64
-  base_url: "http://localhost:11434"
+  base_url: "http://localhost:11434/api/embed"
   api_key: ${OPENAI_API_KEY}
 
 sparse:
@@ -22,7 +22,7 @@ sparse:
 llm:
   provider: ollama
   model: qwen2.5:1.5b
-  base_url: "http://localhost:11434"
+  base_url: "http://localhost:11434/api/embed"
   api_key: ${OPENAI_API_KEY}
 
 converter:
