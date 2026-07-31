@@ -318,21 +318,27 @@ class Source(ABC):
 
 **New MCP tool:** `rag_sync(source_name: str | null, dry_run: bool)`
 
-**Docker:** New S3 service container with `boto3`.
+**Docker:** New S3 service container. Custom Dockerfile with Python + boto3 + a small HTTP API for listing and downloading objects. MCP server calls this service during sync.
 
 ### 3. MarkItDown Integration
 
 MarkItDown runs as a new Docker service alongside Docling. User selects via `config.yaml` → `converter.engine`.
 
 **Docker service:**
+Custom Dockerfile (no official HTTP image exists for MarkItDown). Lightweight Python container exposing a simple HTTP API:
+
 ```yaml
 markitdown:
-  image: ghcr.io/microsoft/markitdown:latest
+  build:
+    context: ./docker/markitdown
+    dockerfile: Dockerfile
   container_name: memex-markitdown
   ports:
     - "127.0.0.1:5003:8000"
   restart: unless-stopped
 ```
+
+Dockerfile installs `markitdown` pip package + a small FastAPI wrapper that accepts file uploads and returns markdown.
 
 **Converter abstraction:**
 ```python
@@ -589,8 +595,8 @@ CLI reads same `config.yaml` as MCP server. Calls same pipelines as MCP tools.
 
 | Service | Change |
 |---------|--------|
-| New: `markitdown` | Lightweight document converter on port 5003 |
-| New: `s3-service` | S3 connector with boto3 for cloud source downloads |
+| New: `markitdown` | Custom Dockerfile: markitdown pip package + FastAPI wrapper on port 5003 |
+| New: `s3-service` | Custom Dockerfile: Python + boto3 + HTTP API for S3 listing/download |
 | Existing 5 services | Unchanged |
 
 ## No Brand References
