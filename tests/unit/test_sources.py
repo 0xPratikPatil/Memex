@@ -9,8 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rag.sources import Source, SourceFile, get_source, list_source_types, register_source
-from rag.sources.local import LocalSource
+from memex.engine.sources import Source, SourceFile, get_source, list_source_types, register_source
+from memex.engine.sources.local import LocalSource
 
 
 class TestSourceRegistry:
@@ -18,7 +18,7 @@ class TestSourceRegistry:
         assert "local" in list_source_types()
 
     def test_list_source_types_includes_s3(self) -> None:
-        import rag.sources.s3  # noqa: F401
+        import memex.engine.sources.s3  # noqa: F401
         assert "s3" in list_source_types()
 
     def test_get_source_local(self) -> None:
@@ -150,7 +150,7 @@ class TestS3Source:
         boto3_backup = sys.modules.pop("boto3", None)
         sys.modules["boto3"] = None
         try:
-            from rag.sources.s3 import S3Source
+            from memex.engine.sources.s3 import S3Source
 
             src = S3Source(name="test", bucket="b")
             with pytest.raises(ImportError, match="boto3"):
@@ -162,7 +162,7 @@ class TestS3Source:
                 sys.modules.pop("boto3", None)
 
     def test_s3_list_files(self, mock_boto3: MagicMock) -> None:
-        from rag.sources.s3 import S3Source
+        from memex.engine.sources.s3 import S3Source
 
         mock_client = MagicMock()
         mock_boto3.client.return_value = mock_client
@@ -197,7 +197,7 @@ class TestS3Source:
         assert files[0].size == 1024
 
     def test_s3_download_uses_cache(self, mock_boto3: MagicMock) -> None:
-        from rag.sources.s3 import S3Source
+        from memex.engine.sources.s3 import S3Source
 
         mock_client = MagicMock()
         mock_boto3.client.return_value = mock_client
@@ -219,7 +219,7 @@ class TestS3Source:
             assert result == target
 
     def test_s3_download_fetches(self, mock_boto3: MagicMock) -> None:
-        from rag.sources.s3 import S3Source
+        from memex.engine.sources.s3 import S3Source
 
         mock_client = MagicMock()
         mock_boto3.client.return_value = mock_client

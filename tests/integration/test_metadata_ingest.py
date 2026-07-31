@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from rag.services.metadata_extractor import MetadataExtractor
+from memex.engine.metadata.extractor import MetadataExtractor
 
 
 def _ollama_reachable() -> bool:

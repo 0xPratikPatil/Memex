@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from rag.answer import (
+from memex.engine.generation.answers import (
     Answer,
     Citation,
     _citation_confidence,
@@ -68,15 +68,15 @@ class TestPackContext:
         assert "[truncated]" in context
         assert len(context) <= 300 + 100  # header + truncation marker overhead
 
-    def test_drops_tiny_chunks_after_truncation(self) -> None:
+    def test_truncates_tiny_chunks_instead_of_dropping(self) -> None:
         tiny_chunk = {
             "content": "x" * 150,
             "source": "/docs/tiny.txt",
             "metadata": {},
         }
         context, used = _pack_context([tiny_chunk], max_context_chars=100)
-        assert len(used) == 0
-        assert context == ""
+        assert len(used) == 1
+        assert "[truncated]" in context
 
     def test_empty_chunks(self) -> None:
         context, used = _pack_context([], max_context_chars=1000)
@@ -264,6 +264,14 @@ class TestAnswerFormatted:
     def test_repr_refused(self) -> None:
         answer = Answer(text="no", refused=True, confidence=0.0, citations=[], sources=[])
         assert "refused" in repr(answer)
+
+    def test_bool_true_when_not_refused(self) -> None:
+        answer = Answer(text="ok", refused=False, confidence=0.8, citations=[1], sources=[])
+        assert bool(answer) is True
+
+    def test_bool_false_when_refused(self) -> None:
+        answer = Answer(text="no", refused=True, confidence=0.0, citations=[], sources=[])
+        assert bool(answer) is False
 
 
 # ── generate_answer integration ───────────────────────────────────────────────

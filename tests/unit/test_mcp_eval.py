@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from memex.schemas import EvalInput, EvalSweepInput
-from memex.server import rag_eval, rag_eval_sweep
+from memex.mcp.schemas import EvalInput, EvalSweepInput
+from memex.mcp.server import rag_eval, rag_eval_sweep
 
 
 def _make_result(source: str, content: str = "some content") -> dict:
@@ -66,7 +66,7 @@ class TestRagEval:
             _make_result("report.pdf", "Revenue was $10M."),
         ]
 
-        with patch("memex.server._get_engine", return_value=mock_engine):
+        with patch("memex.mcp.server._get_engine", return_value=mock_engine):
             raw = await rag_eval(EvalInput(golden_set_path=str(golden_path), top_k=1))
             result = json.loads(raw)
 
@@ -96,7 +96,7 @@ class TestRagEval:
             _make_result("other.pdf", "Other content."),
         ]
 
-        with patch("memex.server._get_engine", return_value=mock_engine):
+        with patch("memex.mcp.server._get_engine", return_value=mock_engine):
             raw = await rag_eval(EvalInput(golden_set_path=str(golden_path), top_k=5))
             result = json.loads(raw)
 
@@ -116,7 +116,7 @@ class TestRagEval:
         mock_engine = MagicMock()
         mock_engine.hybrid_search.return_value = []
 
-        with patch("memex.server._get_engine", return_value=mock_engine):
+        with patch("memex.mcp.server._get_engine", return_value=mock_engine):
             raw = await rag_eval(EvalInput(golden_set_path=str(golden_path), top_k=5))
             result = json.loads(raw)
 
@@ -130,7 +130,7 @@ class TestRagEval:
         golden_path = tmp_path / "golden.yaml"
         _write_golden_yaml(golden_path, [])
 
-        with patch("memex.server._get_engine"):
+        with patch("memex.mcp.server._get_engine"):
             result = await rag_eval(EvalInput(golden_set_path=str(golden_path)))
 
         assert "Error" in result or "empty" in result.lower()
@@ -159,7 +159,7 @@ class TestRagEval:
             _make_result("a.pdf", "Money revenue report."),
         ]
 
-        with patch("memex.server._get_engine", return_value=mock_engine):
+        with patch("memex.mcp.server._get_engine", return_value=mock_engine):
             raw = await rag_eval(EvalInput(golden_set_path=str(golden_path), top_k=5))
             result = json.loads(raw)
 
@@ -184,7 +184,7 @@ class TestRagEval:
             [_make_result("c.pdf")],
         ]
 
-        with patch("memex.server._get_engine", return_value=mock_engine):
+        with patch("memex.mcp.server._get_engine", return_value=mock_engine):
             raw = await rag_eval(EvalInput(golden_set_path=str(golden_path), top_k=5))
             result = json.loads(raw)
 
@@ -203,7 +203,7 @@ class TestRagEval:
         mock_engine = MagicMock()
         mock_engine.hybrid_search.side_effect = RuntimeError("Qdrant unreachable")
 
-        with patch("memex.server._get_engine", return_value=mock_engine):
+        with patch("memex.mcp.server._get_engine", return_value=mock_engine):
             raw = await rag_eval(EvalInput(golden_set_path=str(golden_path), top_k=5))
             result = json.loads(raw)
 
@@ -228,7 +228,7 @@ class TestRagEval:
             _make_result("a.pdf", "Revenue and Q3 report showing growth."),
         ]
 
-        with patch("memex.server._get_engine", return_value=mock_engine):
+        with patch("memex.mcp.server._get_engine", return_value=mock_engine):
             raw = await rag_eval(EvalInput(golden_set_path=str(golden_path), top_k=5))
             result = json.loads(raw)
 
@@ -249,7 +249,7 @@ class TestRagEval:
             _make_result("target.pdf"),
         ]
 
-        with patch("memex.server._get_engine", return_value=mock_engine):
+        with patch("memex.mcp.server._get_engine", return_value=mock_engine):
             raw = await rag_eval(EvalInput(golden_set_path=str(golden_path), top_k=5))
             result = json.loads(raw)
 
@@ -277,7 +277,7 @@ class TestRagEvalSweep:
             [_make_result("wrong.pdf")],  # improved (worse)
         ]
 
-        with patch("memex.server._get_engine", return_value=mock_engine):
+        with patch("memex.mcp.server._get_engine", return_value=mock_engine):
             raw = await rag_eval_sweep(
                 EvalSweepInput(
                     golden_set_path=str(golden_path),
@@ -308,7 +308,7 @@ class TestRagEvalSweep:
         mock_engine = MagicMock()
         mock_engine.hybrid_search.return_value = [_make_result("a.pdf")]
 
-        with patch("memex.server._get_engine", return_value=mock_engine):
+        with patch("memex.mcp.server._get_engine", return_value=mock_engine):
             raw = await rag_eval_sweep(
                 EvalSweepInput(
                     golden_set_path=str(golden_path),
@@ -331,7 +331,7 @@ class TestRagEvalSweep:
         golden_path = tmp_path / "golden.yaml"
         _write_golden_yaml(golden_path, [])
 
-        with patch("memex.server._get_engine"):
+        with patch("memex.mcp.server._get_engine"):
             result = await rag_eval_sweep(
                 EvalSweepInput(
                     golden_set_path=str(golden_path),
@@ -367,7 +367,7 @@ class TestRagEvalSweep:
             [_make_result("a.pdf")],  # better variant (1.0 recall)
         ]
 
-        with patch("memex.server._get_engine", return_value=mock_engine):
+        with patch("memex.mcp.server._get_engine", return_value=mock_engine):
             raw = await rag_eval_sweep(
                 EvalSweepInput(
                     golden_set_path=str(golden_path),
@@ -393,7 +393,7 @@ class TestRagEvalSweep:
         mock_engine = MagicMock()
         mock_engine.hybrid_search.side_effect = RuntimeError("Backend down")
 
-        with patch("memex.server._get_engine", return_value=mock_engine):
+        with patch("memex.mcp.server._get_engine", return_value=mock_engine):
             raw = await rag_eval_sweep(
                 EvalSweepInput(
                     golden_set_path=str(golden_path),

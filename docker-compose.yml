@@ -1,5 +1,5 @@
 # ────────────────────────────────────────────────────────────────────────────────
-# Memex — Personal RAG backend services
+# Memex — Personal RAG backend services (3 containers)
 #
 # The MCP server runs on the host (uv run memex), not in Docker.
 # All services bind to 127.0.0.1 — only accessible from the host machine.
@@ -172,108 +172,33 @@ services:
       - "com.memex.service=docling"
       - "com.memex.description=Document parsing and hybrid chunking (Docling HybridChunker)"
 
-  # ══════════════════════════════════════════════════════════════════════════════
-  # ML Services — Sparse BM25 embeddings + cross-encoder / causal-LM reranker
-  # ══════════════════════════════════════════════════════════════════════════════
-  ml-services:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-    container_name: memex-ml
-    init: true
-    ports:
-      - "127.0.0.1:${ML_SERVICES_PORT:-5002}:5002"
-    tmpfs:
-      - /tmp:exec,size=64M
-    environment:
-      SPARSE_MODEL: "${SPARSE_MODEL:-Qdrant/bm25}"
-      RERANK_MODEL: "${RERANK_MODEL:-Qwen/Qwen3-Reranker-0.6B}"
-      RERANK_MODEL_FALLBACK: "${RERANK_MODEL_FALLBACK:-BAAI/bge-reranker-base}"
-      RERANK_TYPE: "${RERANK_TYPE:-auto}"
-      # Triton CUDA kernel compilation at model load time needs gcc.
-      CC: gcc
-      CXX: g++
-      NVIDIA_VISIBLE_DEVICES: all
-    networks:
-      - backend
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:5002/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 90s
-    deploy:
-      resources:
-        limits:
-          cpus: "4.0"
-          memory: 4G
-        reservations:
-          cpus: "0.5"
-          memory: 1G
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    restart: unless-stopped
-    stop_grace_period: 30s
-    security_opt:
-      - no-new-privileges:true
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-    labels:
-      - "com.memex.service=ml-services"
-      - "com.memex.description=Sparse BM25 embeddings + causal-LM reranker (Qwen3-Reranker)"
-
-  # ══════════════════════════════════════════════════════════════════════════════
-  # Redis — Search + embedding cache (allkeys-lru, 256mb max)
-  # ══════════════════════════════════════════════════════════════════════════════
-  redis:
-    image: redis:7.4.10-alpine
-    container_name: memex-redis
-    init: true
-    ports:
-      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
-    command:
-      - redis-server
-      - --appendonly yes
-      - --maxmemory 256mb
-      - --maxmemory-policy allkeys-lru
-    volumes:
-      - redis_data:/data
-    tmpfs:
-      - /tmp:exec,size=32M
-    networks:
-      - backend
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 15s
-      timeout: 5s
-      start_period: 10s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 256M
-        reservations:
-          cpus: "0.1"
-          memory: 64M
-    restart: unless-stopped
-    stop_grace_period: 30s
-    security_opt:
-      - no-new-privileges:true
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-    labels:
-      - "com.memex.service=redis"
-      - "com.memex.description=Search and embedding cache (append-only, allkeys-lru eviction)"
+  # ── Redis (opt-in) — add this block if you want Redis caching ──
+  # redis:
+  #   image: redis:7.4.10-alpine
+  #   container_name: memex-redis
+  #   init: true
+  #   ports:
+  #     - "127.0.0.1:6379:6379"
+  #   command:
+  #     - redis-server
+  #     - --appendonly yes
+  #     - --maxmemory 256mb
+  #     - --maxmemory-policy allkeys-lru
+  #   volumes:
+  #     - redis_data:/data
+  #   tmpfs:
+  #     - /tmp:exec,size=32M
+  #   networks:
+  #     - backend
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 15s
+  #     timeout: 5s
+  #     start_period: 10s
+  #     retries: 5
+  #   restart: unless-stopped
+  #   security_opt:
+  #     - no-new-privileges:true
 
 # ══════════════════════════════════════════════════════════════════════════════════
 # Networks
@@ -292,5 +217,5 @@ volumes:
     name: memex_qdrant_data
   ollama_data:
     name: memex_ollama_data
-  redis_data:
-    name: memex_redis_data
+  # redis_data:
+  #   name: memex_redis_data  # uncomment if using opt-in Redis

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from rag.filter_tools import (
+from memex.engine.retrieval.filter import (
     ExtractedFilters,
     FieldInfo,
     FilterContext,
@@ -63,10 +63,19 @@ class TestExtractedFilters:
 
 class TestClassifyField:
     def test_string_values(self) -> None:
-        assert _classify_field(["hello", "world"]) == "string"
+        assert _classify_field(["hello", "world"]) == "keyword"
 
     def test_integer_values(self) -> None:
         assert _classify_field([2024, 2025]) == "integer"
+
+    def test_float_values(self) -> None:
+        assert _classify_field([1.5, 2.7]) == "float"
+
+    def test_mixed_numeric_is_float(self) -> None:
+        assert _classify_field([1, 2.5]) == "float"
+
+    def test_mixed_string_and_int_is_keyword(self) -> None:
+        assert _classify_field(["hello", 42]) == "keyword"
 
     def test_list_values(self) -> None:
         assert _classify_field([["a", "b"], ["c"]]) == "list"

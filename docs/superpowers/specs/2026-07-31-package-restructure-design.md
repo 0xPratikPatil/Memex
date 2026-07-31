@@ -69,11 +69,13 @@ memex/
 ```
 
 **Import path changes:**
+
 - `from rag.config import ...` → `from memex.engine.core.config import ...`
 - `from rag.pipeline import RAGEngine` → `from memex.engine.core.pipeline import RAGEngine`
 - `from rag.embedding import EmbeddingService` → `from memex.engine.ingestion.embedding import ...`
 
 **Merged / eliminated:**
+
 - `rag/services/` → `engine/utils/` + `engine/retrieval/` + `engine/metadata/`
 - `rag/search/` → `engine/retrieval/`
 - `rag/converters/` → deleted, not needed
@@ -99,26 +101,27 @@ class EmbedProvider(ABC):
 
 **LLM providers:**
 
-| Provider | Transport | Config keys |
-|----------|-----------|-------------|
-| ollama | httpx → `POST /api/chat` | `base_url`, `model`, `temperature` |
-| openai | httpx → `POST /v1/chat/completions` | `api_key`, `model` |
-| openrouter | httpx → same endpoint, different host | `api_key`, `model`, `base_url` |
-| anthropic | anthropic SDK | `api_key`, `model` |
-| groq | httpx → OpenAI-compat | `api_key`, `model` |
-| google | google-generativeai SDK | `api_key`, `model` |
+| Provider   | Transport                             | Config keys                        |
+| ---------- | ------------------------------------- | ---------------------------------- |
+| ollama     | httpx → `POST /api/chat`              | `base_url`, `model`, `temperature` |
+| openai     | httpx → `POST /v1/chat/completions`   | `api_key`, `model`                 |
+| openrouter | httpx → same endpoint, different host | `api_key`, `model`, `base_url`     |
+| anthropic  | anthropic SDK                         | `api_key`, `model`                 |
+| groq       | httpx → OpenAI-compat                 | `api_key`, `model`                 |
+| google     | google-generativeai SDK               | `api_key`, `model`                 |
 
 **Embedding providers:**
 
-| Provider | Transport | Default dims |
-|----------|-----------|-------------|
-| ollama | httpx → `POST /api/embed` | 1024 |
-| openai | httpx → `POST /v1/embeddings` | 1536 |
-| openrouter | httpx → OpenAI-compat | varies |
-| huggingface | sentence-transformers (local) | 384 |
-| fastembed | fastembed library (local) | 384 |
+| Provider    | Transport                     | Default dims |
+| ----------- | ----------------------------- | ------------ |
+| ollama      | httpx → `POST /api/embed`     | 1024         |
+| openai      | httpx → `POST /v1/embeddings` | 1536         |
+| openrouter  | httpx → OpenAI-compat         | varies       |
+| huggingface | sentence-transformers (local) | 384          |
+| fastembed   | fastembed library (local)     | 384          |
 
 **Factory:**
+
 ```python
 # engine/llm/__init__.py
 def get_llm(config) -> LLMProvider:    # reads llm.provider from config
@@ -126,16 +129,17 @@ def get_embedder(config) -> EmbedProvider:  # reads embedding.provider from conf
 ```
 
 **Config:**
+
 ```yaml
 llm:
-  provider: ollama          # ollama | openai | openrouter | anthropic | groq | google
+  provider: ollama # ollama | openai | openrouter | anthropic | groq | google
   model: qwen2.5:1.5b
   base_url: "http://localhost:11434"
   temperature: 0
   api_key: ${OPENAI_API_KEY}
 
 embedding:
-  provider: ollama          # ollama | openai | openrouter | huggingface | fastembed
+  provider: ollama # ollama | openai | openrouter | huggingface | fastembed
   model: qwen3-embedding:0.6b
   base_url: "http://localhost:11434"
   fallback_model: bge-m3
@@ -154,11 +158,12 @@ ML Services eliminated (runs in-process via pip). Redis optional (in-memory as d
 ```
 docker compose up    # 3 services
   ├── qdrant      :6333    # Vector DB
-  ├── ollama      :11434   # Local LLM (skip with remote API)  
+  ├── ollama      :11434   # Local LLM (skip with remote API)
   └── docling     :5001    # Doc conversion
 ```
 
 **Eliminated:**
+
 - `ml-services` (Custom Dockerfile, 4 stages) → `pip install fastembed sentence-transformers`
 - `redis` → `functools.lru_cache` + in-memory dict (Docker Redis opt-in for persistence)
 - `markitdown` → already removed
@@ -166,11 +171,11 @@ docker compose up    # 3 services
 
 **Deployment modes:**
 
-| Mode | Containers | Setup |
-|------|-----------|-------|
-| Quick start | qdrant | Use OpenRouter/OpenAI for LLM + embeddings |
-| Local AI | qdrant + ollama | Ollama for both LLM + embeddings |
-| Full local | qdrant + ollama + docling | GPU doc conversion |
+| Mode        | Containers                | Setup                                      |
+| ----------- | ------------------------- | ------------------------------------------ |
+| Quick start | qdrant                    | Use OpenRouter/OpenAI for LLM + embeddings |
+| Local AI    | qdrant + ollama           | Ollama for both LLM + embeddings           |
+| Full local  | qdrant + ollama + docling | GPU doc conversion                         |
 
 **Dockerfile eliminated:** The 4-stage ML Services Dockerfile (~200 lines) is removed entirely. `setup.sh` simplified to `uv sync --extra local && docker compose up -d`.
 
@@ -180,23 +185,23 @@ docker compose up    # 3 services
 
 From the RAGWire comparison audit:
 
-| # | Issue | Fix |
-|---|-------|-----|
-| 1 | `check_partial_ingest` checks 1 point, should scroll all | Scroll all points, sum total_chunks |
-| 2 | `dedup_chunks` defined but never called in pipeline | Call after chunking in `ingest_text()` |
-| 3 | Field type inference missing — all keyword | Infer integer/float from payload values |
-| 4 | Source extensions not normalized (`.PDF` ≠ `.pdf`) | Normalize to lowercase with leading dot |
-| 5 | Filter values not lowercased (Qdrant case-sensitive) | `_normalize_filters()` before Qdrant query |
-| 6 | Path form normalization missing (relative vs absolute, backslash) | `_path_forms()` for platform-agnostic matching |
-| 7 | MCP filter parsing doesn't accept JSON strings | `_parse_filters()` accepts dict or string |
-| 8 | Answer `__bool__` returns True even when refused | `__bool__` = `not self.refused` |
-| 9 | Embedding dimension not validated at startup | Check `EMBED_MODEL` dims match `DENSE_DIM` |
-| 10 | Rollback on write failure missing | Delete by `content_hash` in exception handler |
-| 11 | No `auto_filter` for LLM-powered filter extraction | Add `auto_filter` to retriever config |
-| 12 | Lazy registry missing for plugin sources | `_LazyRegistry` with `register()` for custom sources |
-| 13 | Context budget truncation (MIN_CHUNK_CHARS=200) | Add to `_pack_context()` |
-| 14 | Refusal sentinel length guard | `_is_refusal` checks `INSUFFICIENT_CONTEXT` containment + length < sentinel+120 |
-| 15 | Citation parsing: invalid refs not stripped from text | Strip invalid `[N]` markers, clean whitespace |
+| #   | Issue                                                             | Fix                                                                             |
+| --- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| 1   | `check_partial_ingest` checks 1 point, should scroll all          | Scroll all points, sum total_chunks                                             |
+| 2   | `dedup_chunks` defined but never called in pipeline               | Call after chunking in `ingest_text()`                                          |
+| 3   | Field type inference missing — all keyword                        | Infer integer/float from payload values                                         |
+| 4   | Source extensions not normalized (`.PDF` ≠ `.pdf`)                | Normalize to lowercase with leading dot                                         |
+| 5   | Filter values not lowercased (Qdrant case-sensitive)              | `_normalize_filters()` before Qdrant query                                      |
+| 6   | Path form normalization missing (relative vs absolute, backslash) | `_path_forms()` for platform-agnostic matching                                  |
+| 7   | MCP filter parsing doesn't accept JSON strings                    | `_parse_filters()` accepts dict or string                                       |
+| 8   | Answer `__bool__` returns True even when refused                  | `__bool__` = `not self.refused`                                                 |
+| 9   | Embedding dimension not validated at startup                      | Check `EMBED_MODEL` dims match `DENSE_DIM`                                      |
+| 10  | Rollback on write failure missing                                 | Delete by `content_hash` in exception handler                                   |
+| 11  | No `auto_filter` for LLM-powered filter extraction                | Add `auto_filter` to retriever config                                           |
+| 12  | Lazy registry missing for plugin sources                          | `_LazyRegistry` with `register()` for custom sources                            |
+| 13  | Context budget truncation (MIN_CHUNK_CHARS=200)                   | Add to `_pack_context()`                                                        |
+| 14  | Refusal sentinel length guard                                     | `_is_refusal` checks `INSUFFICIENT_CONTEXT` containment + length < sentinel+120 |
+| 15  | Citation parsing: invalid refs not stripped from text             | Strip invalid `[N]` markers, clean whitespace                                   |
 
 ---
 

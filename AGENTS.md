@@ -11,10 +11,10 @@ OpenCode should proactively use the following features when working with this co
 - All controlled by ENABLE_QUERY_EXPANSION=true (master toggle).
 
 ### Search
-- **Hybrid Search**: Dense (qwen3-embedding:0.6b, 1024d, fallback bge-m3) + Sparse (BM25 via Qdrant/bm25) + RRF fusion (k=60) + cross-encoder/causal-LM rerank (Qwen/Qwen3-Reranker-0.6B, fallback BAAI/bge-reranker-base).
+- **Hybrid Search**: Dense (qwen3-embedding:0.6b, 1024d, fallback bge-m3) + Sparse (BM25 in-process via fastembed) + RRF fusion (k=60) + cross-encoder/causal-LM rerank (in-process via sentence-transformers, Qwen/Qwen3-Reranker-0.6B, fallback BAAI/bge-reranker-base).
 - **MMR Search**: Maximal Marginal Relevance mode for diverse results (exploratory queries). Balances relevance (λ) with diversity. Config: `search.mode=mmr`, `search.mmr.lambda_mult=0.5`.
 - **Contextual Retrieval** (ENABLE_CONTEXTUAL_RETRIEVAL=true, CONTEXT_STRATEGY=summary): LLM-generated context prefixes for each chunk, improving embedding quality.
-- **Search Cache**: Redis caches full result sets for repeated queries (CACHE_TTL_SEARCH=3600).
+- **Search Cache**: In-memory LRU cache (Redis opt-in) caches full result sets for repeated queries (CACHE_TTL_SEARCH=3600).
 
 ### Ingestion
 - **Docling HybridChunker** (CHUNK_STRATEGY=hybrid): Tokenizer-aware, structure-preserving chunking on DoclingDocument. Repeats table headers across boundaries.
@@ -22,7 +22,7 @@ OpenCode should proactively use the following features when working with this co
 - **Docling Enrichment**: Picture classification (enabled), code/formula/chart extraction (opt-in, needs serve-side models).
 - **Metadata Extraction** (ENABLE_METADATA_EXTRACTION=true): Entities, topics, document classification, language detection, dates, keywords.
 - **Content-Hash Dedup**: SHA256-based dedup prevents re-indexing identical content. Partial ingest recovery on crash.
-- **Embedding Cache**: Redis caches dense vectors (CACHE_TTL_EMBEDDING=86400).
+- **Embedding Cache**: In-memory LRU caches dense vectors (CACHE_TTL_EMBEDDING=86400, Redis opt-in).
 
 ### Document Sources & Sync
 - **Pluggable Sources**: Local directories + S3 buckets. Define in `config.yaml` → `sources` section.
@@ -91,9 +91,7 @@ MCP Server (local, uv run memex)
   └── HTTP → Docker Services
        ├── Docling Serve :5001 (GPU doc conversion + HybridChunker)
        ├── Ollama :11434 (embeddings + chat LLM)
-       ├── Qdrant :6333 (vector DB)
-       ├── ML Services :5002 (sparse BM25 + reranker)
-       ├── Redis :6379 (caching)
+       └── Qdrant :6333 (vector DB)
 ```
 
 ## CLI Commands
@@ -113,24 +111,12 @@ Ollama runs **exclusively in Docker**. Never install Ollama on the host.
 - Model pulls happen inside the container: `docker compose exec -T ollama ollama pull <model>`
 - Health check: `curl http://localhost:11434/api/tags` (hits Docker container)
 
-## Docker Best Practices (apply when modifying Dockerfile or compose)
-
-### Multi-Stage Dockerfile Rules
-
-- **Four stages**: `uv` → `deps` → `preload` → `ml` (runtime), in order of most stable to most volatile
-- **Pinned versions**: Every base image tag is pinned (`ollama/ollama:0.32.4`, not `:latest`)
-- **Non-root user**: Runtime stage MUST use USER with explicit UID:GID (1001:1001)
-- **COPY --link**: Use `--link` on all `COPY --from` in final stage to avoid preserving intermediate layers
-- **Pre-cache models**: All ML models are downloaded at build time in the `preload` stage — containers start instantly
-- **BuildKit cache mounts**: Use `RUN --mount=type=cache` for uv pip to speed up rebuilds
-- **Layer ordering**: System packages first, then Python deps, then models, then app code (most volatile last)
-- **No secrets in layers**: All credentials come from env vars at runtime, never baked into images
-- **Add gcc/g++**: Required for Triton kernel compilation during HuggingFace model loading — always include in `apt-get install`
+## Docker Best Practices (apply when modifying compose)
 
 ### Docker Compose Rules
 
 - **Host-only binding**: All ports bind to `127.0.0.1` explicitly — no external exposure
-- **Named volumes**: Use named volumes (not anonymous) for all persistent data: `qdrant_data`, `ollama_data`, `redis_data`
+- **Named volumes**: Use named volumes (not anonymous) for all persistent data: `qdrant_data`, `ollama_data`
 - **Health checks**: Every service has a healthcheck with `interval`, `timeout`, `start_period`, and `retries`
 - **Resource limits**: Set `deploy.resources.limits` and `reservations` on every service (especially GPU memory)
 - **Logging**: `json-file` driver with `max-size: 10m` and `max-file: 3` on every service
@@ -148,9 +134,6 @@ Ollama runs **exclusively in Docker**. Never install Ollama on the host.
 
 | Change | Action |
 |--------|--------|
-| `rag/ml_server.py` | `docker compose build ml-services && docker compose up -d` |
-| Python packages in Dockerfile | `docker compose build --no-cache ml-services && docker compose up -d` |
-| System deps (apt-get) | `docker compose build --no-cache ml-services && docker compose up -d` |
 | Compose config, env vars, or labels | `docker compose up -d` (restart) |
 | Ollama models | `docker compose exec ollama ollama pull <model>` + restart if parallel changed |
 | Volume data | `docker compose down -v` (destroys all persisted data) |
@@ -159,13 +142,10 @@ Ollama runs **exclusively in Docker**. Never install Ollama on the host.
 ### Anti-Patterns (NEVER do)
 
 - Never use `:latest` tags — always pin to specific versions
-- Never run containers as root — always use non-root user in Dockerfile
 - Never bake secrets/API keys into image layers
 - Never expose services on `0.0.0.0` — always bind to `127.0.0.1`
 - Never store data in container filesystem — always use named volumes
 - Never install Ollama on host — Docker-only
-- Never use `--no-cache` unless absolutely necessary (model downloads are expensive)
-- Never leave gcc/g++ out of apt-get (breaks Triton kernel compilation)
 
 ## Practical Testing Setup
 
@@ -222,7 +202,7 @@ pytest tests/integration/ -v  # integration tests (needs Docker services running
 ### Useful Docker commands
 ```bash
 docker compose logs -f ollama           # tail Ollama logs
-docker compose logs -f ml-services      # tail ML services logs
+docker compose logs -f docling          # tail Docling logs
 docker compose restart ollama           # restart Ollama container
 docker compose down && docker compose up -d  # full restart
 docker volume ls                        # check ollama_data volume exists

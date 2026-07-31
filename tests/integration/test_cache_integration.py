@@ -6,8 +6,8 @@ import uuid
 
 import pytest
 
-from rag import config
-from rag.services.cache import (
+from memex.engine.core import config
+from memex.engine.utils.cache import (
     cache_embedding,
     cache_search_results,
     get_cached,
@@ -25,7 +25,7 @@ class TestCacheIntegration:
     def _setup(self, monkeypatch):
         import redis
 
-        import rag.services.cache as cache_mod
+        import memex.engine.utils.cache as cache_mod
 
         try:
             self._redis_client = redis.Redis(host="localhost", port=6379, socket_connect_timeout=2)

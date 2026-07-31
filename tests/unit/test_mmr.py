@@ -6,8 +6,8 @@ import math
 
 import pytest
 
-from rag.search.cosine import cosine_similarity, cosine_similarity_matrix
-from rag.search.mmr import mmr_select
+from memex.engine.retrieval.cosine import cosine_similarity, cosine_similarity_matrix
+from memex.engine.retrieval.mmr import mmr_select
 
 # ── Cosine similarity ────────────────────────────────────────────────────────
 

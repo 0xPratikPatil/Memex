@@ -4,49 +4,26 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 
-from rag import config
-from rag.services.contextual_retrieval import ContextGenerator, strip_context_prefix
-
-# ── Fixtures ─────────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def mock_ollama() -> httpx.Client:
-    """Return a mocked httpx.Client that simulates Ollama responses."""
-    client = MagicMock(spec=httpx.Client)
-
-    def _post(url: str, payload: dict | None = None, **kwargs: object) -> MagicMock:
-        resp = MagicMock()
-        resp.raise_for_status = MagicMock()
-
-        if "/api/chat" in url:
-            content = "This section discusses financial metrics."
-            resp.json.return_value = {"message": {"role": "assistant", "content": content}}
-        elif "/api/embeddings" in url:
-            resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
-        elif "/api/embed" in url:
-            json_data = payload or kwargs.get("json") or {}
-            if isinstance(json_data, dict) and "messages" in json_data:
-                content = "This section discusses financial metrics."
-                resp.json.return_value = {"message": {"role": "assistant", "content": content}}
-            else:
-                resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
-        else:
-            resp.json.return_value = {}
-
-        return resp
-
-    client.post = MagicMock(side_effect=_post)
-    return client
+from memex.engine.core import config
+from memex.engine.ingestion.context import ContextGenerator, strip_context_prefix
+from memex.engine.llm.base import LLMProvider
 
 
 @pytest.fixture
-def generator(mock_ollama: httpx.Client) -> ContextGenerator:
-    """Return a ContextGenerator — caller must patch CONTEXT_STRATEGY."""
-    return ContextGenerator(mock_ollama)
+def mock_llm() -> MagicMock:
+    provider = MagicMock(spec=LLMProvider)
+    async def _chat(prompt: str, *, model=None):
+        return "This section discusses financial metrics."
+    provider.chat = _chat
+    provider.chat_sync = lambda prompt, **kw: "This section discusses financial metrics."
+    return provider
+
+
+@pytest.fixture
+def generator(mock_llm: MagicMock) -> ContextGenerator:
+    return ContextGenerator(mock_llm)
 
 
 # ── Header strategy ─────────────────────────────────────────────────────────
@@ -221,13 +198,13 @@ class TestStripContextPrefix:
 
 
 class TestErrorHandling:
-    def test_chat_failure_propagates(self, mock_ollama: httpx.Client) -> None:
+    def test_chat_failure_propagates(self, mock_llm: MagicMock) -> None:
         mock_ollama.post = MagicMock(side_effect=httpx.TransportError("connection refused"))
         gen = ContextGenerator(mock_ollama)
         with pytest.raises(httpx.TransportError):
             gen.generate_document_summary("test")
 
-    def test_enrich_chunks_with_chat_failure(self, mock_ollama: httpx.Client) -> None:
+    def test_enrich_chunks_with_chat_failure(self, mock_llm: MagicMock) -> None:
         """When using summary/surrounding strategy and chat fails, context is empty."""
         mock_ollama.post = MagicMock(side_effect=httpx.TransportError("timeout"))
         with patch.multiple(config, CONTEXT_STRATEGY="summary"):

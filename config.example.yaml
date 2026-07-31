@@ -16,7 +16,7 @@ embedding:
   api_key: ${OPENAI_API_KEY}
 
 sparse:
-  provider: http
+  provider: local
   model: Qdrant/bm25
 
 llm:
@@ -48,7 +48,7 @@ chunking:
 
 reranker:
   enabled: true
-  provider: http
+  provider: local
   model: Qwen/Qwen3-Reranker-0.6B
   fallback_model: BAAI/bge-reranker-base
   type: auto

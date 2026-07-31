@@ -4,50 +4,32 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 
-from rag import config
-from rag.services.query_expansion import ExpandedQuery, QueryExpander
-
-# ── Fixtures ─────────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def mock_ollama() -> httpx.Client:
-    """Return a mocked httpx.Client that simulates Ollama responses."""
-    client = MagicMock(spec=httpx.Client)
-
-    def _post(url: str, payload: dict | None = None, **kwargs: object) -> MagicMock:
-        resp = MagicMock()
-        resp.raise_for_status = MagicMock()
-
-        if "/api/chat" in url:
-            content = "mocked response from the LLM"
-            resp.json.return_value = {"message": {"role": "assistant", "content": content}}
-        elif "/api/embeddings" in url:
-            resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
-        elif "/api/embed" in url:
-            json_data = payload or kwargs.get("json") or {}
-            if isinstance(json_data, dict) and "messages" in json_data:
-                content = "mocked response from the LLM"
-                resp.json.return_value = {"message": {"role": "assistant", "content": content}}
-            else:
-                resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
-        else:
-            resp.json.return_value = {}
-
-        return resp
-
-    client.post = MagicMock(side_effect=_post)
-    return client
+from memex.engine.core import config
+from memex.engine.llm.base import EmbedProvider, LLMProvider
+from memex.engine.retrieval.expansion import ExpandedQuery, QueryExpander
 
 
 @pytest.fixture
-def expander(mock_ollama: httpx.Client):
-    """Return a QueryExpander with mock client and caching disabled."""
+def mock_llm() -> LLMProvider:
+    provider = MagicMock(spec=LLMProvider)
+    provider.chat = MagicMock()
+    provider.chat.return_value = "mocked response from the LLM"
+    return provider
+
+
+@pytest.fixture
+def mock_embedder() -> EmbedProvider:
+    provider = MagicMock(spec=EmbedProvider)
+    provider.embed = MagicMock(return_value=[[0.1] * config.DENSE_DIM])
+    return provider
+
+
+@pytest.fixture
+def expander(mock_llm: LLMProvider, mock_embedder: EmbedProvider):
     with patch.object(config, "ENABLE_CACHE", False):
-        yield QueryExpander(mock_ollama)
+        yield QueryExpander(mock_llm, mock_embedder)
 
 
 # ── ExpandedQuery dataclass ──────────────────────────────────────────────────

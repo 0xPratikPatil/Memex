@@ -7,8 +7,8 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from rag import config
-from rag.services.contextual_retrieval import ContextGenerator, strip_context_prefix
+from memex.engine.core import config
+from memex.engine.ingestion.context import ContextGenerator, strip_context_prefix
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 

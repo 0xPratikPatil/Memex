@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from memex.schemas import IngestBatchInput, IngestFileInput, IngestUrlInput, QueryInput
-from memex.server import rag_ingest_batch, rag_ingest_file, rag_ingest_url, rag_query
+from memex.mcp.schemas import IngestBatchInput, IngestFileInput, IngestUrlInput, QueryInput
+from memex.mcp.server import rag_ingest_batch, rag_ingest_file, rag_ingest_url, rag_query
 
 
 @pytest.fixture
@@ -31,14 +31,14 @@ class TestRagIngestFile:
         test_file = tmp_path / "test.txt"
         test_file.write_bytes(b"Test content for ingestion")
 
-        with patch("rag.docling_client.parse_file") as mock_parse:
+        with patch("memex.engine.ingestion.loader.parse_file") as mock_parse:
             mock_result = MagicMock()
             mock_result.ok = True
             mock_result.markdown = "# Converted content"
             mock_result.processing_time = 1.5
             mock_parse.return_value = mock_result
 
-            with patch("memex.server._get_engine") as mock_engine:
+            with patch("memex.mcp.server._get_engine") as mock_engine:
                 mock_engine.return_value.check_unmodified_local.return_value = (False, 0)
                 mock_engine.return_value.compute_file_hash.return_value = "abc123def456"
                 mock_engine.return_value.is_already_ingested.return_value = (False, 0)
@@ -58,8 +58,8 @@ class TestRagIngestFile:
         test_file.write_bytes(b"Test content")
 
         with (
-            patch("memex.server._get_engine") as _mock_engine,
-            patch("rag.docling_client.parse_file") as mock_parse,
+            patch("memex.mcp.server._get_engine") as _mock_engine,
+            patch("memex.engine.ingestion.loader.parse_file") as mock_parse,
         ):
             mock_result = MagicMock()
             mock_result.ok = False
@@ -77,7 +77,7 @@ class TestRagIngestFile:
         test_file = tmp_path / "test.txt"
         test_file.write_bytes(b"Test content")
 
-        with patch("memex.server._get_engine") as mock_engine:
+        with patch("memex.mcp.server._get_engine") as mock_engine:
             mock_engine.return_value.check_unmodified_local.return_value = (True, 10)
 
             result = await rag_ingest_file(IngestFileInput(file_path_or_url=str(test_file)), mock_ctx)
@@ -93,8 +93,8 @@ class TestRagIngestFile:
         mock_engine.check_unmodified_local.return_value = (False, 0)
 
         with (
-            patch("memex.server._get_engine", return_value=mock_engine),
-            patch("rag.docling_client.parse_file") as mock_parse,
+            patch("memex.mcp.server._get_engine", return_value=mock_engine),
+            patch("memex.engine.ingestion.loader.parse_file") as mock_parse,
         ):
             mock_parse.side_effect = FileNotFoundError("File not found: /nonexistent/file.txt")
 
@@ -112,8 +112,8 @@ class TestRagIngestFile:
         mock_engine.check_unmodified_local.return_value = (False, 0)
 
         with (
-            patch("memex.server._get_engine", return_value=mock_engine),
-            patch("rag.docling_client.parse_file") as mock_parse,
+            patch("memex.mcp.server._get_engine", return_value=mock_engine),
+            patch("memex.engine.ingestion.loader.parse_file") as mock_parse,
         ):
             mock_parse.side_effect = RuntimeError("Unexpected error")
 
@@ -127,14 +127,14 @@ class TestRagIngestFile:
         test_file = tmp_path / "report.pdf"
         test_file.write_bytes(b"PDF content")
 
-        with patch("rag.docling_client.parse_file") as mock_parse:
+        with patch("memex.engine.ingestion.loader.parse_file") as mock_parse:
             mock_result = MagicMock()
             mock_result.ok = True
             mock_result.markdown = "# PDF content"
             mock_result.processing_time = 2.0
             mock_parse.return_value = mock_result
 
-            with patch("memex.server._get_engine") as mock_engine:
+            with patch("memex.mcp.server._get_engine") as mock_engine:
                 mock_engine.return_value.check_unmodified_local.return_value = (False, 0)
                 mock_engine.return_value.compute_file_hash.return_value = "abc123def456"
                 mock_engine.return_value.is_already_ingested.return_value = (False, 0)
@@ -152,7 +152,7 @@ class TestRagIngestFile:
         test_file = tmp_path / "test.txt"
         test_file.write_bytes(b"Test content")
 
-        with patch("rag.docling_client.parse_file") as mock_parse:
+        with patch("memex.engine.ingestion.loader.parse_file") as mock_parse:
             mock_result = MagicMock()
             mock_result.ok = True
             mock_result.markdown = "# Content"
@@ -160,7 +160,7 @@ class TestRagIngestFile:
             mock_result.processing_time = 1.0
             mock_parse.return_value = mock_result
 
-            with patch("memex.server._get_engine") as mock_engine:
+            with patch("memex.mcp.server._get_engine") as mock_engine:
                 mock_engine.return_value.check_unmodified_local.return_value = (False, 0)
                 mock_engine.return_value.compute_file_hash.return_value = "abc123"
                 mock_engine.return_value.is_already_ingested.return_value = (False, 0)
@@ -183,7 +183,7 @@ class TestRagIngestUrl:
     @pytest.mark.asyncio
     async def test_ingest_url_not_called_with_docling_json(self, mock_ctx: MagicMock) -> None:
         """ingest_text() must NOT receive docling_json from rag_ingest_url."""
-        with patch("rag.docling_client.parse_url") as mock_parse:
+        with patch("memex.engine.ingestion.loader.parse_url") as mock_parse:
             mock_result = MagicMock()
             mock_result.ok = True
             mock_result.markdown = "# Web content"
@@ -191,7 +191,7 @@ class TestRagIngestUrl:
             mock_result.processing_time = 2.0
             mock_parse.return_value = mock_result
 
-            with patch("memex.server._get_engine") as mock_engine:
+            with patch("memex.mcp.server._get_engine") as mock_engine:
                 mock_engine.return_value.compute_file_hash.return_value = "abc123"
                 mock_engine.return_value.is_already_ingested.return_value = (False, 0)
                 mock_engine.return_value.ingest_text.return_value = 4
@@ -214,7 +214,7 @@ class TestRagIngestBatch:
     async def test_ingest_batch_delegates_to_orchestrator(self, mock_ctx: MagicMock) -> None:
         """rag_ingest_batch should delegate to IngestionOrchestrator."""
         items = ["https://example.com/doc"]
-        with patch("rag.ingestion.IngestionOrchestrator") as mock_orch_class:
+        with patch("memex.engine.ingestion.ingestion.IngestionOrchestrator") as mock_orch_class:
             mock_orch = mock_orch_class.return_value
             mock_orch.ingest_batch = AsyncMock(return_value={
                 items[0]: "Success (2 chunks, 1.0s conversion)"
@@ -306,8 +306,8 @@ class TestRagQuery:
     async def test_hybrid_search_returns_results(self, mock_engine: MagicMock) -> None:
         """Should return search results in markdown format by default."""
         with (
-            patch("memex.server._get_engine", return_value=mock_engine),
-            patch("memex.server.config") as mock_config,
+            patch("memex.mcp.server._get_engine", return_value=mock_engine),
+            patch("memex.mcp.server.config") as mock_config,
         ):
             mock_config.ENABLE_QUERY_EXPANSION = False
             mock_config.SEARCH_MODE = "hybrid"
@@ -327,8 +327,8 @@ class TestRagQuery:
     async def test_mmr_search_mode(self, mock_engine: MagicMock) -> None:
         """Should use MMR search when search_mode='mmr'."""
         with (
-            patch("memex.server._get_engine", return_value=mock_engine),
-            patch("memex.server.config") as mock_config,
+            patch("memex.mcp.server._get_engine", return_value=mock_engine),
+            patch("memex.mcp.server.config") as mock_config,
         ):
             mock_config.ENABLE_QUERY_EXPANSION = False
             mock_config.SEARCH_MODE = "hybrid"
@@ -349,11 +349,11 @@ class TestRagQuery:
     @pytest.mark.asyncio
     async def test_json_output_format(self, mock_engine: MagicMock) -> None:
         """Should return QueryOutput in JSON format."""
-        from memex.schemas import ResponseFormat
+        from memex.mcp.schemas import ResponseFormat
 
         with (
-            patch("memex.server._get_engine", return_value=mock_engine),
-            patch("memex.server.config") as mock_config,
+            patch("memex.mcp.server._get_engine", return_value=mock_engine),
+            patch("memex.mcp.server.config") as mock_config,
         ):
             mock_config.ENABLE_QUERY_EXPANSION = False
             mock_config.SEARCH_MODE = "hybrid"
@@ -367,7 +367,7 @@ class TestRagQuery:
                 )
             )
 
-            from memex.schemas import QueryOutput
+            from memex.mcp.schemas import QueryOutput
 
             assert isinstance(result, QueryOutput)
             assert result.total == 2
@@ -381,8 +381,8 @@ class TestRagQuery:
         mock_engine.hybrid_search.return_value = []
 
         with (
-            patch("memex.server._get_engine", return_value=mock_engine),
-            patch("memex.server.config") as mock_config,
+            patch("memex.mcp.server._get_engine", return_value=mock_engine),
+            patch("memex.mcp.server.config") as mock_config,
         ):
             mock_config.ENABLE_QUERY_EXPANSION = False
             mock_config.SEARCH_MODE = "hybrid"
@@ -398,8 +398,8 @@ class TestRagQuery:
     async def test_answer_generation_json(self, mock_engine: MagicMock) -> None:
         """Should generate cited answer when answer generation is enabled."""
         with (
-            patch("memex.server._get_engine", return_value=mock_engine),
-            patch("memex.server.config") as mock_config,
+            patch("memex.mcp.server._get_engine", return_value=mock_engine),
+            patch("memex.mcp.server.config") as mock_config,
         ):
             mock_config.ENABLE_QUERY_EXPANSION = False
             mock_config.SEARCH_MODE = "hybrid"
@@ -408,8 +408,8 @@ class TestRagQuery:
             mock_config.OLLAMA_EMBED_URL = "http://localhost:11434/api/embed"
             mock_config.ANSWER_MAX_CONTEXT_CHARS = 12000
 
-            with patch("rag.answer.generate_answer") as mock_gen:
-                from rag.answer import Answer, Citation
+            with patch("memex.engine.generation.answers.generate_answer") as mock_gen:
+                from memex.engine.generation.answers import Answer, Citation
 
                 mock_gen.return_value = Answer(
                     text="Revenue was $10M [1]. Headcount grew [2].",
@@ -422,7 +422,7 @@ class TestRagQuery:
                     sources=["/docs/report.pdf"],
                 )
 
-                from memex.schemas import AnswerOutput, ResponseFormat
+                from memex.mcp.schemas import AnswerOutput, ResponseFormat
 
                 result = await rag_query(
                     QueryInput(
@@ -443,8 +443,8 @@ class TestRagQuery:
     async def test_answer_generation_markdown(self, mock_engine: MagicMock) -> None:
         """Should generate cited answer in markdown format."""
         with (
-            patch("memex.server._get_engine", return_value=mock_engine),
-            patch("memex.server.config") as mock_config,
+            patch("memex.mcp.server._get_engine", return_value=mock_engine),
+            patch("memex.mcp.server.config") as mock_config,
         ):
             mock_config.ENABLE_QUERY_EXPANSION = False
             mock_config.SEARCH_MODE = "hybrid"
@@ -453,8 +453,8 @@ class TestRagQuery:
             mock_config.OLLAMA_EMBED_URL = "http://localhost:11434/api/embed"
             mock_config.ANSWER_MAX_CONTEXT_CHARS = 12000
 
-            with patch("rag.answer.generate_answer") as mock_gen:
-                from rag.answer import Answer, Citation
+            with patch("memex.engine.generation.answers.generate_answer") as mock_gen:
+                from memex.engine.generation.answers import Answer, Citation
 
                 mock_gen.return_value = Answer(
                     text="Revenue was $10M [1].",
@@ -479,8 +479,8 @@ class TestRagQuery:
     async def test_answer_generation_refusal(self, mock_engine: MagicMock) -> None:
         """Should handle model refusal gracefully."""
         with (
-            patch("memex.server._get_engine", return_value=mock_engine),
-            patch("memex.server.config") as mock_config,
+            patch("memex.mcp.server._get_engine", return_value=mock_engine),
+            patch("memex.mcp.server.config") as mock_config,
         ):
             mock_config.ENABLE_QUERY_EXPANSION = False
             mock_config.SEARCH_MODE = "hybrid"
@@ -489,8 +489,8 @@ class TestRagQuery:
             mock_config.OLLAMA_EMBED_URL = "http://localhost:11434/api/embed"
             mock_config.ANSWER_MAX_CONTEXT_CHARS = 12000
 
-            with patch("rag.answer.generate_answer") as mock_gen:
-                from rag.answer import Answer
+            with patch("memex.engine.generation.answers.generate_answer") as mock_gen:
+                from memex.engine.generation.answers import Answer
 
                 mock_gen.return_value = Answer(
                     text="The retrieved documents do not contain enough information to answer this question.",
@@ -511,8 +511,8 @@ class TestRagQuery:
     async def test_answer_generation_llm_failure_fallback(self, mock_engine: MagicMock) -> None:
         """Should fall back to raw results if answer generation LLM fails."""
         with (
-            patch("memex.server._get_engine", return_value=mock_engine),
-            patch("memex.server.config") as mock_config,
+            patch("memex.mcp.server._get_engine", return_value=mock_engine),
+            patch("memex.mcp.server.config") as mock_config,
         ):
             mock_config.ENABLE_QUERY_EXPANSION = False
             mock_config.SEARCH_MODE = "hybrid"
@@ -521,8 +521,8 @@ class TestRagQuery:
             mock_config.OLLAMA_EMBED_URL = "http://localhost:11434/api/embed"
             mock_config.ANSWER_MAX_CONTEXT_CHARS = 12000
 
-            with patch("rag.answer.generate_answer") as mock_gen:
-                from rag.answer import Answer
+            with patch("memex.engine.generation.answers.generate_answer") as mock_gen:
+                from memex.engine.generation.answers import Answer
 
                 mock_gen.return_value = Answer(
                     text="Answer generation failed due to an LLM error.",
@@ -543,11 +543,11 @@ class TestRagQuery:
     @pytest.mark.asyncio
     async def test_mmr_search_json_format(self, mock_engine: MagicMock) -> None:
         """Should return QueryOutput for MMR search in JSON format."""
-        from memex.schemas import ResponseFormat
+        from memex.mcp.schemas import ResponseFormat
 
         with (
-            patch("memex.server._get_engine", return_value=mock_engine),
-            patch("memex.server.config") as mock_config,
+            patch("memex.mcp.server._get_engine", return_value=mock_engine),
+            patch("memex.mcp.server.config") as mock_config,
         ):
             mock_config.ENABLE_QUERY_EXPANSION = False
             mock_config.SEARCH_MODE = "hybrid"
@@ -564,7 +564,7 @@ class TestRagQuery:
                 )
             )
 
-            from memex.schemas import QueryOutput
+            from memex.mcp.schemas import QueryOutput
 
             assert isinstance(result, QueryOutput)
             assert result.total == 2
@@ -574,8 +574,8 @@ class TestRagQuery:
     async def test_search_mode_override_config(self, mock_engine: MagicMock) -> None:
         """Should use search_mode parameter over config default."""
         with (
-            patch("memex.server._get_engine", return_value=mock_engine),
-            patch("memex.server.config") as mock_config,
+            patch("memex.mcp.server._get_engine", return_value=mock_engine),
+            patch("memex.mcp.server.config") as mock_config,
         ):
             mock_config.ENABLE_QUERY_EXPANSION = False
             mock_config.SEARCH_MODE = "hybrid"  # config default

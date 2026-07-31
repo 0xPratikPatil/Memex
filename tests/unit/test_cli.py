@@ -37,8 +37,8 @@ class TestIngestCommand:
         assert result.exit_code == 1
         assert "No files found" in result.output
 
-    @patch("rag.pipeline.RAGEngine")
-    @patch("rag.docling_client.parse_file")
+    @patch("memex.engine.core.pipeline.RAGEngine")
+    @patch("memex.engine.ingestion.loader.parse_file")
     def test_ingest_single_file(self, mock_parse_file, mock_engine_cls, tmp_path) -> None:
         test_file = tmp_path / "doc.md"
         test_file.write_text("# Hello")
@@ -57,8 +57,8 @@ class TestIngestCommand:
         assert result.exit_code == 0
         assert "Ingested: 1" in result.output
 
-    @patch("rag.pipeline.RAGEngine")
-    @patch("rag.docling_client.parse_file")
+    @patch("memex.engine.core.pipeline.RAGEngine")
+    @patch("memex.engine.ingestion.loader.parse_file")
     def test_ingest_with_recursive(self, mock_parse_file, mock_engine_cls, tmp_path) -> None:
         sub = tmp_path / "subdir"
         sub.mkdir()
@@ -79,8 +79,8 @@ class TestIngestCommand:
         assert result.exit_code == 0
         assert "Ingested: 2" in result.output
 
-    @patch("rag.pipeline.RAGEngine")
-    @patch("rag.docling_client.parse_file")
+    @patch("memex.engine.core.pipeline.RAGEngine")
+    @patch("memex.engine.ingestion.loader.parse_file")
     def test_ingest_with_source_name(self, mock_parse_file, mock_engine_cls, tmp_path) -> None:
         test_file = tmp_path / "doc.md"
         test_file.write_text("# Hello")
@@ -100,8 +100,8 @@ class TestIngestCommand:
         call_kwargs = mock_engine.ingest_text.call_args[1]
         assert call_kwargs["metadata"]["source_name"] == "my-source"
 
-    @patch("rag.pipeline.RAGEngine")
-    @patch("rag.docling_client.parse_file")
+    @patch("memex.engine.core.pipeline.RAGEngine")
+    @patch("memex.engine.ingestion.loader.parse_file")
     def test_ingest_verbose_enables_debug(self, mock_parse_file, mock_engine_cls, tmp_path) -> None:
         test_file = tmp_path / "doc.md"
         test_file.write_text("# Hello")
@@ -119,8 +119,8 @@ class TestIngestCommand:
         result = runner.invoke(app, ["ingest", str(test_file), "--verbose"])
         assert result.exit_code == 0
 
-    @patch("rag.pipeline.RAGEngine")
-    @patch("rag.docling_client.parse_file")
+    @patch("memex.engine.core.pipeline.RAGEngine")
+    @patch("memex.engine.ingestion.loader.parse_file")
     def test_ingest_reports_docling_errors(self, mock_parse_file, mock_engine_cls, tmp_path) -> None:
         test_file = tmp_path / "bad.pdf"
         test_file.write_bytes(b"bad")
@@ -138,8 +138,8 @@ class TestIngestCommand:
         assert result.exit_code == 1
         assert "failed:" in result.output
 
-    @patch("rag.pipeline.RAGEngine")
-    @patch("rag.docling_client.parse_file")
+    @patch("memex.engine.core.pipeline.RAGEngine")
+    @patch("memex.engine.ingestion.loader.parse_file")
     def test_ingest_with_config_path(self, mock_parse_file, mock_engine_cls, tmp_path) -> None:
         test_file = tmp_path / "doc.md"
         test_file.write_text("# Hello")
@@ -159,7 +159,7 @@ class TestIngestCommand:
 
 
 class TestSyncCommand:
-    @patch("rag.sync.sync", new_callable=AsyncMock)
+    @patch("memex.engine.sources.sync.sync", new_callable=AsyncMock)
     def test_sync_default_options(self, mock_sync_fn) -> None:
         mock_stats = MagicMock()
         mock_stats.added = 0
@@ -173,7 +173,7 @@ class TestSyncCommand:
         assert result.exit_code == 0
         assert "unchanged=5" in result.output
 
-    @patch("rag.sync.sync", new_callable=AsyncMock)
+    @patch("memex.engine.sources.sync.sync", new_callable=AsyncMock)
     def test_sync_dry_run(self, mock_sync_fn) -> None:
         mock_stats = MagicMock()
         mock_stats.added = 2
@@ -187,7 +187,7 @@ class TestSyncCommand:
         assert result.exit_code == 0
         assert "would changed=1" in result.output
 
-    @patch("rag.sync.sync", new_callable=AsyncMock)
+    @patch("memex.engine.sources.sync.sync", new_callable=AsyncMock)
     def test_sync_with_source_name(self, mock_sync_fn) -> None:
         mock_stats = MagicMock()
         mock_stats.added = 0
@@ -200,7 +200,7 @@ class TestSyncCommand:
         result = runner.invoke(app, ["sync", "-s", "docs"])
         assert result.exit_code == 0
 
-    @patch("rag.sync.sync", new_callable=AsyncMock)
+    @patch("memex.engine.sources.sync.sync", new_callable=AsyncMock)
     def test_sync_reports_errors(self, mock_sync_fn) -> None:
         mock_stats = MagicMock()
         mock_stats.added = 0

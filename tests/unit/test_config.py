@@ -6,7 +6,7 @@ import os
 from importlib import reload
 from unittest.mock import patch
 
-from rag import config
+from memex.engine.core import config
 
 
 class TestChunkingDefaults:

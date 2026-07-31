@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rag.chunking import (
+from memex.engine.ingestion.splitter import (
     _build_chunking_options,
     _build_convert_options,
     _get_chunking_url,

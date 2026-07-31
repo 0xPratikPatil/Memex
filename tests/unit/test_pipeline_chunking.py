@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from rag.pipeline import create_chunks
+from memex.engine.core.pipeline import create_chunks
 
 _LONG_TEXT = "## Header\n\nSome text content that is long enough to pass min chunk length test\n\nMore text here"
 

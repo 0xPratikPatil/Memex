@@ -5,113 +5,38 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 
-from rag import config
-from rag.services.metadata_extractor import MetadataExtractor
-
-# ── Fixtures ─────────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def mock_ollama() -> httpx.Client:
-    """Return a mocked httpx.Client that simulates Ollama responses."""
-    client = MagicMock(spec=httpx.Client)
-
-    def _post(url: str, **kwargs: object) -> MagicMock:
-        resp = MagicMock()
-        resp.raise_for_status = MagicMock()
-        payload = kwargs.get("json") or kwargs.get("payload")
-
-        if "/api/chat" in url:
-            msg_content = ""
-            if payload and isinstance(payload, dict):
-                msgs = payload.get("messages", [])
-                if msgs:
-                    msg_content = msgs[0].get("content", "")
-            if "Classify this document" in msg_content:
-                resp.json.return_value = {"message": {"role": "assistant", "content": "report"}}
-            elif "Extract named entities" in msg_content:
-                resp.json.return_value = {
-                    "message": {
-                        "role": "assistant",
-                        "content": json.dumps(
-                            {
-                                "people": ["Alice Smith"],
-                                "organizations": ["Acme Corp"],
-                                "dates": ["2026-01-15"],
-                                "locations": ["New York"],
-                                "products": ["Widget Pro"],
-                            }
-                        ),
-                    }
-                }
-            elif "topic labels" in msg_content:
-                resp.json.return_value = {
-                    "message": {"role": "assistant", "content": json.dumps(["finance", "revenue"])}
-                }
-            else:
-                resp.json.return_value = {"message": {"role": "assistant", "content": "report"}}
-        elif "/api/embed" in url:
-            json_data = kwargs.get("json") or {}
-            if isinstance(json_data, dict) and "messages" in json_data:
-                msg_content = ""
-                msgs = json_data.get("messages", [])
-                if msgs:
-                    msg_content = msgs[0].get("content", "")
-                if "Classify this document" in msg_content:
-                    resp.json.return_value = {"message": {"role": "assistant", "content": "report"}}
-                elif "Extract named entities" in msg_content:
-                    resp.json.return_value = {
-                        "message": {
-                            "role": "assistant",
-                            "content": json.dumps(
-                                {
-                                    "people": ["Alice Smith"],
-                                    "organizations": ["Acme Corp"],
-                                    "dates": ["2026-01-15"],
-                                    "locations": ["New York"],
-                                    "products": ["Widget Pro"],
-                                }
-                            ),
-                        }
-                    }
-                elif "topic labels" in msg_content:
-                    resp.json.return_value = {
-                        "message": {"role": "assistant", "content": json.dumps(["finance", "revenue"])}
-                    }
-                else:
-                    resp.json.return_value = {"message": {"role": "assistant", "content": "report"}}
-            else:
-                resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
-        elif "/api/embeddings" in url:
-            resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
-        else:
-            resp.json.return_value = {}
-
-        return resp
-
-    client.post = MagicMock(side_effect=_post)
-    return client
+from memex.engine.core import config
+from memex.engine.llm.base import LLMProvider
+from memex.engine.metadata.extractor import MetadataExtractor
 
 
 @pytest.fixture
-def extractor(mock_ollama: httpx.Client):
-    """Return a MetadataExtractor with all features enabled."""
-    with patch.multiple(
-        config,
-        ENABLE_ENTITY_EXTRACTION=True,
-        ENABLE_DOC_CLASSIFICATION=True,
-        ENABLE_TOPIC_TAGGING=True,
-        ENABLE_LANGUAGE_DETECTION=True,
-    ):
-        yield MetadataExtractor(mock_ollama)
+def mock_llm() -> MagicMock:
+    provider = MagicMock(spec=LLMProvider)
+
+    async def _chat(prompt: str, *, model=None) -> str:
+        if "Classify this document" in prompt:
+            return "report"
+        elif "Extract named entities" in prompt:
+            return json.dumps({"people": ["Alice Smith"], "organizations": ["Acme Corp"],
+                              "dates": ["2026-01-15"], "locations": ["New York"], "products": ["Widget Pro"]})
+        elif "topic labels" in prompt:
+            return "## Topics\n- finance\n- technology"
+        elif "short summary" in prompt:
+            return "This document discusses quarterly revenue."
+        elif "keywords" in prompt:
+            return json.dumps({"keywords": ["revenue", "growth", "quarterly"]})
+        return "mocked LLM response"
+
+    provider.chat = _chat
+    return provider
 
 
 @pytest.fixture
-def minimal_extractor() -> MetadataExtractor:
-    """Return a MetadataExtractor with no Ollama client (structural only)."""
+def extractor(mock_llm: MagicMock) -> MetadataExtractor:
+    return MetadataExtractor(mock_llm)
     with patch.multiple(
         config,
         ENABLE_ENTITY_EXTRACTION=False,

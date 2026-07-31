@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from rag.docling_client import ConversionResult, _build_options, parse_local_file
+from memex.engine.ingestion.loader import ConversionResult, _build_options, parse_local_file
 
 # ── parse_local_file tests ──────────────────────────────────────────────────
 

@@ -67,7 +67,7 @@ CHAT=$(_read_config_model "llm.model" "CHAT_MODEL" "qwen2.5:1.5b")
 RERANK=$(_read_config_model "reranker.model" "RERANK_MODEL" "Qwen/Qwen3-Reranker-0.6B")
 SPARSE=$(_read_config_model "sparse.model" "SPARSE_MODEL" "Qdrant/bm25")
 
-BOOT_SERVICES=(qdrant ollama docling ml-services redis)
+BOOT_SERVICES=(qdrant ollama docling)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 ok()   { echo "  ✓ $1"; }
@@ -100,10 +100,10 @@ fi
 
 # ── 1. Python environment ──────────────────────────────────────────────────
 echo "[1/8] Python environment"
-if uv sync; then
-    ok "deps installed"
+if uv sync --extra local; then
+    ok "deps installed (with in-process ML)"
 else
-    info "Python deps failed — run 'uv sync' manually later"
+    info "Python deps failed — run 'uv sync --extra local' manually later"
 fi
 
 # ── 2. Docker ───────────────────────────────────────────────────────────────
@@ -138,8 +138,6 @@ done
 check_http "qdrant"      "http://localhost:6333/"
 check_http "ollama"      "http://localhost:11434/api/tags"
 check_http "docling"     "http://localhost:5001/health"
-check_http "ml-services" "http://localhost:5002/health"
-ok "redis         (Docker healthcheck)"
 
 # ── 5. Pull models ──────────────────────────────────────────────────────────
 echo "[5/8] Models"
@@ -169,14 +167,8 @@ curl -sf -X POST http://localhost:11434/api/chat \
 
 # ── 7. Verify features ─────────────────────────────────────────────────────
 echo "[7/8] Features"
-# Redis cache ping
-if docker compose exec -T redis redis-cli ping | grep -q PONG 2>/dev/null; then
-    echo "  ✓ redis cache"
-else
-    echo "  ✗ redis cache (non-fatal)"
-fi
 # Hybrid chunker availability
-if uv run python -c "
+if uv run python -c " 
 from rag.chunking import is_hybrid_chunker_available
 ok = is_hybrid_chunker_available()
 assert ok, 'HybridChunker not available — check docling install'

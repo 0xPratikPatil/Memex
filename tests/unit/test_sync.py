@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rag.sync import SyncStats, _get_stored_hashes, _ingest_file, sync
+from memex.engine.sources.sync import SyncStats, _get_stored_hashes, _ingest_file, sync
 
 # ── SyncStats tests ─────────────────────────────────────────────────────────
 

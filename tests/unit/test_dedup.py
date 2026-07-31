@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rag.dedup import (
+from memex.engine.ingestion.hashing import (
     check_partial_ingest,
     clear_source_chunks,
     compute_chunk_hash,

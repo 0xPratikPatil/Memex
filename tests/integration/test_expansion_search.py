@@ -5,8 +5,8 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from rag import config
-from rag.services.query_expansion import ExpandedQuery, QueryExpander
+from memex.engine.core import config
+from memex.engine.retrieval.expansion import ExpandedQuery, QueryExpander
 
 
 def _check_ollama(host: str = "localhost", port: int = 11434) -> bool:

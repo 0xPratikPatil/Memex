@@ -19,10 +19,9 @@ Production-ready MCP server for Retrieval-Augmented Generation with Docling docu
 │                           │ HTTP                                 │
 │                           ▼                                      │
 │  ┌────────────────────────────────────────────────────────────┐ │
-│  │              Docker Services (5 containers)                  │ │
+│  │              Docker Services (3 containers)                 │ │
 │  │                                                             │ │
-│  │  Qdrant :6333   Ollama :11434   Docling :5001   Redis :6379 │ │
-│  │  ML Services :5002                                          │ │
+│  │  Qdrant :6333   Ollama :11434   Docling :5001              │ │
 │  └────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -34,7 +33,7 @@ Production-ready MCP server for Retrieval-Augmented Generation with Docling docu
 - **Multi-format Embedding**: Table chunks → HTML, code chunks → fenced, text → Markdown
 - **Docling Enrichment**: Picture classification, image export, code/formula/chart extraction (opt-in)
 - **Contextual Retrieval**: LLM-generated context prefixes for each chunk
-- **Hybrid Search**: Dense (qwen3-embedding:0.6b) + Sparse (BM25) + RRF fusion + causal-LM rerank
+- **Hybrid Search**: Dense (qwen3-embedding:0.6b) + Sparse (BM25, in-process) + RRF fusion + cross-encoder rerank (in-process)
 - **MMR Search**: Maximal Marginal Relevance for diverse results
 - **Query Expansion**: HyDE, query rewrite, multi-query paraphrasing
 - **Metadata Extraction**: Entities, topics, document classification, language detection, dates, keywords
@@ -43,7 +42,7 @@ Production-ready MCP server for Retrieval-Augmented Generation with Docling docu
 - **Document Sources & Sync**: Local directories + S3 buckets with sync engine
 - **Agent Filter Tools**: Natural language → metadata filter extraction
 - **Golden-Set Evaluation**: YAML-based eval with recall/precision/MRR/eval sweep
-- **Redis Caching**: Embedding, search, parse, and expansion caches
+- **In-Memory Caching**: Embedding, search, parse, and expansion caches (Redis opt-in)
 - **YAML Config**: Single config.yaml replaces env vars, `${VAR}` substitution for secrets
 - **13 MCP Tools**: Ingest, query, sync, eval, filter tools, stats, status, and more
 - **CLI Commands**: `memex ingest`, `memex sync`, `memex eval`

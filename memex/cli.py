@@ -35,9 +35,9 @@ def ingest(
     _setup_logging(verbose)
     log = logging.getLogger("memex.cli.ingest")
 
-    from rag.docling_client import parse_file
-    from rag.pipeline import RAGEngine
-    from rag.yaml_config import YamlConfig
+    from memex.engine.core.pipeline import RAGEngine
+    from memex.engine.core.yaml_config import YamlConfig
+    from memex.engine.ingestion.loader import parse_file
 
     target = Path(path)
     if not target.exists():
@@ -104,8 +104,8 @@ def sync(
     """Sync collection against configured document sources."""
     _setup_logging(verbose)
 
-    from rag.sync import sync as rag_sync
-    from rag.yaml_config import YamlConfig
+    from memex.engine.core.yaml_config import YamlConfig
+    from memex.engine.sources.sync import sync as rag_sync
 
     yaml_config = YamlConfig(config_path)
 
@@ -137,7 +137,7 @@ def eval(
     """Evaluate retrieval quality against a golden set."""
     _setup_logging(verbose)
 
-    from rag.yaml_config import YamlConfig
+    from memex.engine.core.yaml_config import YamlConfig
 
     golden_path = Path(golden_set)
     if not golden_path.exists():
@@ -156,7 +156,7 @@ def serve(
     config_path: str = typer.Option("config.yaml", "--config", "-c", help="Path to config.yaml"),
 ) -> None:
     """Start the MCP server (stdio transport)."""
-    from memex.server import mcp
+    from memex.mcp.server import mcp
 
     mcp.run(transport="stdio")
 

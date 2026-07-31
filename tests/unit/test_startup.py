@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from memex.startup import StartupBanner, build_startup_banner, check_services
-from memex.status import ServiceStatus  # existing class
+from memex.mcp.startup import StartupBanner, build_startup_banner, check_services
+from memex.mcp.status import ServiceStatus  # existing class
 
 
 class TestBuildStartupBanner:
@@ -31,7 +31,7 @@ class TestBuildStartupBanner:
         assert any(name in banner for name in ("Docling HybridChunker", "legacy recursive"))
 
     def test_includes_cache_status(self):
-        with patch("memex.startup.config.ENABLE_CACHE", True):
+        with patch("memex.mcp.startup.config.ENABLE_CACHE", True):
             banner = build_startup_banner()
             assert "enabled" in banner.lower() or "cache" in banner.lower()
 
@@ -41,7 +41,7 @@ class TestBuildStartupBanner:
 
     def test_expansion_disabled_shows_off(self):
         with patch.multiple(
-            "memex.startup.config",
+            "memex.mcp.startup.config",
             ENABLE_QUERY_EXPANSION=False,
             ENABLE_HYDE=False,
             ENABLE_MULTI_QUERY=False,
@@ -58,12 +58,11 @@ class TestCheckServices:
         assert "qdrant" in results
         assert "ollama" in results
         assert "docling" in results
-        assert "redis" in results
 
     def test_uses_service_checker(self):
         mock_checker = MagicMock()
         mock_checker.check_all.return_value = {}
-        with patch("memex.startup.create_service_checker", return_value=mock_checker):
+        with patch("memex.mcp.startup.create_service_checker", return_value=mock_checker):
             check_services()
             mock_checker.check_all.assert_called_once()
 
@@ -72,7 +71,7 @@ class TestCheckServices:
         mock_checker.check_all.return_value = {
             "qdrant": ServiceStatus(name="qdrant", url="http://localhost:6333", healthy=True, latency_ms=2.5),
         }
-        with patch("memex.startup.create_service_checker", return_value=mock_checker):
+        with patch("memex.mcp.startup.create_service_checker", return_value=mock_checker):
             banner = build_startup_banner()
             assert "healthy" in banner
             assert "qdrant" in banner.lower()
@@ -87,7 +86,7 @@ class TestCheckServices:
                 error="Connection refused",
             ),
         }
-        with patch("memex.startup.create_service_checker", return_value=mock_checker):
+        with patch("memex.mcp.startup.create_service_checker", return_value=mock_checker):
             banner = build_startup_banner()
             lower = banner.lower()
             assert any(w in lower for w in ("unreachable", "unhealthy", "connection refused"))
@@ -110,7 +109,7 @@ class TestStartupBannerDataclass:
         sb = StartupBanner(
             config_text="Config OK",
             services_text="Services OK",
-            warnings=["2 services unreachable: qdrant, redis"],
+            warnings=["2 services unreachable: qdrant, docling"],
         )
         output = str(sb)
         assert "WARNING" in output

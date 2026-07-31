@@ -8,26 +8,26 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rag.evaluation.golden import GoldenQuery, GoldenSet, match_source
-from rag.evaluation.metrics import (
+from memex.engine.evaluation.golden import GoldenQuery, GoldenSet, match_source
+from memex.engine.evaluation.metrics import (
     EvalResult,
     QueryMetrics,
     reciprocal_rank,
 )
-from rag.evaluation.metrics import (
+from memex.engine.evaluation.metrics import (
     hit_rate_at_k as new_hit_rate_at_k,
 )
-from rag.evaluation.metrics import (
+from memex.engine.evaluation.metrics import (
     keyword_coverage as new_keyword_coverage,
 )
-from rag.evaluation.metrics import (
+from memex.engine.evaluation.metrics import (
     precision_at_k as new_precision_at_k,
 )
-from rag.evaluation.metrics import (
+from memex.engine.evaluation.metrics import (
     recall_at_k as new_recall_at_k,
 )
-from rag.evaluation.sweep import sweep
-from rag.services.evaluation import (
+from memex.engine.evaluation.sweep import sweep
+from memex.engine.evaluation import (
     BenchmarkResult,
     EvalDataset,
     EvalRunner,
