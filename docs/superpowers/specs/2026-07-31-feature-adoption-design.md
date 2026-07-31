@@ -1,8 +1,8 @@
-# RAGWire Feature Adoption Design Spec
+# Feature Adoption Design Spec
 
 **Date:** 2026-07-31
 **Status:** Approved
-**Scope:** Adopt all RAGWire features into this project, adapted to existing architecture
+**Scope:** Adopt reference project features into this project, adapted to existing architecture
 
 ---
 
@@ -36,7 +36,7 @@ The following questions were asked during brainstorming. Each records the questi
 
 ### Q3: YAML Config Scope
 
-**Question:** RAGWire uses a full YAML config (vectorstore, embedding, LLM, sources, chunking, etc). You currently use 80+ env vars. How should the config system evolve?
+**Question:** A full YAML config (vectorstore, embedding, LLM, sources, chunking, etc) vs the current 80+ env vars. How should the config system evolve?
 
 | Option | Description |
 |--------|-------------|
@@ -48,7 +48,7 @@ The following questions were asked during brainstorming. Each records the questi
 
 ### Q4: Citation-Based Answers
 
-**Question:** RAGWire generates cited answers (Answer object with citations, refusal sentinel, confidence score). Your current MCP tools return raw ranked chunks. How should answers work?
+**Question:** The reference project generates cited answers (Answer object with citations, refusal sentinel, confidence score). Current MCP tools return raw ranked chunks. How should answers work?
 
 | Option | Description |
 |--------|-------------|
@@ -96,7 +96,7 @@ The following questions were asked during brainstorming. Each records the questi
 
 ### Q8: Deduplication Strategy
 
-**Question:** RAGWire has multi-level dedup (file SHA256, chunk SHA256, partial ingest recovery). How thorough should dedup be?
+**Question:** The reference project has multi-level dedup (file SHA256, chunk SHA256, partial ingest recovery). How thorough should dedup be?
 
 | Option | Description |
 |--------|-------------|
@@ -108,7 +108,7 @@ The following questions were asked during brainstorming. Each records the questi
 
 ### Q9: MMR Search
 
-**Question:** RAGWire has MMR (Maximal Marginal Relevance) search for result diversity. Your current pipeline uses RRF fusion. Should MMR be added?
+**Question:** The reference project has MMR (Maximal Marginal Relevance) search for result diversity. Current pipeline uses RRF fusion. Should MMR be added?
 
 | Option | Description |
 |--------|-------------|
@@ -120,7 +120,7 @@ The following questions were asked during brainstorming. Each records the questi
 
 ### Q10: Agent Filter Tools
 
-**Question:** RAGWire has agent-oriented filter tools: get_filter_context (shows available fields/stored values, suggests filters) and extract_filters. Your current rag_query supports metadata_filter but agents must figure it out themselves. Should we add these?
+**Question:** The reference project has agent-oriented filter tools: get_filter_context (shows available fields/stored values, suggests filters) and extract_filters. Current rag_query supports metadata_filter but agents must figure it out themselves. Should we add these?
 
 | Option | Description |
 |--------|-------------|
@@ -318,7 +318,7 @@ class Source(ABC):
 
 **New MCP tool:** `rag_sync(source_name: str | null, dry_run: bool)`
 
-**Docker:** New S3 service container. Custom Dockerfile with Python + boto3 + a small HTTP API for listing and downloading objects. MCP server calls this service during sync.
+**Docker:** New S3 service container with `boto3`.
 
 ### 3. MarkItDown Integration
 
@@ -599,9 +599,9 @@ CLI reads same `config.yaml` as MCP server. Calls same pipelines as MCP tools.
 | New: `s3-service` | Custom Dockerfile: Python + boto3 + HTTP API for S3 listing/download |
 | Existing 5 services | Unchanged |
 
-## No Brand References
+## No External Brand References
 
-- No mention of "RAGWire", "ragwire", "laxmimerit", or the source repository anywhere in code, docs, or config
+- No mention of source projects, repositories, or authors anywhere in code, docs, or config
 - All features rewritten to fit this project's patterns and naming
-- Config schema designed from scratch (not copied)
+- Config schema designed from scratch
 - Code implementations follow existing codebase conventions (async, httpx, tenacity, Pydantic)

@@ -1,6 +1,6 @@
-# Implementation Plan: RAGWire Feature Adoption
+# Implementation Plan: Feature Adoption
 
-**Spec:** `docs/superpowers/specs/2026-07-31-ragwire-feature-adoption-design.md`
+**Spec:** `docs/superpowers/specs/2026-07-31-feature-adoption-design.md`
 **Date:** 2026-07-31
 
 ---
