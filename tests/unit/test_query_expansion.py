@@ -108,7 +108,9 @@ class TestQueryRewrite:
         ):
             expander.expand("my specific query")
             call_args = expander._llm.chat_sync.call_args
-            assert call_args is not None
+            assert call_args is not None, "chat_sync should have been called"
+            if call_args is None:
+                return
             prompt_content = call_args[1]["json"]["messages"][0]["content"]
             assert "my specific query" in prompt_content
 
@@ -157,7 +159,7 @@ class TestMultiQuery:
                 resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
             return resp
 
-        expander._llm.chat_sync = MagicMock(side_effect=_multi_line_post)
+        expander._llm.chat_sync = MagicMock(return_value="paraphrase 1\nparaphrase 2")
 
         with patch.object(config, "ENABLE_MULTI_QUERY", True), patch.object(config, "MULTI_QUERY_COUNT", 2):
             result = expander.expand("test")
