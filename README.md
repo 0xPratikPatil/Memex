@@ -1,211 +1,176 @@
-# Memex Server
+# Memex — Personal RAG
 
-Production-ready MCP server for Retrieval-Augmented Generation with Docling document conversion, Qdrant vector storage, Ollama embeddings, and a pluggable source system.
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        HOST MACHINE                              │
-│                                                                  │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │              MCP Server (uv run memex)                     │ │
-│  │                                                             │ │
-│  │  - 13 MCP tools + 3 CLI commands                           │ │
-│  │  - YAML config (config.yaml)                               │ │
-│  │  - Direct filesystem access for local sources              │ │
-│  └────────────────────────────────────────────────────────────┘ │
-│                           │                                      │
-│                           │ HTTP                                 │
-│                           ▼                                      │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │              Docker Services (3 containers)                 │ │
-│  │                                                             │ │
-│  │  Qdrant :6333   Ollama :11434   Docling :5001              │ │
-│  └────────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Features
-
-- **Docling v1 API**: Document conversion (PDF, DOCX, PPTX, XLSX, HTML, images, CSV, Markdown) via Docling Serve
-- **Hybrid Chunking**: Docling HybridChunker — tokenizer-aware, structure-preserving (headings, tables, captions, lists)
-- **Multi-format Embedding**: Table chunks → HTML, code chunks → fenced, text → Markdown
-- **Docling Enrichment**: Picture classification, image export, code/formula/chart extraction (opt-in)
-- **Contextual Retrieval**: LLM-generated context prefixes for each chunk
-- **Hybrid Search**: Dense (qwen3-embedding:0.6b) + Sparse (BM25, in-process) + RRF fusion + cross-encoder rerank (in-process)
-- **MMR Search**: Maximal Marginal Relevance for diverse results
-- **Query Expansion**: HyDE, query rewrite, multi-query paraphrasing
-- **Metadata Extraction**: Entities, topics, document classification, language detection, dates, keywords
-- **Content-Hash Dedup**: SHA256 dedup + partial ingest recovery
-- **Cited Answers**: Structured answers with [N] citations, refusal detection, confidence scoring
-- **Document Sources & Sync**: Local directories + S3 buckets with sync engine
-- **Agent Filter Tools**: Natural language → metadata filter extraction
-- **Golden-Set Evaluation**: YAML-based eval with recall/precision/MRR/eval sweep
-- **In-Memory Caching**: Embedding, search, parse, and expansion caches (Redis opt-in)
-- **YAML Config**: Single config.yaml replaces env vars, `${VAR}` substitution for secrets
-- **13 MCP Tools**: Ingest, query, sync, eval, filter tools, stats, status, and more
-- **CLI Commands**: `memex ingest`, `memex sync`, `memex eval`
+Thin MCP server for personal RAG. Models run in Docker; MCP only does HTTP orchestration.
 
 ## Quick Start
 
 ```bash
-./setup.sh        # bootstrap everything (Docker + models + config)
-uv sync           # install MCP server deps
-uv run memex      # start MCP server
+./setup.sh            # bootstrap Docker + models + deps
+uv run memex serve    # start MCP server (stdio transport)
 ```
 
-Add to your MCP client config:
-```json
-{
-  "mcpServers": {
-    "personal_rag": {
-      "command": "uv",
-      "args": ["run", "memex"],
-      "cwd": "/path/to/memex"
-    }
-  }
-}
-```
-
-## Development
+Override models via env vars:
 
 ```bash
-uv sync --extra dev --extra test
-make test
-make lint
-make fmt
-make help
+EMBED_MODEL=qwen3-embedding:0.6b CHAT_MODEL=qwen2.5:1.5b ./setup.sh
 ```
+
+## Architecture
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│  HOST MACHINE                                                     │
+│  ┌─────────────────────┐                                          │
+│  │  memex MCP Server    │───HTTP──▶ Docker (127.0.0.1)            │
+│  │  (uv run memex)      │           ┌──────────────────────────┐  │
+│  │  • Python (stdio)    │           │ Qdrant   :6333  vector DB │  │
+│  └─────────────────────┘           │ Ollama   :11434 LLM/embed│  │
+│                                     │ Docling  :5001  converter │  │
+│  In-process ML (host)              └──────────────────────────┘  │
+│  ┌─────────────────────┐                                          │
+│  │ fastembed (BM25)     │                                          │
+│  │ sentence-transformers│──reranker (Qwen3-Reranker-0.6B)        │
+│  └─────────────────────┘                                          │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+## Features
+
+- **Multi-provider LLM** — Ollama, OpenAI, Anthropic, Groq, Google, OpenRouter
+- **Multi-provider embedding** — Ollama, OpenAI, HuggingFace, FastEmbed
+- **Hybrid search** — dense (qwen3-embedding:0.6b, 1024d) + sparse BM25 (fastembed in-process) + RRF fusion (k=60)
+- **MMR search** — Maximal Marginal Relevance for diverse results, configurable λ
+- **Cross-encoder reranking** — Qwen/Qwen3-Reranker-0.6B (in-process via sentence-transformers), fallback to BAAI/bge-reranker-base
+- **Query expansion** — HyDE, Multi-Query (3 paraphrases + RRF), Query Rewrite (master toggle per-method)
+- **Contextual Retrieval** — LLM-generated context prefixes on every chunk for better embedding quality
+- **Cited answers** — structured answers with `[N]` citations, refusal detection (`INSUFFICIENT_CONTEXT`), citation confidence
+- **Agent filter tools** — discover metadata fields/values; extract filters from natural language
+- **Docling HybridChunker** — tokenizer-aware, structure-preserving chunking on DoclingDocument; repeats table headers
+- **Multi-format embedding** — table chunks → HTML, code chunks → fenced markdown, images → `[Image: caption]`
+- **Metadata extraction** — entities, topics, document classification, language detection, dates, keywords
+- **Content-hash dedup** — SHA256-based; skips re-indexing unchanged content; partial ingest recovery
+- **Search cache** — in-memory LRU (Redis opt-in); caches full result sets
+- **Embedding cache** — in-memory LRU; caches dense vectors
+- **Pluggable sources** — local directories + S3 buckets; defined in `config.yaml`
+- **Sync engine** — reconciles collection against sources (add, replace, delete); safety rails suppress deletions on source failure
+- **Golden-set evaluation** — recall@K, precision@K, hit_rate@K, MRR, keyword_coverage
+- **Eval sweep** — compare multiple retrieval configs side-by-side with delta comparison
 
 ## MCP Tools
 
 | Tool | Description |
 |------|-------------|
-| `rag_ingest_file` | Ingest a document from a local file path |
+| `rag_ingest_file` | Ingest a local document by path |
 | `rag_ingest_url` | Ingest a document from a URL |
-| `rag_ingest_batch` | Batch ingest multiple files/URLs |
-| `rag_query` | Hybrid search with HyDE + multi-query expansion + reranking |
-| `rag_list_documents` | List all ingested documents |
-| `rag_collection_stats` | Get collection statistics |
-| `rag_delete_document` | Remove a document and its chunks |
-| `rag_service_status` | Check backend service health |
+| `rag_ingest_batch` | Ingest multiple files/URLs at once |
+| `rag_query` | Hybrid/MMR search with expansion, reranking, and cited answers |
+| `rag_list_documents` | List all indexed documents with metadata |
+| `rag_collection_stats` | Collection size, vector count, and config |
+| `rag_delete_document` | Remove a document and all its chunks |
+| `rag_service_status` | Health check for all Docker services |
+| `rag_sync` | Sync collection against configured sources |
+| `rag_get_filter_context` | Show available metadata fields and values |
+| `rag_extract_filters` | Extract metadata filters from natural language |
+| `rag_eval` | Run golden-set evaluation |
+| `rag_eval_sweep` | Compare multiple retrieval configs side by side |
+
+## CLI Commands
+
+```
+memex serve          start MCP server (stdio)
+memex ingest PATH    ingest file or directory (--recursive for subdirectories)
+memex sync           sync collection against sources (--dry-run, --source-name)
+memex eval GOLDEN    evaluate retrieval against golden set (--top-k, --compare-rerank)
+```
 
 ## Configuration
 
-All settings via environment variables. Copy and edit `.env.example`:
+`config.yaml` is the single source of truth. Copy from the template:
 
 ```bash
-cp .env.example .env
+cp config.example.yaml config.yaml
 ```
 
-Key settings:
+Key sections:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `EMBED_MODEL` | `qwen3-embedding:0.6b` | Embedding model (Ollama) |
-| `CHAT_MODEL` | `qwen2.5:1.5b` | Chat/LLM model for context, metadata, query expansion |
-| `CHUNK_SIZE` | `1024` | Target chunk size (tokens) |
-| `CHUNK_STRATEGY` | `hybrid` | `hybrid`, `recursive`, or `fixed` |
-| `ENABLE_CACHE` | `true` | Redis caching (embeddings, search, parse) |
-| `ENABLE_QUERY_EXPANSION` | `true` | HyDE + rewrite + multi-query |
-| `ENABLE_HYDE` | `true` | Hypothetical document search |
-| `ENABLE_MULTI_QUERY` | `true` | Paraphrase-based recall boost |
-| `ENABLE_QUERY_REWRITE` | `true` | LLM query refinement |
-| `ENABLE_CONTEXTUAL_RETRIEVAL` | `true` | Context prefixes for chunks |
-| `ENABLE_METADATA_EXTRACTION` | `true` | Entities, topics, language, classification |
-| `DOCLING_PICTURE_CLASSIFY` | `true` | Image type classification in Docling |
-| `DOCLING_IMAGE_EXPORT` | `embedded` | Base64 inline images in Markdown |
+| Path | Default | Notes |
+|------|---------|-------|
+| `embedding.model` | `qwen3-embedding:0.6b` | 1024d, Ollama |
+| `embedding.fallback_model` | `bge-m3` | fallback if primary unavailable |
+| `llm.model` | `qwen2.5:1.5b` | Ollama chat model |
+| `chunking.strategy` | `hybrid` | hybrid / recursive / fixed |
+| `chunking.size` | `1024` | target tokens per chunk |
+| `reranker.model` | `Qwen/Qwen3-Reranker-0.6B` | in-process via sentence-transformers |
+| `reranker.fallback_model` | `BAAI/bge-reranker-base` | fallback reranker |
+| `search.mode` | `hybrid` | similarity / hybrid / mmr |
+| `search.mmr.lambda_mult` | `0.5` | MMR diversity weight |
+| `query_expansion.enabled` | `true` | master toggle for HyDE + rewrite + multi-query |
+| `query_expansion.multi_query_count` | `3` | number of paraphrases |
+| `contextual_retrieval.enabled` | `true` | context prefixes on chunks |
+| `contextual_retrieval.strategy` | `summary` | context generation strategy |
+| `metadata.extraction_enabled` | `true` | entities, topics, classification, language |
+| `caching.enabled` | `true` | embedding + search cache (Redis opt-in) |
+| `answer.enabled` | `true` | citation-based answer generation |
+| `sources` | local `/mnt/documents` | pluggable local + S3 sources |
 
-**Full reference**: See `.env.example` for all 80+ options.
+## Providers
 
-## Docker Services
+### LLM Providers
 
-All backend services run in Docker. The MCP server runs locally (not in Docker) for direct filesystem access.
+| Provider | Location | Notes |
+|----------|----------|-------|
+| `ollama` | local (Docker) | default; qwen2.5:1.5b |
+| `openai` | remote | needs `api_key` + model |
+| `anthropic` | remote | needs `api_key` + model |
+| `groq` | remote | needs `api_key` + model |
+| `google` | remote | needs `api_key` + model |
+| `openrouter` | remote | needs `api_key` + model |
 
-| Service | Port | Image | Purpose |
-|---------|------|-------|---------|
-| Qdrant | 6333 | `qdrant/qdrant:v1.18` | Vector database |
-| Ollama | 11434 | `ollama/ollama:0.32.4` | Embeddings + chat LLM (GPU) |
-| Docling | 5001 | `ghcr.io/docling-project/docling-serve-cu130:v1.27.0` | Document conversion (GPU) |
-| ML Services | 5002 | Built from `Dockerfile` | Sparse BM25 + reranker (GPU) |
-| Redis | 6379 | `redis:7.4.10-alpine` | Caching layer |
+### Embedding Providers
 
-> **Important**: Ollama runs exclusively in Docker — do NOT install Ollama on the host. All `localhost:11434` access goes through Docker port mapping. Models are persisted in the `ollama_data` Docker volume.
+| Provider | Location | Notes |
+|----------|----------|-------|
+| `ollama` | local (Docker) | default; qwen3-embedding:0.6b |
+| `openai` | remote | needs `api_key` + model |
+| `huggingface` | local (in-process) | loaded via transformers |
+| `fastembed` | local (in-process) | loaded via fastembed |
 
-## Project Structure
+## Docker
 
-```
-memex/
-├── memex/                  # MCP server (thin — HTTP orchestration only)
-│   ├── __init__.py
-│   ├── cli.py              # Entry point (uv run memex)
-│   ├── server.py           # MCP tool definitions (8 tools)
-│   └── status.py           # Service health checker
-├── rag/                    # RAG engine (backend logic)
-│   ├── __init__.py
-│   ├── config.py           # Env-driven central configuration (80+ options)
-│   ├── chunking.py         # Docling HybridChunker via Serve API
-│   ├── pipeline.py         # RAGEngine: embeddings, Qdrant, search
-│   ├── docling_client.py   # Docling document conversion client
-│   ├── ml_server.py        # ML services (runs in Docker)
-│   ├── services/           # Business logic
-│   │   ├── cache.py        # Redis caching layer
-│   │   ├── contextual_retrieval.py  # Context prefixes for chunks
-│   │   ├── evaluation.py   # RAGAS evaluation framework
-│   │   ├── metadata_extractor.py  # Entity, topic, language extraction
-│   │   └── query_expansion.py  # HyDE + Multi-Query + Rewrite
-│   └── utils/              # Shared utilities
-├── Dockerfile              # ML services container (uv-based, multi-stage)
-├── docker-compose.yml      # Backend services (5 containers)
-├── setup.sh                # One-command bootstrap
-├── Makefile                # Development commands
-├── tests/
-│   ├── unit/               # 257 unit tests
-│   ├── integration/        # 53 integration tests
-│   └── fixtures/           # Test data
-├── scripts/
-│   ├── evaluate.py         # Evaluation CLI tool
-│   ├── test_e2e.py         # End-to-end verification
-│   └── verify_features.py  # 55-check feature verification
-├── docs/
-│   └── superpowers/specs/  # Design specifications
-└── pyproject.toml          # uv-managed deps with chunking/extra
-```
+Three required containers + one optional:
 
-## Chunking Strategies
+| Service | Image | Port |
+|---------|-------|------|
+| Qdrant | `qdrant/qdrant:v1.18` | `127.0.0.1:6333` |
+| Ollama | `ollama/ollama:0.32.4` | `127.0.0.1:11434` |
+| Docling | `ghcr.io/docling-project/docling-serve-cu130:v1.27.0` | `127.0.0.1:5001` |
+| Redis (opt-in) | `redis:7.4.10-alpine` | `127.0.0.1:6379` |
 
-**Hybrid** (default): Docling Serve HybridChunker via `/v1/chunk/hybrid/source` API. Tokenizer-aware (aligned to qwen3-embedding), two-pass (split oversized + merge undersized peers). Preserves headings, captions, table structure. Repeats table headers across chunk boundaries. All heavy processing runs in Docker — no local `docling` packages needed.
-
-**Recursive**: Legacy fallback. Regex-splits markdown by headers → paragraphs → sentences → words.
-
-**Fixed**: Simple word-count splitting. Fastest but lowest quality.
-
-## Search Pipeline
-
-```
-User query
-  → Query Rewrite (LLM expands ambiguous queries)
-  → HyDE (LLM generates hypothetical answer, embeds it)
-  → Multi-Query (3 paraphrases, each embedded + searched)
-  → Dense search (qwen3-embedding:0.6b, semantic) + Sparse search (BM25, lexical)
-  → RRF fusion (k=60, merges all rankings)
-  → Cross-encoder / causal-LM rerank (Qwen/Qwen3-Reranker-0.6B, fallback bge-reranker-base)
-  → Top-k results
-```
-
-Each stage fails gracefully — a HyDE failure doesn't block multi-query, a rerank failure returns RRF results as-is.
-
-## Testing
+All ports bind to `127.0.0.1` only. GPU support via NVIDIA runtime on Ollama and Docling.
 
 ```bash
-make test                # 310 tests (257 unit + 53 integration)
-make e2e                 # 9/9 end-to-end checks
-uv run python scripts/verify_features.py  # 55-check feature verification
-pytest tests/ -v         # verbose output
-pytest tests/ --cov=rag  # coverage report
+docker compose up -d          # start all services
+docker compose ps             # verify all healthy
+docker compose logs -f ollama # tail logs
+docker compose down           # stop everything
+docker compose down -v        # stop + remove persisted data
 ```
 
-## License
+## Development
 
-MIT
+```bash
+# Install deps
+uv sync --extra dev --extra test --extra local
+
+# Run tests
+make test       # unit tests only (no Docker needed)
+make test-all   # unit + integration tests (needs Docker)
+make e2e        # end-to-end verification
+
+# Code quality
+make lint       # ruff check
+make fmt        # ruff format + fix
+make typecheck  # mypy
+```
+
+Requirements: Python >= 3.12, Docker.
