@@ -1,5 +1,5 @@
 # ────────────────────────────────────────────────────────────────────────────────
-# Memex — Personal RAG backend services (3 containers)
+# Memex — Personal RAG backend services (4 containers)
 #
 # The MCP server runs on the host (uv run memex), not in Docker.
 # All services bind to 127.0.0.1 — only accessible from the host machine.
@@ -199,8 +199,62 @@ services:
   #   restart: unless-stopped
   #   security_opt:
   #     - no-new-privileges:true
+  # ══════════════════════════════════════════════════════════════════════════════
+  # ML Services — Sparse BM25 + reranker (production: Docker, dev: pip)
+  # ══════════════════════════════════════════════════════════════════════════════
+  ml-services:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: memex-ml
+    init: true
+    ports:
+      - "127.0.0.1:${ML_SERVICES_PORT:-5002}:5002"
+    tmpfs:
+      - /tmp:exec,size=64M
+    environment:
+      SPARSE_MODEL: "${SPARSE_MODEL:-Qdrant/bm25}"
+      RERANK_MODEL: "${RERANK_MODEL:-Qwen/Qwen3-Reranker-0.6B}"
+      RERANK_MODEL_FALLBACK: "${RERANK_MODEL_FALLBACK:-BAAI/bge-reranker-base}"
+      RERANK_TYPE: "${RERANK_TYPE:-auto}"
+      CC: gcc
+      CXX: g++
+      NVIDIA_VISIBLE_DEVICES: all
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:5002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 4G
+        reservations:
+          cpus: "0.5"
+          memory: 1G
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - "com.memex.service=ml-services"
+      - "com.memex.description=Sparse BM25 embeddings + causal-LM reranker"
 
-# ══════════════════════════════════════════════════════════════════════════════════
+
 # Networks
 # ══════════════════════════════════════════════════════════════════════════════════
 networks:

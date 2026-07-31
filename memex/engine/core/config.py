@@ -70,12 +70,14 @@ def _cfg_bool(path: str, default: bool) -> bool:
 QDRANT_PORT: int = _cfg_int("vectorstore.port", 6333)
 OLLAMA_PORT: int = _cfg_int("embedding.port", 11434)
 DOCLING_PORT: int = _cfg_int("converter.port", 5001)
+ML_SERVICES_PORT: int = _cfg_int("sparse.port", 5002)
 REDIS_PORT: int = _cfg_int("caching.port", 6379)
 MCP_PORT: int = _cfg_int("mcp.port", 8080)
 
 # ── Service URLs ──────────────────────────────────────────────────────────────
 DOCLING_URL: str = _cfg_str("converter.docling_url", f"http://localhost:{DOCLING_PORT}/v1/convert/source")
 OLLAMA_EMBED_URL: str = _cfg_str("embedding.base_url", f"http://localhost:{OLLAMA_PORT}/api/embed")
+ML_SERVICES_URL: str = _cfg_str("sparse.url", f"http://localhost:{ML_SERVICES_PORT}")
 QDRANT_URL: str = _cfg_str("vectorstore.url", f"http://localhost:{QDRANT_PORT}")
 REDIS_URL: str = _cfg_str("caching.redis_url", f"redis://localhost:{REDIS_PORT}/0")
 
@@ -98,8 +100,8 @@ RERANK_MODEL_FALLBACK: str = _cfg_str("reranker.fallback_model", "BAAI/bge-reran
 SPARSE_MODEL: str = _cfg_str("sparse.model", "Qdrant/bm25")
 CHAT_MODEL: str = _cfg_str("llm.model", "qwen2.5:1.5b")
 
-SPARSE_PROVIDER: str = _cfg_str("sparse.provider", "local")
-RERANK_PROVIDER: str = _cfg_str("reranker.provider", "local")
+SPARSE_PROVIDER: str = _cfg_str("sparse.provider", "docker")
+RERANK_PROVIDER: str = _cfg_str("reranker.provider", "docker")
 RERANK_TYPE: str = _cfg_str("reranker.type", "auto")
 DENSE_DIM: int = _cfg_int("embedding.dimensions", 1024)
 

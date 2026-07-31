@@ -118,4 +118,5 @@ def create_service_checker() -> ServiceChecker:
     checker.register_service("qdrant", config.QDRANT_URL)
     checker.register_service("ollama", config.OLLAMA_EMBED_URL)
     checker.register_service("docling", config.DOCLING_URL)
+    checker.register_service("ml-services", config.ML_SERVICES_URL)
     return checker

@@ -12,17 +12,17 @@ embedding:
   fallback_model: bge-m3
   dimensions: 1024
   batch_size: 64
-  base_url: "http://localhost:11434/api/embed"
+  base_url: "http://localhost:11434"
   api_key: ${OPENAI_API_KEY}
 
 sparse:
-  provider: http
+  provider: local
   model: Qdrant/bm25
 
 llm:
   provider: ollama
   model: qwen2.5:1.5b
-  base_url: "http://localhost:11434/api/embed"
+  base_url: "http://localhost:11434"
   api_key: ${OPENAI_API_KEY}
 
 converter:
@@ -46,9 +46,13 @@ chunking:
   merge_peers: true
   tokenizer: Qwen/Qwen3-Embedding-0.6B
 
+sparse:
+  provider: docker          # docker (ml-services container) | local (pip fastembed)
+  model: Qdrant/bm25
+
 reranker:
   enabled: true
-  provider: http
+  provider: docker           # docker (ml-services container) | local (pip sentence-transformers)
   model: Qwen/Qwen3-Reranker-0.6B
   fallback_model: BAAI/bge-reranker-base
   type: auto

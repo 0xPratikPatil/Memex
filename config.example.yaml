@@ -46,9 +46,13 @@ chunking:
   merge_peers: true
   tokenizer: Qwen/Qwen3-Embedding-0.6B
 
+sparse:
+  provider: docker          # docker (ml-services container) | local (pip fastembed)
+  model: Qdrant/bm25
+
 reranker:
   enabled: true
-  provider: local
+  provider: docker           # docker (ml-services container) | local (pip sentence-transformers)
   model: Qwen/Qwen3-Reranker-0.6B
   fallback_model: BAAI/bge-reranker-base
   type: auto
