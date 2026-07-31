@@ -438,7 +438,7 @@ class RAGEngine:
 
     def _sparse_embed(self, texts: list[str]) -> list[dict[str, float]]:
         """Get sparse embeddings via configured provider (http or local)."""
-        if config.SPARSE_PROVIDER == "http":
+        if config.SPARSE_PROVIDER in ("http", "docker") and hasattr(config, "ML_SERVICES_URL"):
             try:
                 client = self._get_ml_services()
                 resp = client.post("/sparse/embed", json={"texts": texts})
@@ -456,7 +456,7 @@ class RAGEngine:
 
     def _rerank(self, query: str, documents: list[str], top_k: int = 10) -> tuple[list[float], list[int]]:
         """Rerank documents via configured provider (http, local, or ollama)."""
-        if config.RERANK_PROVIDER == "http":
+        if config.RERANK_PROVIDER in ("http", "docker") and hasattr(config, "ML_SERVICES_URL"):
             try:
                 client = self._get_ml_services()
                 resp = client.post(
