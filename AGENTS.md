@@ -18,7 +18,6 @@ OpenCode should proactively use the following features when working with this co
 
 ### Ingestion
 - **Docling HybridChunker** (CHUNK_STRATEGY=hybrid): Tokenizer-aware, structure-preserving chunking on DoclingDocument. Repeats table headers across boundaries.
-- **MarkItDown Converter**: Lightweight alternative converter — user-selectable via `converter.engine` config (docling | markitdown). No GPU, faster for simple docs.
 - **Multi-format Embedding**: Table chunks → HTML, code chunks → fenced markdown, images → [Image: caption].
 - **Docling Enrichment**: Picture classification (enabled), code/formula/chart extraction (opt-in, needs serve-side models).
 - **Metadata Extraction** (ENABLE_METADATA_EXTRACTION=true): Entities, topics, document classification, language detection, dates, keywords.
@@ -67,7 +66,6 @@ All configuration lives in `config.yaml`. Copy `config.example.yaml` to `config.
 | `contextual_retrieval.enabled` | true | Context prefixes on chunks |
 | `caching.enabled` | true | Redis caching layer |
 | `metadata.enabled` | true | All metadata extractors |
-| `converter.engine` | docling | docling / markitdown |
 | `search.mode` | hybrid | similarity / hybrid / mmr |
 | `answer.enabled` | true | Citation-based answer generation |
 | `docling_picture_classify` | true | Image classification in Docling |
@@ -92,12 +90,10 @@ make fmt                      # Auto-format
 MCP Server (local, uv run memex)
   └── HTTP → Docker Services
        ├── Docling Serve :5001 (GPU doc conversion + HybridChunker)
-       ├── MarkItDown :5003 (lightweight doc conversion)
        ├── Ollama :11434 (embeddings + chat LLM)
        ├── Qdrant :6333 (vector DB)
        ├── ML Services :5002 (sparse BM25 + reranker)
        ├── Redis :6379 (caching)
-       └── S3 Service :5004 (S3 source connector)
 ```
 
 ## CLI Commands
@@ -153,8 +149,6 @@ Ollama runs **exclusively in Docker**. Never install Ollama on the host.
 | Change | Action |
 |--------|--------|
 | `rag/ml_server.py` | `docker compose build ml-services && docker compose up -d` |
-| `docker/markitdown/server.py` | `docker compose build markitdown && docker compose up -d` |
-| `docker/s3-service/server.py` | `docker compose build s3-service && docker compose up -d` |
 | Python packages in Dockerfile | `docker compose build --no-cache ml-services && docker compose up -d` |
 | System deps (apt-get) | `docker compose build --no-cache ml-services && docker compose up -d` |
 | Compose config, env vars, or labels | `docker compose up -d` (restart) |

@@ -19,10 +19,10 @@ Production-ready MCP server for Retrieval-Augmented Generation with Docling docu
 │                           │ HTTP                                 │
 │                           ▼                                      │
 │  ┌────────────────────────────────────────────────────────────┐ │
-│  │              Docker Services (7 containers)                │ │
+│  │              Docker Services (5 containers)                  │ │
 │  │                                                             │ │
 │  │  Qdrant :6333   Ollama :11434   Docling :5001   Redis :6379 │ │
-│  │  ML Services :5002   MarkItDown :5003   S3 Service :5004   │ │
+│  │  ML Services :5002                                          │ │
 │  └────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -30,7 +30,6 @@ Production-ready MCP server for Retrieval-Augmented Generation with Docling docu
 ## Features
 
 - **Docling v1 API**: Document conversion (PDF, DOCX, PPTX, XLSX, HTML, images, CSV, Markdown) via Docling Serve
-- **MarkItDown Converter**: Lightweight alternative converter — user-selectable via config
 - **Hybrid Chunking**: Docling HybridChunker — tokenizer-aware, structure-preserving (headings, tables, captions, lists)
 - **Multi-format Embedding**: Table chunks → HTML, code chunks → fenced, text → Markdown
 - **Docling Enrichment**: Picture classification, image export, code/formula/chart extraction (opt-in)

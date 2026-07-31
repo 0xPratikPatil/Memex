@@ -86,29 +86,29 @@ def mmr_select(
         log.debug("numpy not available, using pure-Python MMR fallback")
 
     # Pure-Python fallback
-    query_sims = _compute_query_sims(query_embedding, candidate_embeddings, candidate_scores)
-    sim_matrix = _pairwise_sim_matrix(candidate_embeddings)
+    _query_sims = _compute_query_sims(query_embedding, candidate_embeddings, candidate_scores)
+    _sim_matrix = _pairwise_sim_matrix(candidate_embeddings)
 
-    selected: list[int] = []
-    remaining = set(range(n))
+    _selected: list[int] = []
+    _remaining = set(range(n))
 
     for _ in range(top_k):
         best_idx = -1
         best_mmr = -math.inf
 
-        for i in remaining:
-            max_sim = max((sim_matrix[i][j] for j in selected), default=0.0)
-            mmr_val = lambda_mult * query_sims[i] - (1.0 - lambda_mult) * max_sim
+        for i in _remaining:
+            max_sim = max((_sim_matrix[i][j] for j in _selected), default=0.0)
+            mmr_val = lambda_mult * _query_sims[i] - (1.0 - lambda_mult) * max_sim
             if mmr_val > best_mmr:
                 best_mmr = mmr_val
                 best_idx = i
 
         if best_idx == -1:
             break
-        selected.append(best_idx)
-        remaining.discard(best_idx)
+        _selected.append(best_idx)
+        _remaining.discard(best_idx)
 
-    return selected
+    return _selected
 
 
 def _compute_query_sims(

@@ -7,14 +7,12 @@ Reference for the Memex Docker architecture, guided by the `docker-patterns`, `d
 ```
 Host machine
   ├── MCP Server (uv run memex)          # Python, local process
-  └── Docker Compose (7 services)        # Backend infrastructure
+  └── Docker Compose (5 services)        # Backend infrastructure
        ├── qdrant       :6333            # Vector DB
        ├── ollama       :11434           # LLM inference (never on host)
        ├── docling      :5001            # Document conversion (GPU)
        ├── ml-services  :5002            # Sparse BM25 + reranker (GPU)
-       ├── redis        :6379            # Search + embedding cache
-       ├── markitdown   :5003            # Lightweight doc conversion (CPU)
-       └── s3-service   :5004            # S3 source connector (CPU)
+       └── redis        :6379            # Search + embedding cache
 ```
 
 All services bind to `127.0.0.1` — no external exposure. The MCP server talks to them over localhost.
@@ -74,8 +72,6 @@ Located at `./docker-compose.yml`.
 | docling | `ghcr.io/docling-project/docling-serve-cu130:v1.27.0` | Yes | HTTP /health | Document parsing + hybrid chunking |
 | ml-services | Built from `./Dockerfile` | Yes | HTTP /health | BM25 sparse + causal-LM reranker |
 | redis | `redis:7.4.10-alpine` | No | redis-cli PING | `maxmemory: 256mb`, `allkeys-lru` |
-| markitdown | Built from `./docker/markitdown` | No | HTTP /health | Lightweight doc → markdown (CPU only) |
-| s3-service | Built from `./docker/s3-service` | No | HTTP /health | S3 listing + download with boto3 |
 
 ### Ollama in Docker (never on host)
 

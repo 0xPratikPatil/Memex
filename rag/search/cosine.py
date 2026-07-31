@@ -32,7 +32,7 @@ def cosine_similarity_matrix(vectors: list[list[float]]) -> list[list[float]]:
         norms = np.where(norms == 0.0, 1.0, norms)
         normalized = mat / norms
         sim = normalized @ normalized.T
-        return sim.tolist()
+        return sim.tolist()  # type: ignore[no-any-return]
     except ImportError:
         pass
 

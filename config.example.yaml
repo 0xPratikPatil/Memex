@@ -37,8 +37,6 @@ converter:
   docling_ocr: true
   docling_image_export: embedded
   docling_pdf_backend: ""
-  markitdown_url: "http://localhost:5003"
-  markitdown_extensions:
     - .pdf
     - .docx
     - .xlsx
