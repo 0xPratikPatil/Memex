@@ -991,7 +991,7 @@ Error Handling:
   - Returns partial results if some sources fail.""",
     annotations=ToolAnnotations(
         readOnlyHint=False,
-        destructiveHint=False,
+        destructiveHint=True,
         idempotentHint=True,
         openWorldHint=True,
     ),
