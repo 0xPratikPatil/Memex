@@ -2,18 +2,19 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # Memex Bootstrap — one command to ready everything.
 #
-#   ./setup.sh                              # use defaults
-#   EMBED_MODEL=llama3.2:1b ./setup.sh      # custom embedding model
-#   CHAT_MODEL=qwen2.5:1.5b ./setup.sh      # custom chat model
+#   ./setup.sh                              # use config.yaml defaults
+#   EMBED_MODEL=llama3.2:1b ./setup.sh      # override embedding model
+#   CHAT_MODEL=qwen2.5:1.5b ./setup.sh      # override chat model
 #
 # What it does:
-#   1. Creates .env from .env.example if missing
-#   2. Installs Python deps (uv sync) into project .venv
-#   3. Checks Docker is running
-#   4. Builds and starts all backend services
-#   5. Waits for health checks
-#   6. Pulls Ollama models (skips if already present)
-#   7. Verifies models + features respond
+#   1. Creates .env from .env.example if missing (secrets only)
+#   2. Creates config.yaml from config.example.yaml if missing
+#   3. Installs Python deps (uv sync) into project .venv
+#   4. Checks Docker is running
+#   5. Builds and starts all backend services
+#   6. Waits for health checks
+#   7. Pulls Ollama models (reads from config.yaml, env var overrides work)
+#   8. Verifies models + features respond
 # ══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -30,11 +31,41 @@ fi
 # Unset vars that confuse uv (uv chokes on non-integer env vars like HTTP_TIMEOUT=60.0)
 unset HTTP_TIMEOUT DOCLING_TIMEOUT QDRANT_TIMEOUT 2>/dev/null || true
 
-# ── Models (env var > .env > default) ───────────────────────────────────────
-EMBED="${EMBED_MODEL:-qwen3-embedding:0.6b}"
-CHAT="${CHAT_MODEL:-qwen2.5:1.5b}"
-RERANK="${RERANK_MODEL:-Qwen/Qwen3-Reranker-0.6B}"
-SPARSE="${SPARSE_MODEL:-Qdrant/bm25}"
+# ── Models (env var > config.yaml > default) ────────────────────────────────
+# config.yaml is single source of truth; env vars allow ad-hoc overrides.
+_read_config_model() {
+    local yaml_path="$1" env_var="$2" default="$3"
+    if [ -n "${!env_var:-}" ]; then
+        echo "${!env_var}"
+        return
+    fi
+    if [ -f config.yaml ] && command -v python3 &>/dev/null; then
+        local val
+        val=$(python3 -c "
+import yaml
+with open('config.yaml') as f:
+    cfg = yaml.safe_load(f)
+keys = '$yaml_path'.split('.')
+node = cfg
+try:
+    for k in keys:
+        node = node[k]
+    print(node)
+except (KeyError, TypeError):
+    print('')
+" 2>/dev/null)
+        if [ -n "$val" ] && [ "$val" != "None" ] && [ "$val" != "null" ]; then
+            echo "$val"
+            return
+        fi
+    fi
+    echo "$default"
+}
+
+EMBED=$(_read_config_model "embedding.model" "EMBED_MODEL" "qwen3-embedding:0.6b")
+CHAT=$(_read_config_model "llm.model" "CHAT_MODEL" "qwen2.5:1.5b")
+RERANK=$(_read_config_model "reranker.model" "RERANK_MODEL" "Qwen/Qwen3-Reranker-0.6B")
+SPARSE=$(_read_config_model "sparse.model" "SPARSE_MODEL" "Qdrant/bm25")
 
 BOOT_SERVICES=(qdrant ollama docling ml-services redis)
 
@@ -55,10 +86,16 @@ echo "  rerank  ${RERANK}"
 echo "  sparse  ${SPARSE}"
 echo ""
 
-# ── 0. Create .env if missing ────────────────────────────────────────────────
+# ── 0. Create config files if missing ──────────────────────────────────────────
 if [ ! -f .env ]; then
     cp .env.example .env
     info "created .env from .env.example"
+fi
+if [ ! -f config.yaml ]; then
+    cp config.example.yaml config.yaml 2>/dev/null || true
+    if [ -f config.yaml ]; then
+        info "created config.yaml from config.example.yaml"
+    fi
 fi
 
 # ── 1. Python environment ──────────────────────────────────────────────────

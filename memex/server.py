@@ -81,7 +81,7 @@ def _get_engine():
     return _engine
 
 
-def _prewarm_models():
+def _prewarm_models() -> None:
     """Load Ollama embedding and chat models in background thread.
 
     Sends a trivial request to force Ollama to load models from disk
@@ -90,7 +90,7 @@ def _prewarm_models():
     """
     import httpx
 
-    def _load():
+    def _load() -> None:
         try:
             engine = _get_engine()
 
@@ -105,7 +105,7 @@ def _prewarm_models():
             # Prewarm Ollama embedding + chat models in parallel
             import concurrent.futures
 
-            def _prewarm_embedding():
+            def _prewarm_embedding() -> None:
                 client = httpx.Client(timeout=120)
                 try:
                     client.post(
@@ -116,7 +116,7 @@ def _prewarm_models():
                 finally:
                     client.close()
 
-            def _prewarm_chat():
+            def _prewarm_chat() -> None:
                 client = httpx.Client(timeout=120)
                 try:
                     chat_url = config.OLLAMA_EMBED_URL.replace("/api/embed", "/api/chat")
@@ -147,7 +147,7 @@ def _prewarm_models():
     threading.Thread(target=_load, daemon=True, name="model-prewarm").start()
 
 
-def _shutdown():
+def _shutdown() -> None:
     """Best-effort cleanup on process exit."""
     global _engine
     with contextlib.suppress(Exception):
@@ -575,9 +575,9 @@ def _answer_enabled(override: bool | None) -> bool:
 
 
 async def _generate_and_return_answer(
-    engine,
+    engine: Any,
     query: str,
-    results: list[dict],
+    results: list[dict[str, Any]],
     search_mode: str,
     response_format: ResponseFormat,
 ) -> str | AnswerOutput:
@@ -597,7 +597,7 @@ async def _generate_and_return_answer(
             },
         )
         resp.raise_for_status()
-        return resp.json()["message"]["content"]
+        return str(resp.json()["message"]["content"])
 
     answer = await generate_answer(
         query=query,
@@ -1048,7 +1048,7 @@ async def rag_get_filter_context(input: FilterContextInput) -> str:
 
         engine = _get_engine()
         ctx = await get_filter_context(
-            config_module=config,
+            config=config,
             query=input.query,
             qdrant_client=engine._get_qdrant(),
             collection=config.COLLECTION_NAME,
@@ -1101,7 +1101,7 @@ async def rag_extract_filters(input: ExtractFiltersInput) -> str:
 
         engine = _get_engine()
         ctx = await get_filter_context(
-            config_module=config,
+            config=config,
             qdrant_client=engine._get_qdrant(),
             collection=config.COLLECTION_NAME,
         )

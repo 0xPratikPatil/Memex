@@ -29,7 +29,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
-      - run: uv sync --group dev
+      - run: uv sync --extra dev
 
       - name: Ruff format check
         run: uv run ruff format --check .
@@ -52,7 +52,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
-      - run: uv sync --group dev
+      - run: uv sync --extra dev
 
       - name: Mypy
         run: uv run mypy .
@@ -72,7 +72,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
-      - run: uv sync --group dev --group test
+      - run: uv sync --extra dev --extra test
 
       - name: Run tests with coverage
         run: uv run pytest --cov --cov-report=xml --cov-report=term-missing

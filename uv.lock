@@ -1611,7 +1611,6 @@ source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "mcp" },
-    { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "qdrant-client" },
     { name = "redis" },
@@ -1661,7 +1660,6 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.25,<1" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6,<7" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=6,<7" },
-    { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "pyyaml", specifier = ">=6,<7" },
     { name = "qdrant-client", specifier = ">=1.18,<2" },
     { name = "ragas", marker = "extra == 'eval'", specifier = ">=0.2,<1" },

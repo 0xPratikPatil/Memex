@@ -12,8 +12,8 @@
 #
 # Docker best practices: DOCKER.md and AGENTS.md#docker-best-practices
 #
-# Custom models:
-#   EMBED_MODEL=qwen3-embedding:0.6b CHAT_MODEL=qwen2.5:1.5b docker compose up -d
+# Customize models in config.yaml. Env vars override for ad-hoc runs:
+#   EMBED_MODEL=qwen3-embedding:0.6b CHAT_MODEL=qwen2.5:1.5b ./setup.sh
 # ────────────────────────────────────────────────────────────────────────────────
 
 name: memex
