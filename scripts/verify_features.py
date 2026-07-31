@@ -81,7 +81,7 @@ if sample:
           f"len={len(payload.get('content', ''))}")
 
     # Check chunker status from engine
-    from rag.pipeline import RAGEngine
+    from memex.engine.core.pipeline import RAGEngine
     _engine = RAGEngine()
     chunker = _engine.get_chunker_status()
     check("Chunker strategy = hybrid", chunker.get("strategy") == "hybrid",
@@ -204,7 +204,7 @@ check("Cache namespace 'search' configured", True,
       f"{search_count} keys (populated after search)")
 
 # Check cache metrics
-from rag.services.cache import get_cache_stats  # noqa: E402
+from memex.engine.utils.cache import get_cache_stats  # noqa: E402
 
 cache_stats = get_cache_stats()
 metrics = cache_stats.get("metrics", {})
@@ -216,7 +216,7 @@ check("Cache metrics available", bool(metrics),
 
 print("\n=== 7. Query Expansion (HyDE + Multi-Query + Rewrite) ===")
 
-from rag.services.query_expansion import QueryExpander  # noqa: E402
+from memex.engine.retrieval.expansion import QueryExpander  # noqa: E402
 
 ollama_url = f"http://localhost:{config.OLLAMA_PORT}"
 import httpx  # noqa: E402
@@ -245,7 +245,7 @@ from rag import config as _cfg  # noqa: E402
 _cfg.EVAL_ENABLED = True
 _cfg.EVAL_LOG_TIMING = True
 
-from rag.pipeline import RAGEngine  # noqa: E402
+from memex.engine.core.pipeline import RAGEngine  # noqa: E402
 
 engine = RAGEngine()
 
@@ -278,8 +278,8 @@ except Exception as e:
 
 print("\n=== 9. End-to-End Search Pipeline ===")
 
-from rag.pipeline import get_eval_timings, reset_eval_timings  # noqa: E402
-from rag.services.cache import invalidate_namespace  # noqa: E402
+from memex.engine.core.pipeline import get_eval_timings, reset_eval_timings  # noqa: E402
+from memex.engine.utils.cache import invalidate_namespace  # noqa: E402
 
 # Clear search cache so we get a fresh search with full timing
 invalidate_namespace("search")

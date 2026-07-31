@@ -20,8 +20,8 @@ from pathlib import Path
 def cmd_run(args: argparse.Namespace) -> None:
     """Run evaluation against the RAG pipeline."""
     from rag import config as eval_config
-    from rag.pipeline import RAGEngine
-    from rag.services.evaluation import EvalRunner
+    from memex.engine.core.pipeline import RAGEngine
+    from memex.engine.evaluation import EvalRunner
 
     engine = RAGEngine()
     try:
@@ -54,8 +54,8 @@ def cmd_run(args: argparse.Namespace) -> None:
 
 def cmd_single(args: argparse.Namespace) -> None:
     """Evaluate a single query."""
-    from rag.pipeline import RAGEngine
-    from rag.services.evaluation import EvalRunner
+    from memex.engine.core.pipeline import RAGEngine
+    from memex.engine.evaluation import EvalRunner
 
     engine = RAGEngine()
     try:
@@ -82,7 +82,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
     with open(args.report_b) as f:
         report_b = json.load(f)
 
-    from rag.services.evaluation import EvalRunner
+    from memex.engine.evaluation import EvalRunner
 
     label_a = args.label_a or Path(args.report_a).stem
     label_b = args.label_b or Path(args.report_b).stem
@@ -97,7 +97,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
 
 def cmd_add_query(args: argparse.Namespace) -> None:
     """Interactively add queries to the evaluation dataset."""
-    from rag.services.evaluation import EvalDataset
+    from memex.engine.evaluation import EvalDataset
 
     dataset = EvalDataset(args.dataset)
     dataset.load()
@@ -132,7 +132,7 @@ def cmd_add_query(args: argparse.Namespace) -> None:
 
 def cmd_stats(args: argparse.Namespace) -> None:
     """Show statistics about the evaluation dataset."""
-    from rag.services.evaluation import EvalDataset
+    from memex.engine.evaluation import EvalDataset
 
     dataset = EvalDataset(args.dataset)
     dataset.load()

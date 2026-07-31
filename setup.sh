@@ -169,7 +169,7 @@ curl -sf -X POST http://localhost:11434/api/chat \
 echo "[7/8] Features"
 # Hybrid chunker availability
 if uv run python -c " 
-from rag.chunking import is_hybrid_chunker_available
+from memex.engine.ingestion.splitter import is_hybrid_chunker_available
 ok = is_hybrid_chunker_available()
 assert ok, 'HybridChunker not available — check docling install'
 " 2>&1; then
