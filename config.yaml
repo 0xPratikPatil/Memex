@@ -9,7 +9,7 @@ vectorstore:
 embedding:
   provider: ollama
   model: qwen3-embedding:0.6b
-  fallback_model: qwen3-embedding:0.6b
+  fallback_model: bge-m3
   dimensions: 1024
   batch_size: 64
   base_url: "http://localhost:11434/api/embed"
