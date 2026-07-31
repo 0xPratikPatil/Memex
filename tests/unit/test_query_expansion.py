@@ -108,7 +108,7 @@ class TestQueryRewrite:
             ENABLE_MULTI_QUERY=False,
         ):
             expander.expand("my specific query")
-            call_args = expander._ollama.post.call_args
+            call_args = expander._llm.chat.call_args
             assert call_args is not None
             prompt_content = call_args[1]["json"]["messages"][0]["content"]
             assert "my specific query" in prompt_content
@@ -158,7 +158,7 @@ class TestMultiQuery:
                 resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
             return resp
 
-        expander._ollama.post = MagicMock(side_effect=_multi_line_post)
+        expander._llm.chat = MagicMock(side_effect=_multi_line_post)
 
         with patch.object(config, "ENABLE_MULTI_QUERY", True), patch.object(config, "MULTI_QUERY_COUNT", 2):
             result = expander.expand("test")
@@ -181,7 +181,7 @@ class TestMultiQuery:
                 resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
             return resp
 
-        expander._ollama.post = MagicMock(side_effect=_post_with_blanks)
+        expander._llm.chat = MagicMock(side_effect=_post_with_blanks)
 
         with patch.object(config, "ENABLE_MULTI_QUERY", True):
             result = expander.expand("test")
@@ -208,7 +208,7 @@ class TestCombinedExpansion:
                 resp.json.return_value = {"embeddings": [[0.5] * config.DENSE_DIM]}
             return resp
 
-        expander._ollama.post = MagicMock(side_effect=_post)
+        expander._llm.chat = MagicMock(side_effect=_post)
 
         with patch.multiple(
             config,
@@ -230,7 +230,7 @@ class TestCombinedExpansion:
 
 class TestErrorHandling:
     def test_rewrite_failure_returns_none(self, expander: QueryExpander) -> None:
-        expander._ollama.post = MagicMock(side_effect=httpx.TransportError("connection refused"))
+        expander._llm.chat = MagicMock(side_effect=httpx.TransportError("connection refused"))
         with patch.object(config, "ENABLE_QUERY_REWRITE", True):
             result = expander.expand("test")
             assert result.rewritten is None
@@ -249,13 +249,13 @@ class TestErrorHandling:
             resp.json.return_value = {"embedding": [0.1] * config.DENSE_DIM, "message": {"content": "test"}}
             return resp
 
-        expander._ollama.post = MagicMock(side_effect=_post)
+        expander._llm.chat = MagicMock(side_effect=_post)
         with patch.object(config, "ENABLE_HYDE", True):
             result = expander.expand("test")
             assert result.hyde_vector is None
 
     def test_multi_query_failure_skips_paraphrases(self, expander: QueryExpander) -> None:
-        expander._ollama.post = MagicMock(side_effect=httpx.TransportError("timeout"))
+        expander._llm.chat = MagicMock(side_effect=httpx.TransportError("timeout"))
         with patch.object(config, "ENABLE_MULTI_QUERY", True):
             result = expander.expand("test")
             assert result.paraphrases is None

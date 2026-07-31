@@ -356,7 +356,7 @@ class TestFastEmbedEmbedder:
 class TestFactories:
     """Tests for get_llm and get_embedder factory functions."""
 
-    def test_get_llm_defaults_to_ollama(self) -> None:
+    def test_get_llm_defaults_to_llm(self) -> None:
         """get_llm with default config returns OllamaLLM."""
         from unittest.mock import MagicMock
 
@@ -430,7 +430,7 @@ class TestFactories:
         provider = get_llm(mock_cfg)
         assert isinstance(provider, GroqLLM)
 
-    def test_get_embedder_defaults_to_ollama(self) -> None:
+    def test_get_embedder_defaults_to_llm(self) -> None:
         """get_embedder with default config returns OllamaEmbedder."""
         from unittest.mock import MagicMock
 
@@ -467,7 +467,7 @@ class TestFactories:
         provider = get_embedder(mock_cfg)
         assert isinstance(provider, OpenAIEmbedder)
 
-    def test_unknown_provider_falls_back_to_ollama(self) -> None:
+    def test_unknown_provider_falls_back_to_llm(self) -> None:
         """Unknown provider names should fall back to Ollama."""
         from unittest.mock import MagicMock
 

@@ -243,16 +243,16 @@ class TestQueryExpansionFallback:
     def _make_expander(self):
         from memex.engine.retrieval.expansion import QueryExpander
 
-        mock_ollama = MagicMock()
-        expander = QueryExpander(mock_ollama)
-        return expander, mock_ollama
+        mock_llm = MagicMock()
+        expander = QueryExpander(mock_llm)
+        return expander, mock_llm
 
     @patch("memex.engine.retrieval.expansion.config.EMBED_MODEL", "primary")
     @patch("memex.engine.retrieval.expansion.config.EMBED_MODEL_FALLBACK", "fallback")
     def test_uses_primary_model(self) -> None:
         from memex.engine.ingestion.embedding import EmbeddingService
 
-        expander, _mock_ollama = self._make_expander()
+        expander, _mock_llm = self._make_expander()
 
         with patch.object(EmbeddingService, "embed", return_value=[[0.1]]):
             result = expander._embed("test")
@@ -264,7 +264,7 @@ class TestQueryExpansionFallback:
     def test_falls_back_on_failure(self) -> None:
         from memex.engine.ingestion.embedding import EmbeddingService
 
-        expander, _mock_ollama = self._make_expander()
+        expander, _mock_llm = self._make_expander()
 
         with patch.object(EmbeddingService, "embed", return_value=[[0.3]]):
             result = expander._embed("test")
@@ -276,7 +276,7 @@ class TestQueryExpansionFallback:
     def test_raises_when_fallback_also_fails(self) -> None:
         from memex.engine.ingestion.embedding import EmbeddingService
 
-        expander, _mock_ollama = self._make_expander()
+        expander, _mock_llm = self._make_expander()
 
         with (
             patch.object(EmbeddingService, "embed", side_effect=RuntimeError("all failed")),

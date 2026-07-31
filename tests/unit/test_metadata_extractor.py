@@ -454,10 +454,10 @@ class TestChatHelper:
         with pytest.raises(RuntimeError, match="Ollama client not available"):
             ext._chat("test prompt")
 
-    def test_chat_calls_ollama(self, extractor: MetadataExtractor) -> None:
+    def test_chat_calls_llm(self, extractor: MetadataExtractor) -> None:
         result = extractor._chat("test prompt")
         assert isinstance(result, str)
-        extractor._ollama.post.assert_called()
+        extractor._llm.chat.assert_called()
 
     def test_chat_handles_transport_error(self) -> None:
         client = MagicMock(spec=httpx.Client)

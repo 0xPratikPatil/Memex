@@ -64,7 +64,7 @@ class TestHeaderStrategy:
 class TestSummaryStrategy:
     def test_summary_generates_context(self, generator: ContextGenerator) -> None:
         with patch.multiple(config, CONTEXT_STRATEGY="summary"):
-            gen = ContextGenerator(generator._ollama)
+            gen = ContextGenerator(generator._llm)
             ctx = gen.generate_context(
                 chunk="Revenue increased 15%",
                 document_summary="Q3 2025 Financial Report for Acme Corp.",
@@ -75,7 +75,7 @@ class TestSummaryStrategy:
 
     def test_summary_without_summary_returns_empty(self, generator: ContextGenerator) -> None:
         with patch.multiple(config, CONTEXT_STRATEGY="summary"):
-            gen = ContextGenerator(generator._ollama)
+            gen = ContextGenerator(generator._llm)
             ctx = gen.generate_context(
                 chunk="Revenue increased 15%",
                 document_summary="",
@@ -89,7 +89,7 @@ class TestSummaryStrategy:
 class TestSurroundingStrategy:
     def test_surrounding_with_neighbors(self, generator: ContextGenerator) -> None:
         with patch.multiple(config, CONTEXT_STRATEGY="surrounding"):
-            gen = ContextGenerator(generator._ollama)
+            gen = ContextGenerator(generator._llm)
             ctx = gen.generate_context(
                 chunk="Revenue increased 15%",
                 prev_chunk="Operating expenses were $500M.",
@@ -100,7 +100,7 @@ class TestSurroundingStrategy:
 
     def test_surrounding_without_neighbors_returns_empty(self, generator: ContextGenerator) -> None:
         with patch.multiple(config, CONTEXT_STRATEGY="surrounding"):
-            gen = ContextGenerator(generator._ollama)
+            gen = ContextGenerator(generator._llm)
             ctx = gen.generate_context(
                 chunk="Revenue increased 15%",
                 prev_chunk="",
@@ -199,16 +199,16 @@ class TestStripContextPrefix:
 
 class TestErrorHandling:
     def test_chat_failure_propagates(self, mock_llm: MagicMock) -> None:
-        mock_ollama.post = MagicMock(side_effect=httpx.TransportError("connection refused"))
-        gen = ContextGenerator(mock_ollama)
+        mock_llm.post = MagicMock(side_effect=httpx.TransportError("connection refused"))
+        gen = ContextGenerator(mock_llm)
         with pytest.raises(httpx.TransportError):
             gen.generate_document_summary("test")
 
     def test_enrich_chunks_with_chat_failure(self, mock_llm: MagicMock) -> None:
         """When using summary/surrounding strategy and chat fails, context is empty."""
-        mock_ollama.post = MagicMock(side_effect=httpx.TransportError("timeout"))
+        mock_llm.post = MagicMock(side_effect=httpx.TransportError("timeout"))
         with patch.multiple(config, CONTEXT_STRATEGY="summary"):
-            gen = ContextGenerator(mock_ollama)
+            gen = ContextGenerator(mock_llm)
             chunks = [{"content": "Test.", "section_header": ""}]
             enriched = gen.enrich_chunks(chunks)
             # Should not raise, context prefix should be empty or contain error marker
