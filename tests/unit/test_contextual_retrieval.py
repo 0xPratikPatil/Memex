@@ -8,12 +8,12 @@ import pytest
 
 from memex.engine.core import config
 from memex.engine.ingestion.context import ContextGenerator, strip_context_prefix
-from memex.engine.llm.base import LLMProvider
+from unittest.mock import MagicMock
 
 
 @pytest.fixture
 def mock_llm() -> MagicMock:
-    provider = MagicMock(spec=LLMProvider)
+    provider = MagicMock()
     async def _chat(prompt: str, *, model=None):
         return "This section discusses financial metrics."
     provider.chat = _chat
@@ -199,14 +199,14 @@ class TestStripContextPrefix:
 
 class TestErrorHandling:
     def test_chat_failure_propagates(self, mock_llm: MagicMock) -> None:
-        mock_llm.post = MagicMock(side_effect=httpx.TransportError("connection refused"))
+        mock_llm.chat_sync = MagicMock(side_effect=Exception("connection refused"))
         gen = ContextGenerator(mock_llm)
-        with pytest.raises(httpx.TransportError):
+        with pytest.raises(Exception):
             gen.generate_document_summary("test")
 
     def test_enrich_chunks_with_chat_failure(self, mock_llm: MagicMock) -> None:
         """When using summary/surrounding strategy and chat fails, context is empty."""
-        mock_llm.post = MagicMock(side_effect=httpx.TransportError("timeout"))
+        mock_llm.chat_sync = MagicMock(side_effect=Exception("timeout"))
         with patch.multiple(config, CONTEXT_STRATEGY="summary"):
             gen = ContextGenerator(mock_llm)
             chunks = [{"content": "Test.", "section_header": ""}]

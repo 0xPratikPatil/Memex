@@ -12,22 +12,21 @@ from memex.engine.retrieval.expansion import ExpandedQuery, QueryExpander
 
 
 @pytest.fixture
-def mock_llm() -> LLMProvider:
-    provider = MagicMock(spec=LLMProvider)
-    provider.chat = MagicMock()
-    provider.chat.return_value = "mocked response from the LLM"
+def mock_llm() -> MagicMock:
+    provider = MagicMock()
+    provider.chat_sync = MagicMock(return_value="mocked response from the LLM")
     return provider
 
 
 @pytest.fixture
-def mock_embedder() -> EmbedProvider:
-    provider = MagicMock(spec=EmbedProvider)
+def mock_embedder() -> MagicMock:
+    provider = MagicMock()
     provider.embed = MagicMock(return_value=[[0.1] * config.DENSE_DIM])
     return provider
 
 
 @pytest.fixture
-def expander(mock_llm: LLMProvider, mock_embedder: EmbedProvider):
+def expander(mock_llm: MagicMock, mock_embedder: MagicMock):
     with patch.object(config, "ENABLE_CACHE", False):
         yield QueryExpander(mock_llm, mock_embedder)
 
@@ -108,7 +107,7 @@ class TestQueryRewrite:
             ENABLE_MULTI_QUERY=False,
         ):
             expander.expand("my specific query")
-            call_args = expander._llm.chat.call_args
+            call_args = expander._llm.chat_sync.call_args
             assert call_args is not None
             prompt_content = call_args[1]["json"]["messages"][0]["content"]
             assert "my specific query" in prompt_content
@@ -158,7 +157,7 @@ class TestMultiQuery:
                 resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
             return resp
 
-        expander._llm.chat = MagicMock(side_effect=_multi_line_post)
+        expander._llm.chat_sync = MagicMock(side_effect=_multi_line_post)
 
         with patch.object(config, "ENABLE_MULTI_QUERY", True), patch.object(config, "MULTI_QUERY_COUNT", 2):
             result = expander.expand("test")
@@ -181,7 +180,7 @@ class TestMultiQuery:
                 resp.json.return_value = {"embeddings": [[0.1] * config.DENSE_DIM]}
             return resp
 
-        expander._llm.chat = MagicMock(side_effect=_post_with_blanks)
+        expander._llm.chat_sync = MagicMock(side_effect=_post_with_blanks)
 
         with patch.object(config, "ENABLE_MULTI_QUERY", True):
             result = expander.expand("test")
@@ -208,7 +207,7 @@ class TestCombinedExpansion:
                 resp.json.return_value = {"embeddings": [[0.5] * config.DENSE_DIM]}
             return resp
 
-        expander._llm.chat = MagicMock(side_effect=_post)
+        expander._llm.chat_sync = MagicMock(side_effect=_post)
 
         with patch.multiple(
             config,
@@ -230,32 +229,21 @@ class TestCombinedExpansion:
 
 class TestErrorHandling:
     def test_rewrite_failure_returns_none(self, expander: QueryExpander) -> None:
-        expander._llm.chat = MagicMock(side_effect=httpx.TransportError("connection refused"))
+        expander._llm.chat_sync = MagicMock(side_effect=Exception("connection refused"))
         with patch.object(config, "ENABLE_QUERY_REWRITE", True):
             result = expander.expand("test")
             assert result.rewritten is None
             assert result.original == "test"
 
     def test_hyde_failure_skips_vector(self, expander: QueryExpander) -> None:
-        call_count = 0
-
-        def _post(url: str, payload: dict | None = None, **kwargs: object) -> MagicMock:
-            nonlocal call_count
-            call_count += 1
-            resp = MagicMock()
-            resp.raise_for_status = MagicMock()
-            if "/api/embeddings" in url and call_count > 1:
-                raise httpx.TransportError("embedding failed")
-            resp.json.return_value = {"embedding": [0.1] * config.DENSE_DIM, "message": {"content": "test"}}
-            return resp
-
-        expander._llm.chat = MagicMock(side_effect=_post)
+        expander._llm.chat_sync = MagicMock(return_value="hypothetical document text")
+        expander._embedder.embed = MagicMock(side_effect=Exception("embedding failed"))
         with patch.object(config, "ENABLE_HYDE", True):
             result = expander.expand("test")
             assert result.hyde_vector is None
 
     def test_multi_query_failure_skips_paraphrases(self, expander: QueryExpander) -> None:
-        expander._llm.chat = MagicMock(side_effect=httpx.TransportError("timeout"))
+        expander._llm.chat_sync = MagicMock(side_effect=Exception("timeout"))
         with patch.object(config, "ENABLE_MULTI_QUERY", True):
             result = expander.expand("test")
             assert result.paraphrases is None
