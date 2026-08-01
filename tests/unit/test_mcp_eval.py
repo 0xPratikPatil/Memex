@@ -53,13 +53,16 @@ class TestRagEval:
     async def test_full_eval_with_matching_results(self, tmp_path: Path) -> None:
         """Should compute perfect scores when all expected sources are retrieved."""
         golden_path = tmp_path / "golden.yaml"
-        _write_golden_yaml(golden_path, [
-            {
-                "query": "What is revenue?",
-                "expected_sources": ["report.pdf"],
-                "expected_keywords": ["revenue"],
-            },
-        ])
+        _write_golden_yaml(
+            golden_path,
+            [
+                {
+                    "query": "What is revenue?",
+                    "expected_sources": ["report.pdf"],
+                    "expected_keywords": ["revenue"],
+                },
+            ],
+        )
 
         mock_engine = MagicMock()
         mock_engine.hybrid_search.return_value = [
@@ -83,12 +86,15 @@ class TestRagEval:
     async def test_partial_recall(self, tmp_path: Path) -> None:
         """Should compute partial scores when only some expected sources found."""
         golden_path = tmp_path / "golden.yaml"
-        _write_golden_yaml(golden_path, [
-            {
-                "query": "Compare reports",
-                "expected_sources": ["report_a.pdf", "report_b.pdf"],
-            },
-        ])
+        _write_golden_yaml(
+            golden_path,
+            [
+                {
+                    "query": "Compare reports",
+                    "expected_sources": ["report_a.pdf", "report_b.pdf"],
+                },
+            ],
+        )
 
         mock_engine = MagicMock()
         mock_engine.hybrid_search.return_value = [
@@ -109,9 +115,12 @@ class TestRagEval:
     async def test_no_results(self, tmp_path: Path) -> None:
         """Should compute zero scores when nothing is retrieved."""
         golden_path = tmp_path / "golden.yaml"
-        _write_golden_yaml(golden_path, [
-            {"query": "missing", "expected_sources": ["gone.pdf"]},
-        ])
+        _write_golden_yaml(
+            golden_path,
+            [
+                {"query": "missing", "expected_sources": ["gone.pdf"]},
+            ],
+        )
 
         mock_engine = MagicMock()
         mock_engine.hybrid_search.return_value = []
@@ -146,13 +155,16 @@ class TestRagEval:
     async def test_json_golden_set(self, tmp_path: Path) -> None:
         """Should work with JSON format golden set."""
         golden_path = tmp_path / "golden.json"
-        _write_golden_json(golden_path, [
-            {
-                "query": "revenue",
-                "expected_sources": ["a.pdf"],
-                "expected_keywords": ["money"],
-            },
-        ])
+        _write_golden_json(
+            golden_path,
+            [
+                {
+                    "query": "revenue",
+                    "expected_sources": ["a.pdf"],
+                    "expected_keywords": ["money"],
+                },
+            ],
+        )
 
         mock_engine = MagicMock()
         mock_engine.hybrid_search.return_value = [
@@ -170,11 +182,14 @@ class TestRagEval:
     async def test_multiple_queries(self, tmp_path: Path) -> None:
         """Should aggregate metrics across multiple queries."""
         golden_path = tmp_path / "golden.yaml"
-        _write_golden_yaml(golden_path, [
-            {"query": "q1", "expected_sources": ["a.pdf"]},
-            {"query": "q2", "expected_sources": ["b.pdf"]},
-            {"query": "q3", "expected_sources": ["c.pdf"]},
-        ])
+        _write_golden_yaml(
+            golden_path,
+            [
+                {"query": "q1", "expected_sources": ["a.pdf"]},
+                {"query": "q2", "expected_sources": ["b.pdf"]},
+                {"query": "q3", "expected_sources": ["c.pdf"]},
+            ],
+        )
 
         mock_engine = MagicMock()
         # q1: perfect, q2: miss, q3: perfect
@@ -196,9 +211,12 @@ class TestRagEval:
     async def test_search_exception_handled_gracefully(self, tmp_path: Path) -> None:
         """Should handle search failures without crashing."""
         golden_path = tmp_path / "golden.yaml"
-        _write_golden_yaml(golden_path, [
-            {"query": "q1", "expected_sources": ["a.pdf"]},
-        ])
+        _write_golden_yaml(
+            golden_path,
+            [
+                {"query": "q1", "expected_sources": ["a.pdf"]},
+            ],
+        )
 
         mock_engine = MagicMock()
         mock_engine.hybrid_search.side_effect = RuntimeError("Qdrant unreachable")
@@ -215,13 +233,16 @@ class TestRagEval:
     async def test_keyword_coverage(self, tmp_path: Path) -> None:
         """Should compute keyword coverage from retrieved content."""
         golden_path = tmp_path / "golden.yaml"
-        _write_golden_yaml(golden_path, [
-            {
-                "query": "q1",
-                "expected_sources": ["a.pdf"],
-                "expected_keywords": ["revenue", "Q3", "growth"],
-            },
-        ])
+        _write_golden_yaml(
+            golden_path,
+            [
+                {
+                    "query": "q1",
+                    "expected_sources": ["a.pdf"],
+                    "expected_keywords": ["revenue", "Q3", "growth"],
+                },
+            ],
+        )
 
         mock_engine = MagicMock()
         mock_engine.hybrid_search.return_value = [
@@ -238,9 +259,12 @@ class TestRagEval:
     async def test_mrr_position(self, tmp_path: Path) -> None:
         """Should compute MRR based on first correct result position."""
         golden_path = tmp_path / "golden.yaml"
-        _write_golden_yaml(golden_path, [
-            {"query": "q1", "expected_sources": ["target.pdf"]},
-        ])
+        _write_golden_yaml(
+            golden_path,
+            [
+                {"query": "q1", "expected_sources": ["target.pdf"]},
+            ],
+        )
 
         mock_engine = MagicMock()
         mock_engine.hybrid_search.return_value = [
@@ -266,9 +290,12 @@ class TestRagEvalSweep:
     async def test_sweep_two_variants(self, tmp_path: Path) -> None:
         """Should compare two variants and produce a delta table."""
         golden_path = tmp_path / "golden.yaml"
-        _write_golden_yaml(golden_path, [
-            {"query": "q1", "expected_sources": ["a.pdf"]},
-        ])
+        _write_golden_yaml(
+            golden_path,
+            [
+                {"query": "q1", "expected_sources": ["a.pdf"]},
+            ],
+        )
 
         mock_engine = MagicMock()
         # variant 1: perfect retrieval; variant 2: miss
@@ -301,9 +328,12 @@ class TestRagEvalSweep:
     async def test_sweep_with_top_k_override(self, tmp_path: Path) -> None:
         """Should respect per-variant top_k override."""
         golden_path = tmp_path / "golden.yaml"
-        _write_golden_yaml(golden_path, [
-            {"query": "q1", "expected_sources": ["a.pdf"]},
-        ])
+        _write_golden_yaml(
+            golden_path,
+            [
+                {"query": "q1", "expected_sources": ["a.pdf"]},
+            ],
+        )
 
         mock_engine = MagicMock()
         mock_engine.hybrid_search.return_value = [_make_result("a.pdf")]
@@ -357,9 +387,12 @@ class TestRagEvalSweep:
     async def test_sweep_best_recall_highlighted(self, tmp_path: Path) -> None:
         """Should identify the best variant by recall."""
         golden_path = tmp_path / "golden.yaml"
-        _write_golden_yaml(golden_path, [
-            {"query": "q1", "expected_sources": ["a.pdf"]},
-        ])
+        _write_golden_yaml(
+            golden_path,
+            [
+                {"query": "q1", "expected_sources": ["a.pdf"]},
+            ],
+        )
 
         mock_engine = MagicMock()
         mock_engine.hybrid_search.side_effect = [
@@ -386,9 +419,12 @@ class TestRagEvalSweep:
     async def test_sweep_search_exception_handled(self, tmp_path: Path) -> None:
         """Should handle search exceptions gracefully in sweep."""
         golden_path = tmp_path / "golden.yaml"
-        _write_golden_yaml(golden_path, [
-            {"query": "q1", "expected_sources": ["a.pdf"]},
-        ])
+        _write_golden_yaml(
+            golden_path,
+            [
+                {"query": "q1", "expected_sources": ["a.pdf"]},
+            ],
+        )
 
         mock_engine = MagicMock()
         mock_engine.hybrid_search.side_effect = RuntimeError("Backend down")

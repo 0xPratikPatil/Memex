@@ -34,8 +34,8 @@ class TestEmbeddingFallback:
     @patch("memex.engine.core.pipeline.config.EMBED_MODEL_FALLBACK", "fallback-model")
     @patch("memex.engine.core.pipeline.config.ENABLE_CACHE", False)
     def test_uses_primary_model_by_default(self) -> None:
-        from memex.engine.ingestion.embedding import EmbeddingService
         from memex.engine.core.pipeline import RAGEngine
+        from memex.engine.ingestion.embedding import EmbeddingService
 
         engine = RAGEngine()
 
@@ -47,8 +47,8 @@ class TestEmbeddingFallback:
     @patch("memex.engine.core.pipeline.config.EMBED_MODEL_FALLBACK", "fallback-model")
     @patch("memex.engine.core.pipeline.config.ENABLE_CACHE", False)
     def test_falls_back_on_primary_failure(self) -> None:
-        from memex.engine.ingestion.embedding import EmbeddingService
         from memex.engine.core.pipeline import RAGEngine
+        from memex.engine.ingestion.embedding import EmbeddingService
 
         engine = RAGEngine()
         call_models = []
@@ -69,8 +69,8 @@ class TestEmbeddingFallback:
     @patch("memex.engine.core.pipeline.config.EMBED_MODEL_FALLBACK", "fallback-model")
     @patch("memex.engine.core.pipeline.config.ENABLE_CACHE", False)
     def test_raises_when_fallback_also_fails(self) -> None:
-        from memex.engine.ingestion.embedding import EmbeddingService
         from memex.engine.core.pipeline import RAGEngine
+        from memex.engine.ingestion.embedding import EmbeddingService
 
         engine = RAGEngine()
 
@@ -163,75 +163,62 @@ class TestEmbeddingServiceAPI:
     def _make_svc(self):
         from memex.engine.ingestion.embedding import EmbeddingService
 
-        mock_client = MagicMock()
-        svc = EmbeddingService(mock_client)
-        return svc, mock_client
+        mock_provider = MagicMock()
+        svc = EmbeddingService(mock_provider)
+        return svc, mock_provider
 
     @patch("memex.engine.ingestion.embedding.config.EMBED_MODEL", "test-model")
     @patch("memex.engine.ingestion.embedding.config.DENSE_DIM", 2)
     @patch("memex.engine.ingestion.embedding.config.ENABLE_CACHE", False)
     def test_embed_sends_batched_input(self) -> None:
-        svc, mock_client = self._make_svc()
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"embeddings": [[0.1, 0.2], [0.3, 0.4]]}
-        mock_resp.raise_for_status = MagicMock()
-        mock_client.post.return_value = mock_resp
+        svc, mock_provider = self._make_svc()
+        mock_provider.embed.return_value = [[0.1, 0.2], [0.3, 0.4]]
 
-        with patch.object(svc, "_embed_url", "http://localhost:11434/api/embed"):
-            result = svc.embed(["hello", "world"])
+        result = svc.embed(["hello", "world"])
 
         assert result == [[0.1, 0.2], [0.3, 0.4]]
-        call_json = mock_client.post.call_args[1]["json"]
-        assert call_json["input"] == ["hello", "world"]
+        mock_provider.embed.assert_called_once_with(["hello", "world"], model="test-model")
 
     @patch("memex.engine.ingestion.embedding.config.EMBED_MODEL", "test-model")
     @patch("memex.engine.ingestion.embedding.config.DENSE_DIM", 2)
     @patch("memex.engine.ingestion.embedding.config.ENABLE_CACHE", False)
     def test_embed_caches_results(self) -> None:
-        svc, mock_client = self._make_svc()
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"embeddings": [[0.1, 0.2]]}
-        mock_resp.raise_for_status = MagicMock()
-        mock_client.post.return_value = mock_resp
+        svc, mock_provider = self._make_svc()
+        mock_provider.embed.return_value = [[0.1, 0.2]]
 
-        with (
-            patch.object(svc, "_embed_url", "http://localhost:11434/api/embed"),
-            patch("memex.engine.utils.cache.cache_embedding") as mock_cache,
-        ):
+        with patch("memex.engine.utils.cache.cache_embedding") as mock_cache:
             svc.embed(["hello"])
 
         mock_cache.assert_called_once_with("hello", [0.1, 0.2], model="test-model")
 
     @patch("memex.engine.ingestion.embedding.config.EMBED_MODEL", "test-model")
+    @patch("memex.engine.ingestion.embedding.config.DENSE_DIM", 1)
     @patch("memex.engine.ingestion.embedding.config.ENABLE_CACHE", False)
     def test_embed_respects_batch_size(self) -> None:
         from memex.engine.core import config
 
-        svc, _mock_client = self._make_svc()
+        svc, mock_provider = self._make_svc()
 
         call_counts = []
 
-        def post_side_effect(texts, model):
+        def embed_side_effect(texts, *, model=None):
             call_counts.append(len(texts))
             return [[0.1] for _ in texts]
 
-        with (
-            patch.object(svc, "_embed_url", "http://localhost:11434/api/embed"),
-            patch.object(config, "EMBED_BATCH_SIZE", 2),
-            patch.object(svc, "_post_batch", side_effect=post_side_effect),
-        ):
+        mock_provider.embed.side_effect = embed_side_effect
+
+        with patch.object(config, "EMBED_BATCH_SIZE", 2):
             svc.embed(["a", "b", "c"])
 
         # Two sub-batches: [2] then [1]
         assert call_counts == [2, 1]
 
     def test_resolve_url_switches_default_to_embed(self) -> None:
-        from memex.engine.ingestion.embedding import EmbeddingService
+        from memex.engine.llm.ollama import OllamaEmbedder
 
-        with patch("memex.engine.ingestion.embedding.config.OLLAMA_EMBED_URL", "http://localhost:11434/api/embeddings"):
-            url = EmbeddingService._resolve_embed_url()
-        assert "/api/embed" in url
-        assert "embeddings" not in url
+        embedder = OllamaEmbedder("http://localhost:11434/api/embeddings")
+        assert "embeddings" not in embedder._base_url
+        assert embedder._base_url == "http://localhost:11434"
 
 
 # ── Query expansion fallback tests ───────────────────────────────────────
@@ -244,7 +231,8 @@ class TestQueryExpansionFallback:
         from memex.engine.retrieval.expansion import QueryExpander
 
         mock_llm = MagicMock()
-        expander = QueryExpander(mock_llm)
+        mock_embed = MagicMock()
+        expander = QueryExpander(mock_llm, mock_embed)
         return expander, mock_llm
 
     @patch("memex.engine.retrieval.expansion.config.EMBED_MODEL", "primary")

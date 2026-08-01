@@ -214,14 +214,12 @@ AUTO_FILTER: bool = _cfg_bool("retriever.auto_filter", False)
 def _run_startup_checks() -> None:
     if EMBED_MODEL == EMBED_MODEL_FALLBACK:
         _log.warning(
-            "embedding.model and embedding.fallback_model are identical (%s) — "
-            "fallback will have no effect.",
+            "embedding.model and embedding.fallback_model are identical (%s) — fallback will have no effect.",
             EMBED_MODEL,
         )
     if RERANK_MODEL == RERANK_MODEL_FALLBACK:
         _log.warning(
-            "reranker.model and reranker.fallback_model are identical (%s) — "
-            "fallback will have no effect.",
+            "reranker.model and reranker.fallback_model are identical (%s) — fallback will have no effect.",
             RERANK_MODEL,
         )
     if ENABLE_CONTEXTUAL_RETRIEVAL:

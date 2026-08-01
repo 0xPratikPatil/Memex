@@ -385,6 +385,7 @@ class Answer:
     sources: list[str]
     filters_used: dict | None
 
+
 @dataclass
 class Citation:
     index: int
@@ -431,6 +432,7 @@ class FilterContext:
     suggested_filters: dict | None
     sample_query: str
 
+
 @dataclass
 class FieldInfo:
     name: str
@@ -451,9 +453,9 @@ query = "show me reports from apple in 2024"
 
 # Output
 {
-  "filters": {"doc_type": "report", "keywords": ["apple"], "dates": "2024"},
-  "explanation": "Filtered to reports mentioning apple, from 2024",
-  "confidence": 0.9
+    "filters": {"doc_type": "report", "keywords": ["apple"], "dates": "2024"},
+    "explanation": "Filtered to reports mentioning apple, from 2024",
+    "confidence": 0.9,
 }
 ```
 

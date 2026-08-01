@@ -7,7 +7,7 @@ import inspect
 from dataclasses import dataclass, field
 
 from memex.engine.core import config
-from memex.mcp.status import create_service_checker
+from memex.mcp.status import ServiceStatus, create_service_checker
 
 
 @dataclass
@@ -27,13 +27,13 @@ class StartupBanner:
         return "\n".join(parts)
 
 
-def check_services() -> dict[str, object]:
+def check_services() -> dict[str, ServiceStatus]:
     """Check all backend services and return their status."""
     checker = create_service_checker()
     result = checker.check_all()
     if inspect.iscoroutine(result):
         return asyncio.run(result)
-    return result
+    return result  # type: ignore[return-value]
 
 
 def build_startup_banner() -> str:

@@ -314,7 +314,7 @@ class RAGEngine:
         if self._qdrant is None:
             self._qdrant = QdrantClient(
                 url=config.QDRANT_URL,
-                timeout=config.QDRANT_TIMEOUT,
+                timeout=int(config.QDRANT_TIMEOUT),
             )
             try:
                 self._ensure_collection()
@@ -374,7 +374,7 @@ class RAGEngine:
                 logger.warning("Collection optimizer did not complete within 15s, proceeding anyway")
 
             # Create payload indexes for filtered searches
-            for field_name, field_type in [
+            for _field_name, _field_type in [
                 ("source", "keyword"),
                 ("content_hash", "keyword"),
                 ("doc_type", "keyword"),
@@ -383,20 +383,20 @@ class RAGEngine:
                 try:
                     qdrant.create_payload_index(
                         collection_name=config.COLLECTION_NAME,
-                        field_name=field_name,
-                        field_schema=field_type,
+                        field_name=_field_name,
+                        field_schema=_field_type,  # type: ignore[arg-type]
                     )
                 except Exception:
-                    logger.debug("Payload index already exists for %s", field_name)
-            for field_name in ["topics", "keywords"]:
+                    logger.debug("Payload index already exists for %s", _field_name)
+            for _field_name in ["topics", "keywords"]:
                 try:
                     qdrant.create_payload_index(
                         collection_name=config.COLLECTION_NAME,
-                        field_name=field_name,
-                        field_schema="keyword",
+                        field_name=_field_name,
+                        field_schema="keyword",  # type: ignore[arg-type]
                     )
                 except Exception:
-                    logger.debug("Payload index already exists for %s", field_name)
+                    logger.debug("Payload index already exists for %s", _field_name)
 
     # ── Embedding helpers ─────────────────────────────────────────────────
 
@@ -708,7 +708,8 @@ class RAGEngine:
         except Exception:
             logger.error(
                 "Write failed for '%s', rolling back by content_hash=%s",
-                source_identifier, content_hash,
+                source_identifier,
+                content_hash,
             )
             try:
                 qdrant.delete(
@@ -783,10 +784,10 @@ class RAGEngine:
         if metadata_filter:
             for key, value in metadata_filter.items():
                 if isinstance(value, list):
-                    filter_conditions.append(FieldCondition(key=key, match=MatchAny(values=value)))
+                    filter_conditions.append(FieldCondition(key=key, match=MatchAny(any=value)))  # type: ignore[arg-type]
                 else:
                     filter_conditions.append(FieldCondition(key=key, match=MatchValue(value=str(value).lower())))
-        qdrant_filter = Filter(must=filter_conditions) if filter_conditions else None
+        qdrant_filter: Filter | None = Filter(must=filter_conditions) if filter_conditions else None  # type: ignore[arg-type]
 
         # ── Dense search (original / rewritten query) ──────────────────────
         t_qdrant = time.monotonic()
@@ -948,10 +949,10 @@ class RAGEngine:
         if metadata_filter:
             for key, value in metadata_filter.items():
                 if isinstance(value, list):
-                    filter_conditions.append(FieldCondition(key=key, match=MatchAny(values=value)))
+                    filter_conditions.append(FieldCondition(key=key, match=MatchAny(any=value)))  # type: ignore[arg-type]
                 else:
                     filter_conditions.append(FieldCondition(key=key, match=MatchValue(value=str(value).lower())))
-        qdrant_filter = Filter(must=filter_conditions) if filter_conditions else None
+        qdrant_filter: Filter | None = Filter(must=filter_conditions) if filter_conditions else None  # type: ignore[arg-type]
 
         # Dense search for fetch_k candidates
         t_qdrant = time.monotonic()
@@ -991,7 +992,7 @@ class RAGEngine:
                     vec = vec_payload.get(dense_vector_name, [])
                 else:
                     vec = vec_payload if vec_payload else []
-                candidate_embeddings.append(vec)
+                candidate_embeddings.append(vec)  # type: ignore[arg-type]
             else:
                 candidate_embeddings.append([])
 

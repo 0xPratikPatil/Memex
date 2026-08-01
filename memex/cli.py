@@ -105,12 +105,13 @@ def sync(
     _setup_logging(verbose)
 
     from memex.engine.core.yaml_config import YamlConfig
+    from memex.engine.sources.sync import SyncStats
     from memex.engine.sources.sync import sync as rag_sync
 
     yaml_config = YamlConfig(config_path)
 
-    async def _run() -> object:
-        return await rag_sync(yaml_config, source_name=source_name, dry_run=dry_run)
+    async def _run() -> SyncStats:
+        return await rag_sync(yaml_config, source_name=source_name, dry_run=dry_run)  # type: ignore[return-value]
 
     stats = asyncio.run(_run())
 

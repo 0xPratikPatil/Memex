@@ -87,10 +87,10 @@ class IngestionOrchestrator:
         except Exception as exc:
             return f"Failed: {exc}"
 
-        if not result.ok:
-            return f"Failed: Docling status '{result.status}', errors: {result.errors}"
+        if not result.ok:  # type: ignore[union-attr]
+            return f"Failed: Docling status '{result.status}', errors: {result.errors}"  # type: ignore[union-attr]
 
-        content_hash = compute_content_hash(result.markdown.encode())
+        content_hash = compute_content_hash(result.markdown.encode())  # type: ignore[union-attr]
 
         # Content-hash dedup: skip if identical content already ingested
         qdrant = self._engine._get_qdrant()

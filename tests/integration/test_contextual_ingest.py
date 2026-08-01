@@ -29,8 +29,11 @@ def ollama_client() -> httpx.Client:
 
 @pytest.fixture
 def context_generator(ollama_client: httpx.Client) -> ContextGenerator:
-    """ContextGenerator wired to live Ollama (uses default "header" strategy)."""
-    return ContextGenerator(ollama_client)
+    """ContextGenerator wired to live Ollama."""
+    from memex.engine.llm.ollama import OllamaLLM
+
+    llm = OllamaLLM(base_url="http://localhost:11434", model=config.CHAT_MODEL, timeout=60.0)
+    return ContextGenerator(llm)
 
 
 # ── generate_document_summary ────────────────────────────────────────────────

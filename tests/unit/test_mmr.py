@@ -25,9 +25,7 @@ class TestCosineSimilarity:
     def test_known_value(self) -> None:
         a = [1.0, 2.0, 3.0]
         b = [4.0, 5.0, 6.0]
-        expected = (1 * 4 + 2 * 5 + 3 * 6) / (
-            math.sqrt(1 + 4 + 9) * math.sqrt(16 + 25 + 36)
-        )
+        expected = (1 * 4 + 2 * 5 + 3 * 6) / (math.sqrt(1 + 4 + 9) * math.sqrt(16 + 25 + 36))
         assert cosine_similarity(a, b) == pytest.approx(expected)
 
     def test_zero_vector(self) -> None:

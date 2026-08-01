@@ -302,7 +302,8 @@ def invalidate_for_document(source_identifier: str) -> int:
         count = 0
         with _memory_lock:
             to_delete = [
-                k for k, (v, _) in _memory_cache.items()
+                k
+                for k, (v, _) in _memory_cache.items()
                 if (isinstance(v, str) and source_identifier in v)
                 or (isinstance(v, (list, dict)) and source_identifier in json.dumps(v))
                 or source_identifier in k

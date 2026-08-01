@@ -23,8 +23,7 @@ class AnthropicLLM(LLMProvider):
             import anthropic as _anthropic
         except ImportError as err:
             raise ImportError(
-                "Anthropic provider requires the 'anthropic' package.\n"
-                "Install it with: pip install anthropic"
+                "Anthropic provider requires the 'anthropic' package.\nInstall it with: pip install anthropic"
             ) from err
         self._client = _anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model

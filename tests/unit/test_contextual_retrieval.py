@@ -8,14 +8,15 @@ import pytest
 
 from memex.engine.core import config
 from memex.engine.ingestion.context import ContextGenerator, strip_context_prefix
-from unittest.mock import MagicMock
 
 
 @pytest.fixture
 def mock_llm() -> MagicMock:
     provider = MagicMock()
+
     async def _chat(prompt: str, *, model=None):
         return "This section discusses financial metrics."
+
     provider.chat = _chat
     provider.chat_sync = lambda prompt, **kw: "This section discusses financial metrics."
     return provider
@@ -201,7 +202,7 @@ class TestErrorHandling:
     def test_chat_failure_propagates(self, mock_llm: MagicMock) -> None:
         mock_llm.chat_sync = MagicMock(side_effect=Exception("connection refused"))
         gen = ContextGenerator(mock_llm)
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             gen.generate_document_summary("test")
 
     def test_enrich_chunks_with_chat_failure(self, mock_llm: MagicMock) -> None:

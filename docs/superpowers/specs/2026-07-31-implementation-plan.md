@@ -61,6 +61,7 @@ class SourceFile:
     size: int
     modified_at: float  # timestamp
 
+
 class Source(ABC):
     name: str
     type: str
@@ -75,12 +76,15 @@ class Source(ABC):
     @abstractmethod
     def download(self, file: SourceFile, dest: Path) -> Path: ...
 
+
 # Registry
 _SOURCES: dict[str, type[Source]] = {}
+
 
 def register_source(cls: type[Source]) -> type[Source]:
     _SOURCES[cls.type] = cls
     return cls
+
 
 def get_source(type_name: str, config: dict) -> Source:
     return _SOURCES[type_name](**config)

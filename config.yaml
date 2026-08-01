@@ -1,125 +1,171 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Memex RAG Configuration
+#
+# All available options shown. Commented values are alternatives you can choose.
+# Secrets use ${VAR} substitution from .env file.
+# ═══════════════════════════════════════════════════════════════════════════════
 version: "1.0"
 
+# ── Vector Store ──────────────────────────────────────────────────────────────
 vectorstore:
-  provider: qdrant
-  url: "http://localhost:6333"
+  provider: qdrant                         # qdrant (only option)
+  url: "http://localhost:6333"             # Qdrant REST API
+  # url: "https://your-cloud.qdrant.io"    # Qdrant Cloud
   collection: memex
-  api_key: ${QDRANT_API_KEY}
+  api_key: ${QDRANT_API_KEY}               # Required for Qdrant Cloud
 
+# ── Embedding Provider ────────────────────────────────────────────────────────
 embedding:
-  provider: ollama
-  model: qwen3-embedding:0.6b
-  fallback_model: bge-m3
-  dimensions: 1024
-  batch_size: 64
-  base_url: "http://localhost:11434"
-  api_key: ${OPENAI_API_KEY}
+  provider: ollama                         # ollama | openai | huggingface | fastembed
+  # provider: openai                       #   openai: needs api_key below
+  # provider: huggingface                  #   huggingface: model is HF repo name
+  # provider: fastembed                    #   fastembed: in-process, no network
+  model: qwen3-embedding:0.6b             # ollama model name
+  # model: snowflake-arctic-embed2:latest  #   alt ollama (1024d)
+  # model: nomic-embed-text:latest         #   alt ollama (768d)
+  # model: text-embedding-3-small          #   for openai provider
+  fallback_model: bge-m3                   # used if primary model fails
+  dimensions: 1024                         # must match model output dims
+  batch_size: 64                           # texts per sub-batch
+  base_url: "http://localhost:11434"       # ollama API
+  # base_url: "https://api.openai.com/v1"  # for openai provider
+  api_key: ${OPENAI_API_KEY}               # for openai/huggingface providers
 
-sparse:
-  provider: local
-  model: Qdrant/bm25
-
+# ── LLM Provider (chat, query expansion, summaries) ───────────────────────────
 llm:
-  provider: ollama
-  model: qwen2.5:1.5b
-  base_url: "http://localhost:11434"
-  api_key: ${OPENAI_API_KEY}
+  provider: ollama                         # ollama | openai | openrouter | anthropic | groq | google
+  # provider: openai                       #   needs api_key
+  # provider: anthropic                    #   needs api_key
+  # provider: groq                         #   needs api_key
+  # provider: google                       #   needs api_key
+  # provider: openrouter                   #   needs api_key
+  model: qwen2.5:1.5b                     # ollama model name
+  # model: gpt-4o-mini                     #   for openai
+  # model: claude-3-haiku                  #   for anthropic
+  # model: gemini-2.0-flash                #   for google
+  base_url: "http://localhost:11434"       # ollama API
+  # base_url: "https://api.openai.com/v1"  # for openai/openrouter
+  api_key: ${OPENAI_API_KEY}               # for cloud providers
 
+# ── Document Conversion (Docling Serve) ───────────────────────────────────────
 converter:
-  engine: docling
+  engine: docling                          # docling (only option)
   docling_url: "http://localhost:5001/v1/convert/source"
   docling_api_key: ${DOCLING_API_KEY}
-  docling_timeout: 300.0
-  docling_picture_classify: true
-  docling_enrich_code: false
-  docling_enrich_formula: false
-  docling_chart_extract: false
-  docling_ocr: true
-  docling_image_export: embedded
-  docling_pdf_backend: ""
+  docling_timeout: 300.0                   # seconds
+  docling_picture_classify: true           # classify images in docs
+  docling_enrich_code: false               # extract code blocks (needs serve-side model)
+  docling_enrich_formula: false            # extract formulas (needs serve-side model)
+  docling_chart_extract: false             # extract chart data (needs serve-side model)
+  docling_ocr: true                        # OCR for scanned PDFs/images
+  docling_image_export: embedded           # embedded | referenced | placeholder
+  docling_pdf_backend: ""                  # "" (auto) | "pypdfium2" | "default"
 
+# ── Chunking ──────────────────────────────────────────────────────────────────
 chunking:
-  strategy: hybrid
-  size: 1024
-  overlap: 128
-  min_length: 30
-  merge_peers: true
-  tokenizer: Qwen/Qwen3-Embedding-0.6B
+  strategy: hybrid                         # hybrid | recursive | fixed
+  # strategy: recursive                    #   paragraph/sentence-aware
+  # strategy: fixed                        #   fixed-size character splits
+  size: 1024                               # target tokens per chunk
+  overlap: 128                             # token overlap between chunks
+  min_length: 30                           # skip chunks shorter than this
+  merge_peers: true                        # merge small neighbor chunks
+  tokenizer: Qwen/Qwen3-Embedding-0.6B     # HF tokenizer for token-counting
 
+# ── Sparse Embeddings (BM25) ──────────────────────────────────────────────────
 sparse:
-  provider: docker          # docker (ml-services container) | local (pip fastembed)
+  provider: docker                         # docker (ml-services container) | local (fastembed)
+  # provider: local                        #   in-process fastembed, slower first load
   model: Qdrant/bm25
 
+# ── Reranker ──────────────────────────────────────────────────────────────────
 reranker:
-  enabled: true
-  provider: docker           # docker (ml-services container) | local (pip sentence-transformers)
+  enabled: true                            # true | false
+  # enabled: false                         #   skip reranking entirely
+  provider: docker                         # docker (ml-services container) | local (sentence-transformers)
+  # provider: local                        #   in-process, GPU if available
   model: Qwen/Qwen3-Reranker-0.6B
   fallback_model: BAAI/bge-reranker-base
-  type: auto
+  type: auto                               # auto | cross-encoder | causal-lm
 
+# ── Query Expansion ───────────────────────────────────────────────────────────
 query_expansion:
-  enabled: true
-  hyde: true
-  query_rewrite: true
-  multi_query: true
-  multi_query_count: 3
-  hyde_model: ""
-  multi_query_model: ""
-  query_rewrite_model: ""
+  enabled: true                            # master toggle for all below
+  hyde: true                               # hypothetical document embedding
+  query_rewrite: true                      # LLM rewrites ambiguous queries
+  multi_query: true                        # LLM generates paraphrases
+  multi_query_count: 3                     # number of paraphrases (1-10)
+  hyde_model: ""                           # "" = use llm.model
+  multi_query_model: ""                    # "" = use llm.model
+  query_rewrite_model: ""                  # "" = use llm.model
 
+# ── Contextual Retrieval ──────────────────────────────────────────────────────
 contextual_retrieval:
-  enabled: true
-  strategy: summary
-  model: ""
-  max_tokens: 50
-  batch_size: 10
+  enabled: true                            # LLM-generated context prefix per chunk
+  strategy: summary                        # summary (only option currently)
+  model: ""                                # "" = use llm.model
+  max_tokens: 50                           # max tokens in context prefix
+  batch_size: 10                           # chunks per LLM call
 
+# ── Metadata Extraction ───────────────────────────────────────────────────────
 metadata:
-  extraction_enabled: true
-  entity_extraction: true
-  doc_classification: true
-  topic_tagging: true
-  language_detection: true
-  model: ""
-  max_entities_per_chunk: 10
-  max_topics_per_chunk: 5
+  extraction_enabled: true                 # master toggle for all below
+  entity_extraction: true                  # people, orgs, dates, locations, products
+  doc_classification: true                 # report | email | article | contract | ...
+  topic_tagging: true                      # topic labels per chunk
+  language_detection: true                 # ISO 639-1 language code
+  model: ""                                # "" = use llm.model
+  max_entities_per_chunk: 10               # cap per entity type
+  max_topics_per_chunk: 5                  # cap per chunk
 
+# ── Caching ───────────────────────────────────────────────────────────────────
 caching:
-  enabled: true
-  redis_url: "redis://localhost:6379/0"
-  ttl_embedding: 86400
-  ttl_search: 3600
-  ttl_parse: 604800
-  ttl_expansion: 21600
-  max_memory_mb: 256
-  eviction_policy: allkeys-lru
+  enabled: true                            # in-memory LRU (Redis opt-in)
+  redis_url: "redis://localhost:6379/0"    # uncomment redis in docker-compose.yml to use
+  # redis_url: ""                          #   empty = in-memory only
+  ttl_embedding: 86400                     # 24h — embedding cache
+  ttl_search: 3600                         # 1h — search result cache
+  ttl_parse: 604800                        # 7d — parsed document cache
+  ttl_expansion: 21600                     # 6h — query expansion cache
+  max_memory_mb: 256                       # in-memory LRU cap
+  eviction_policy: allkeys-lru             # Redis eviction policy
 
+# ── HTTP Client ───────────────────────────────────────────────────────────────
 http:
-  timeout: 60.0
-  max_retries: 3
-  retry_backoff: 0.5
+  timeout: 60.0                            # seconds per request
+  max_retries: 3                           # retry on transient errors
+  retry_backoff: 0.5                       # multiplier for exponential backoff
 
+# ── Ingestion ─────────────────────────────────────────────────────────────────
 ingestion:
-  timeout_parse: 120.0
-  timeout_total: 300.0
-  max_concurrent_parses: 3
+  timeout_parse: 120.0                     # max seconds per document parse
+  timeout_total: 300.0                     # max seconds per document ingestion
+  max_concurrent_parses: 3                 # parallel document conversions
 
+# ── Qdrant ────────────────────────────────────────────────────────────────────
 qdrant:
-  timeout: 10.0
-  max_retries: 3
+  timeout: 10.0                            # seconds per Qdrant call
+  max_retries: 3                           # retry on transient errors
 
+# ── MCP Server ────────────────────────────────────────────────────────────────
 mcp:
   host: 127.0.0.1
-  port: 8080
-  character_limit: 25000
+  port: 8080                               # only used for streamable HTTP transport
+  character_limit: 25000                   # max chars in tool response text
 
+# ── Search ────────────────────────────────────────────────────────────────────
 search:
-  top_k: 30
-  mode: hybrid
+  top_k: 30                                # backend fetch count (before pagination)
+  mode: hybrid                             # hybrid | similarity | mmr
+  # mode: similarity                       #   dense only, no BM25
+  # mode: mmr                              #   maximal marginal relevance (diverse results)
   mmr:
-    fetch_k: 20
-    lambda_mult: 0.5
+    fetch_k: 20                            # candidate pool size for MMR
+    lambda_mult: 0.5                       # 1.0=relevance, 0.0=diversity
 
+# ── Document Sources ──────────────────────────────────────────────────────────
+# type: local  — filesystem directory
+# type: s3     — AWS S3 bucket
 sources:
   - type: local
     name: docs
@@ -128,22 +174,37 @@ sources:
       - .pdf
       - .docx
       - .md
+      - .txt
+      - .html
+      - .csv
+      - .xlsx
     recursive: true
+  # - type: s3
+  #   name: my-bucket
+  #   bucket: my-s3-bucket
+  #   prefix: documents/
+  #   region: us-east-1
+  #   extensions:
+  #     - .pdf
+  #     - .docx
 
+# ── Sync ──────────────────────────────────────────────────────────────────────
 sync:
-  auto_delete: true
-  dry_run: false
+  auto_delete: true                        # remove chunks of deleted source files
+  dry_run: false                           # report changes without writing
 
+# ── Answer Generation ─────────────────────────────────────────────────────────
 answer:
-  enabled: true
-  max_context_chars: 12000
-  system_prompt: null
-  refusal_sentinel: "INSUFFICIENT_CONTEXT"
+  enabled: true                            # generate cited answers from search results
+  max_context_chars: 12000                 # max chars fed to LLM for answer
+  system_prompt: null                      # null = default prompt
+  refusal_sentinel: "INSUFFICIENT_CONTEXT" # returned when context insufficient
 
+# ── Evaluation ────────────────────────────────────────────────────────────────
 evaluation:
-  enabled: false
-  golden_set_path: null
+  enabled: false                           # enable ragas evaluation
+  golden_set_path: null                    # path to golden YAML/JSON file
   output_dir: eval_reports
-  top_k: 10
-  run_ragas: false
-  log_timing: false
+  top_k: 10                                # results per eval query
+  run_ragas: false                         # run RAGAS metrics (needs extra deps)
+  log_timing: false                        # log per-stage pipeline timing

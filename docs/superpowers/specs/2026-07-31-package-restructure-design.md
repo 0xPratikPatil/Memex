@@ -94,6 +94,7 @@ class LLMProvider(ABC):
     @abstractmethod
     async def chat(self, prompt: str, *, model: str | None = None) -> str: ...
 
+
 class EmbedProvider(ABC):
     @abstractmethod
     def embed(self, texts: list[str], *, model: str | None = None) -> list[list[float]]: ...

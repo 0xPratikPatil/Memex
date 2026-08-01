@@ -25,8 +25,7 @@ class FastEmbedEmbedder(EmbedProvider):
             from fastembed import TextEmbedding  # noqa: F401
         except ImportError as err:
             raise ImportError(
-                "FastEmbed embedder requires the 'fastembed' package.\n"
-                "Install it with: pip install fastembed"
+                "FastEmbed embedder requires the 'fastembed' package.\nInstall it with: pip install fastembed"
             ) from err
         self._model_name = model
         self._model = None

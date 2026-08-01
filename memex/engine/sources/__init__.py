@@ -77,7 +77,8 @@ def get_source(type_name: str, config: dict[str, Any]) -> Source:
     cls = _SOURCES.get(type_name)
     if cls is None:
         raise ValueError(f"Unknown source type: {type_name}")
-    return cls(**config)
+    kwargs = {k: v for k, v in config.items() if k != "type"}
+    return cls(**kwargs)
 
 
 def list_source_types() -> list[str]:

@@ -32,11 +32,15 @@ class TestQueryExpanderIntegration:
 
     @pytest.fixture
     def expander(self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch) -> QueryExpander:
+        from memex.engine.llm.ollama import OllamaEmbedder, OllamaLLM
+
         monkeypatch.setattr(config, "ENABLE_QUERY_EXPANSION", True)
         monkeypatch.setattr(config, "ENABLE_QUERY_REWRITE", True)
         monkeypatch.setattr(config, "ENABLE_MULTI_QUERY", True)
         monkeypatch.setattr(config, "CHAT_MODEL", "qwen3.5:0.8b")
-        return QueryExpander(ollama_client)
+        llm = OllamaLLM(base_url="http://localhost:11434", model="qwen3.5:0.8b", timeout=60.0)
+        embedder = OllamaEmbedder(base_url="http://localhost:11434", model="qwen3-embedding:0.6b", timeout=60.0)
+        return QueryExpander(llm, embedder)
 
     def test_rewrite_returns_string(self, expander: QueryExpander) -> None:
         rewritten = expander._rewrite("what is machine learning")
@@ -62,12 +66,15 @@ class TestQueryExpanderIntegration:
         assert isinstance(result.paraphrases, list)
 
     def test_chat_error_returns_none_gracefully(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        bad_client = httpx.Client(timeout=httpx.Timeout(1.0))
+        from memex.engine.llm.ollama import OllamaEmbedder, OllamaLLM
+
         monkeypatch.setattr(config, "ENABLE_QUERY_REWRITE", True)
         monkeypatch.setattr(config, "ENABLE_MULTI_QUERY", True)
         monkeypatch.setattr(config, "CHAT_MODEL", "qwen3.5:0.8b")
         monkeypatch.setattr(config, "OLLAMA_EMBED_URL", "http://localhost:19999/api/embeddings")
-        expander = QueryExpander(bad_client)
+        llm = OllamaLLM(base_url="http://localhost:19999", model="qwen3.5:0.8b", timeout=1.0)
+        embedder = OllamaEmbedder(base_url="http://localhost:19999", model="qwen3-embedding:0.6b", timeout=1.0)
+        expander = QueryExpander(llm, embedder)
         result = expander.expand("test query")
         assert result.rewritten is None
         assert result.original == "test query"

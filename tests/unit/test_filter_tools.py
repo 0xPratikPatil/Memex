@@ -231,9 +231,7 @@ class TestExtractFilters:
     @pytest.mark.asyncio
     async def test_parses_json_with_code_fence(self) -> None:
         fields = [FieldInfo("language", "string", ["en", "fr"], 5)]
-        mock_llm = AsyncMock(
-            return_value='```json\n{"language": "en"}\n```\nQuery is in English'
-        )
+        mock_llm = AsyncMock(return_value='```json\n{"language": "en"}\n```\nQuery is in English')
 
         result = await extract_filters("english docs", fields, llm_call=mock_llm)
         assert result.filters == {"language": "en"}
@@ -241,9 +239,7 @@ class TestExtractFilters:
     @pytest.mark.asyncio
     async def test_drops_unknown_fields(self) -> None:
         fields = [FieldInfo("doc_type", "string", ["report"], 5)]
-        mock_llm = AsyncMock(
-            return_value='{"doc_type": "report", "nonexistent": "value"}\nFiltered'
-        )
+        mock_llm = AsyncMock(return_value='{"doc_type": "report", "nonexistent": "value"}\nFiltered')
 
         result = await extract_filters("find reports", fields, llm_call=mock_llm)
         assert "doc_type" in result.filters
@@ -270,9 +266,7 @@ class TestExtractFilters:
     @pytest.mark.asyncio
     async def test_list_field_values(self) -> None:
         fields = [FieldInfo("topics", "list", ["finance", "tech"], 10)]
-        mock_llm = AsyncMock(
-            return_value='{"topics": ["finance"]}\nQuery is about finance'
-        )
+        mock_llm = AsyncMock(return_value='{"topics": ["finance"]}\nQuery is about finance')
 
         result = await extract_filters("finance docs", fields, llm_call=mock_llm)
         assert result.filters == {"topics": ["finance"]}

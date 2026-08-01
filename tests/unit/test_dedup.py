@@ -110,9 +110,7 @@ def _mock_scroll_return(points: list[MagicMock], next_offset=None) -> tuple:
 class TestIsAlreadyIngested:
     async def test_returns_true_when_duplicate(self) -> None:
         mock_client = MagicMock()
-        mock_client.scroll.return_value = _mock_scroll_return(
-            [_make_mock_point("p1", {"total_chunks": 10})]
-        )
+        mock_client.scroll.return_value = _mock_scroll_return([_make_mock_point("p1", {"total_chunks": 10})])
         is_dup, count = await is_already_ingested(mock_client, "col", "/doc.pdf", "abc123")
         assert is_dup is True
         assert count == 10

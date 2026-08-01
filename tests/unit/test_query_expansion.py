@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from memex.engine.core import config
-from memex.engine.llm.base import EmbedProvider, LLMProvider
 from memex.engine.retrieval.expansion import ExpandedQuery, QueryExpander
 
 
@@ -111,7 +110,7 @@ class TestQueryRewrite:
             assert call_args is not None, "chat_sync should have been called"
             if call_args is None:
                 return
-            prompt_content = call_args[1]["json"]["messages"][0]["content"]
+            prompt_content = call_args[0][0]
             assert "my specific query" in prompt_content
 
 
@@ -239,7 +238,7 @@ class TestErrorHandling:
 
     def test_hyde_failure_skips_vector(self, expander: QueryExpander) -> None:
         expander._llm.chat_sync = MagicMock(return_value="hypothetical document text")
-        expander._embedder.embed = MagicMock(side_effect=Exception("embedding failed"))
+        expander._embed_provider.embed = MagicMock(side_effect=Exception("embedding failed"))
         with patch.object(config, "ENABLE_HYDE", True):
             result = expander.expand("test")
             assert result.hyde_vector is None

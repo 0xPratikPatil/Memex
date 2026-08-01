@@ -39,9 +39,7 @@ def get_llm(config_obj: YamlConfig | None = None) -> LLMProvider:
     """
     from memex.engine.core import config as cfg
 
-    provider_name = (
-        config_obj.get_str("llm.provider") if config_obj else cfg.LLM_PROVIDER
-    ).lower()
+    provider_name = (config_obj.get_str("llm.provider") if config_obj else cfg.LLM_PROVIDER).lower()
 
     base_url = config_obj.get_str("llm.base_url") if config_obj else cfg.LLM_BASE_URL
     api_key = config_obj.get_str("llm.api_key") if config_obj else cfg.LLM_API_KEY
@@ -97,9 +95,7 @@ def get_embedder(config_obj: YamlConfig | None = None) -> EmbedProvider:
     """
     from memex.engine.core import config as cfg
 
-    provider_name = (
-        config_obj.get_str("embedding.provider") if config_obj else cfg.EMBED_PROVIDER
-    ).lower()
+    provider_name = (config_obj.get_str("embedding.provider") if config_obj else cfg.EMBED_PROVIDER).lower()
 
     base_url = config_obj.get_str("embedding.base_url") if config_obj else cfg.OLLAMA_EMBED_URL
     api_key = config_obj.get_str("embedding.api_key") if config_obj else cfg.EMBED_API_KEY

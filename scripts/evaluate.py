@@ -20,6 +20,7 @@ from pathlib import Path
 def cmd_run(args: argparse.Namespace) -> None:
     """Run evaluation against the RAG pipeline."""
     from rag import config as eval_config
+
     from memex.engine.core.pipeline import RAGEngine
     from memex.engine.evaluation import EvalRunner
 

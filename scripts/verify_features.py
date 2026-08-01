@@ -54,8 +54,7 @@ coll = qdrant.get_collection(config.COLLECTION_NAME)
 # Check vector names (dense vectors are in the `vectors` dict)
 vector_names = list(coll.config.params.vectors.keys()) if isinstance(coll.config.params.vectors, dict) else ["dense"]
 check("Has 'dense' vector", "dense" in vector_names)
-check("Has 'contextual_dense' vector", "contextual_dense" in vector_names,
-      f"found: {vector_names}")
+check("Has 'contextual_dense' vector", "contextual_dense" in vector_names, f"found: {vector_names}")
 
 # Check sparse vector config (separate from named vectors)
 sparse_config = coll.config.params.sparse_vectors
@@ -75,21 +74,21 @@ if sample:
     payload = sample[0].payload
     has_section = bool(payload.get("section_header"))
     has_content = bool(payload.get("content"))
-    check("Chunks have section_header", has_section,
-          f"header='{payload.get('section_header', '')[:50]}'")
-    check("Chunks have content", has_content,
-          f"len={len(payload.get('content', ''))}")
+    check("Chunks have section_header", has_section, f"header='{payload.get('section_header', '')[:50]}'")
+    check("Chunks have content", has_content, f"len={len(payload.get('content', ''))}")
 
     # Check chunker status from engine
     from memex.engine.core.pipeline import RAGEngine
+
     _engine = RAGEngine()
     chunker = _engine.get_chunker_status()
-    check("Chunker strategy = hybrid", chunker.get("strategy") == "hybrid",
-          f"strategy={chunker.get('strategy')}")
+    check("Chunker strategy = hybrid", chunker.get("strategy") == "hybrid", f"strategy={chunker.get('strategy')}")
     check("HybridChunker available", chunker.get("hybrid_available") is True)
-    check("Active chunker = Docling HybridChunker",
-          "HybridChunker" in chunker.get("active_chunker", ""),
-          f"active={chunker.get('active_chunker')}")
+    check(
+        "Active chunker = Docling HybridChunker",
+        "HybridChunker" in chunker.get("active_chunker", ""),
+        f"active={chunker.get('active_chunker')}",
+    )
     check("merge_peers enabled", chunker.get("merge_peers") is True)
 else:
     check("Hybrid chunking", False, "no points to sample")
@@ -104,26 +103,24 @@ if sample:
     content = payload.get("content", "")
 
     check("context_prefix field exists", "context_prefix" in payload)
-    check("context_prefix is non-empty", bool(ctx_prefix),
-          f"prefix='{ctx_prefix[:60]}...'")
+    check("context_prefix is non-empty", bool(ctx_prefix), f"prefix='{ctx_prefix[:60]}...'")
 
     # Content should start with context prefix if contextual is active
     if ctx_prefix:
-        check("Content starts with context_prefix",
-              content.startswith(ctx_prefix),
-              f"content[:50]='{content[:50]}'")
+        check("Content starts with context_prefix", content.startswith(ctx_prefix), f"content[:50]='{content[:50]}'")
     else:
-        check("Content starts with context_prefix", False,
-              "context_prefix is empty — contextual retrieval may not be working")
+        check(
+            "Content starts with context_prefix",
+            False,
+            "context_prefix is empty — contextual retrieval may not be working",
+        )
 
     # Check contextual_dense vector exists on points
-    point = qdrant.retrieve(collection_name=config.COLLECTION_NAME,
-                           ids=[sample[0].id], with_vectors=True)
+    point = qdrant.retrieve(collection_name=config.COLLECTION_NAME, ids=[sample[0].id], with_vectors=True)
     if point:
         vectors = point[0].vector
         has_ctx_vec = "contextual_dense" in vectors and len(vectors.get("contextual_dense", [])) > 0
-        check("contextual_dense vector populated", has_ctx_vec,
-              f"dim={len(vectors.get('contextual_dense', []))}")
+        check("contextual_dense vector populated", has_ctx_vec, f"dim={len(vectors.get('contextual_dense', []))}")
     else:
         check("contextual_dense vector populated", False, "could not retrieve point")
 
@@ -138,37 +135,33 @@ if sample:
     language = payload.get("language", "")
     doc_type = payload.get("doc_type", "")
 
-    check("keywords field populated", len(keywords) > 0,
-          f"{len(keywords)} keywords: {keywords[:5]}")
-    check("topics field populated", len(topics) > 0,
-          f"{len(topics)} topics: {topics[:5]}")
-    check("language field populated", bool(language),
-          f"language='{language}'")
+    check("keywords field populated", len(keywords) > 0, f"{len(keywords)} keywords: {keywords[:5]}")
+    check("topics field populated", len(topics) > 0, f"{len(topics)} topics: {topics[:5]}")
+    check("language field populated", bool(language), f"language='{language}'")
 
     # Check structural metadata
     structural = payload.get("structural", {})
-    check("structural metadata present", bool(structural),
-          f"keys={list(structural.keys())[:5]}")
+    check("structural metadata present", bool(structural), f"keys={list(structural.keys())[:5]}")
 
 # ── 5. Sparse embeddings (BM25) ────────────────────────────────────────────
 
 print("\n=== 5. Sparse Embeddings (BM25) ===")
 
 if sample:
-    point = qdrant.retrieve(collection_name=config.COLLECTION_NAME,
-                           ids=[sample[0].id], with_vectors=True)
+    point = qdrant.retrieve(collection_name=config.COLLECTION_NAME, ids=[sample[0].id], with_vectors=True)
     if point:
         vectors = point[0].vector
         sparse = vectors.get("sparse", None)
         if sparse:
             # SparseVector has indices and values
-            indices = sparse.indices if hasattr(sparse, 'indices') else sparse.get("indices", [])
-            values = sparse.values if hasattr(sparse, 'values') else sparse.get("values", [])
-            check("Sparse vector present", True,
-                  f"len(indices)={len(indices)}, len(values)={len(values)}")
-            check("Sparse vector has non-zero values",
-                  any(v > 0 for v in values) if values else False,
-                  f"sum={sum(values):.4f}")
+            indices = sparse.indices if hasattr(sparse, "indices") else sparse.get("indices", [])
+            values = sparse.values if hasattr(sparse, "values") else sparse.get("values", [])
+            check("Sparse vector present", True, f"len(indices)={len(indices)}, len(values)={len(values)}")
+            check(
+                "Sparse vector has non-zero values",
+                any(v > 0 for v in values) if values else False,
+                f"sum={sum(values):.4f}",
+            )
         else:
             check("Sparse vector present", False, "sparse vector is None")
 
@@ -200,17 +193,19 @@ for ns in ["emb", "parse"]:
 
 # Search cache - may be empty until first search is performed
 search_count = namespaces.get("search", 0)
-check("Cache namespace 'search' configured", True,
-      f"{search_count} keys (populated after search)")
+check("Cache namespace 'search' configured", True, f"{search_count} keys (populated after search)")
 
 # Check cache metrics
 from memex.engine.utils.cache import get_cache_stats  # noqa: E402
 
 cache_stats = get_cache_stats()
 metrics = cache_stats.get("metrics", {})
-check("Cache metrics available", bool(metrics),
-      f"hits={metrics.get('hits', 0)}, misses={metrics.get('misses', 0)}, "
-      f"sets={metrics.get('sets', 0)}, hit_rate={metrics.get('hit_rate', 0):.2%}")
+check(
+    "Cache metrics available",
+    bool(metrics),
+    f"hits={metrics.get('hits', 0)}, misses={metrics.get('misses', 0)}, "
+    f"sets={metrics.get('sets', 0)}, hit_rate={metrics.get('hit_rate', 0):.2%}",
+)
 
 # ── 7. Query expansion ─────────────────────────────────────────────────────
 
@@ -228,12 +223,21 @@ test_query = "what is the layout analysis approach?"
 expanded = expander.expand(test_query)
 
 check("Expansion returns result", expanded is not None)
-check("Query rewrite generated", bool(expanded.rewritten),
-      f"rewritten='{expanded.rewritten[:60]}'" if expanded.rewritten else "None")
-check("HyDE vector generated", expanded.hyde_vector is not None and len(expanded.hyde_vector) > 0,
-      f"dim={len(expanded.hyde_vector) if expanded.hyde_vector else 0}")
-check("Paraphrases generated", len(expanded.paraphrases) > 0,
-      f"count={len(expanded.paraphrases)}: {expanded.paraphrases[:2]}")
+check(
+    "Query rewrite generated",
+    bool(expanded.rewritten),
+    f"rewritten='{expanded.rewritten[:60]}'" if expanded.rewritten else "None",
+)
+check(
+    "HyDE vector generated",
+    expanded.hyde_vector is not None and len(expanded.hyde_vector) > 0,
+    f"dim={len(expanded.hyde_vector) if expanded.hyde_vector else 0}",
+)
+check(
+    "Paraphrases generated",
+    len(expanded.paraphrases) > 0,
+    f"count={len(expanded.paraphrases)}: {expanded.paraphrases[:2]}",
+)
 
 # ── 8. Reranking ───────────────────────────────────────────────────────────
 
@@ -267,10 +271,12 @@ try:
             "Table detection in PDF documents",
         ]
         scores, indices = engine._rerank(test_query, test_contents, top_k=3)
-        check("Reranker produces scores", len(scores) > 0,
-              f"scores={[f'{s:.4f}' for s in scores]}")
-        check("Reranker sorts by relevance", scores[0] >= scores[-1] if len(scores) > 1 else True,
-              f"top score={scores[0]:.4f}")
+        check("Reranker produces scores", len(scores) > 0, f"scores={[f'{s:.4f}' for s in scores]}")
+        check(
+            "Reranker sorts by relevance",
+            scores[0] >= scores[-1] if len(scores) > 1 else True,
+            f"top score={scores[0]:.4f}",
+        )
 except Exception as e:
     check("Reranker loaded", False, str(e))
 
@@ -296,14 +302,10 @@ check("Search returns results", len(results_search) > 0, f"{len(results_search)}
 
 # Check timing data
 timings = get_eval_timings()
-check("Dense search timing recorded", "dense_search" in timings,
-      f"ms={timings.get('dense_search', [0])[-1]:.1f}")
-check("Sparse search timing recorded", "sparse_search" in timings,
-      f"ms={timings.get('sparse_search', [0])[-1]:.1f}")
-check("Rerank timing recorded", "rerank" in timings,
-      f"ms={timings.get('rerank', [0])[-1]:.1f}")
-check("Total search timing recorded", "total_search" in timings,
-      f"ms={timings.get('total_search', [0])[-1]:.1f}")
+check("Dense search timing recorded", "dense_search" in timings, f"ms={timings.get('dense_search', [0])[-1]:.1f}")
+check("Sparse search timing recorded", "sparse_search" in timings, f"ms={timings.get('sparse_search', [0])[-1]:.1f}")
+check("Rerank timing recorded", "rerank" in timings, f"ms={timings.get('rerank', [0])[-1]:.1f}")
+check("Total search timing recorded", "total_search" in timings, f"ms={timings.get('total_search', [0])[-1]:.1f}")
 
 # Check result quality
 if results_search:
@@ -311,12 +313,9 @@ if results_search:
     check("Top result has content", bool(top.get("content")))
     check("Top result has section_header", bool(top.get("section_header")))
     check("Top result has context_prefix", bool(top.get("context_prefix")))
-    check("Top result has rerank_score", "rerank_score" in top,
-          f"score={top.get('rerank_score', 'N/A')}")
-    check("Top result has rrF_score", "rrf_score" in top,
-          f"score={top.get('rrf_score', 'N/A')}")
-    check("Top result has keywords", bool(top.get("keywords")),
-          f"count={len(top.get('keywords', []))}")
+    check("Top result has rerank_score", "rerank_score" in top, f"score={top.get('rerank_score', 'N/A')}")
+    check("Top result has rrF_score", "rrf_score" in top, f"score={top.get('rrf_score', 'N/A')}")
+    check("Top result has keywords", bool(top.get("keywords")), f"count={len(top.get('keywords', []))}")
 
     # Second search should hit cache
     t0 = time.monotonic()
@@ -326,9 +325,11 @@ if results_search:
         rerank=True,
     )
     cache_time_ms = (time.monotonic() - t0) * 1000
-    check("Second search is faster (cache hit)",
-          cache_time_ms < timings.get("total_search", [999])[-1],
-          f"first={timings.get('total_search', [0])[-1]:.0f}ms, second={cache_time_ms:.0f}ms")
+    check(
+        "Second search is faster (cache hit)",
+        cache_time_ms < timings.get("total_search", [999])[-1],
+        f"first={timings.get('total_search', [0])[-1]:.0f}ms, second={cache_time_ms:.0f}ms",
+    )
 
 # ── Summary ─────────────────────────────────────────────────────────────────
 

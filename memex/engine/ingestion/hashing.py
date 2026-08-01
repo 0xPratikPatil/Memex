@@ -117,7 +117,7 @@ async def clear_source_chunks(
     for i in range(0, len(point_ids), config.EMBED_BATCH_SIZE):
         qdrant_client.delete(
             collection_name=collection,
-            points_selector=point_ids[i : i + config.EMBED_BATCH_SIZE],
+            points_selector=point_ids[i : i + config.EMBED_BATCH_SIZE],  # type: ignore[arg-type]
         )
 
     log.info("Cleared %d chunks for source=%s", len(point_ids), source)

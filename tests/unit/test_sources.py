@@ -19,6 +19,7 @@ class TestSourceRegistry:
 
     def test_list_source_types_includes_s3(self) -> None:
         import memex.engine.sources.s3  # noqa: F401
+
         assert "s3" in list_source_types()
 
     def test_get_source_local(self) -> None:

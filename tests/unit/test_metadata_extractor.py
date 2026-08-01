@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from memex.engine.core import config
-from unittest.mock import MagicMock
 from memex.engine.metadata.extractor import MetadataExtractor
 
 
@@ -16,35 +15,34 @@ from memex.engine.metadata.extractor import MetadataExtractor
 def mock_llm() -> MagicMock:
     provider = MagicMock()
 
-    async def _chat(prompt: str, *, model=None) -> str:
+    def _chat_sync(prompt: str, *, model: str | None = None) -> str:
         if "Classify this document" in prompt:
             return "report"
         elif "Extract named entities" in prompt:
-            return json.dumps({"people": ["Alice Smith"], "organizations": ["Acme Corp"],
-                              "dates": ["2026-01-15"], "locations": ["New York"], "products": ["Widget Pro"]})
+            return json.dumps(
+                {
+                    "people": ["Alice Smith"],
+                    "organizations": ["Acme Corp"],
+                    "dates": ["2026-01-15"],
+                    "locations": ["New York"],
+                    "products": ["Widget Pro"],
+                }
+            )
         elif "topic labels" in prompt:
-            return "## Topics\n- finance\n- technology"
+            return '["finance", "technology"]'
         elif "short summary" in prompt:
             return "This document discusses quarterly revenue."
         elif "keywords" in prompt:
             return json.dumps({"keywords": ["revenue", "growth", "quarterly"]})
         return "mocked LLM response"
 
-    provider.chat = _chat
+    provider.chat_sync = MagicMock(side_effect=_chat_sync)
     return provider
 
 
 @pytest.fixture
 def extractor(mock_llm: MagicMock) -> MetadataExtractor:
     return MetadataExtractor(mock_llm)
-    with patch.multiple(
-        config,
-        ENABLE_ENTITY_EXTRACTION=False,
-        ENABLE_DOC_CLASSIFICATION=False,
-        ENABLE_TOPIC_TAGGING=False,
-        ENABLE_LANGUAGE_DETECTION=False,
-    ):
-        return MetadataExtractor(None)
 
 
 # ── Entity extraction ─────────────────────────────────────────────────────
@@ -73,19 +71,16 @@ class TestEntityExtraction:
         assert entities == {}
 
     def test_extract_entities_handles_llm_error(self) -> None:
-        client = MagicMock(spec=httpx.Client)
-        client.post = MagicMock(side_effect=Exception("timeout"))
-        ext = MetadataExtractor(client)
+        provider = MagicMock()
+        provider.chat_sync = MagicMock(side_effect=Exception("timeout"))
+        ext = MetadataExtractor(provider)
         entities = ext.extract_entities("Test text.")
         assert entities == {}
 
     def test_extract_entities_handles_json_error(self) -> None:
-        client = MagicMock(spec=httpx.Client)
-        resp = MagicMock()
-        resp.raise_for_status = MagicMock()
-        resp.json.return_value = {"message": {"content": "not json at all"}}
-        client.post = MagicMock(return_value=resp)
-        ext = MetadataExtractor(client)
+        provider = MagicMock()
+        provider.chat_sync = MagicMock(return_value="not json at all")
+        ext = MetadataExtractor(provider)
         entities = ext.extract_entities("Test text.")
         assert entities == {}
 
@@ -121,18 +116,15 @@ class TestDocumentClassification:
         assert ext.classify_document("Test.") == "unknown"
 
     def test_classify_handles_llm_error(self) -> None:
-        client = MagicMock(spec=httpx.Client)
-        client.post = MagicMock(side_effect=Exception("timeout"))
-        ext = MetadataExtractor(client)
+        provider = MagicMock()
+        provider.chat_sync = MagicMock(side_effect=Exception("timeout"))
+        ext = MetadataExtractor(provider)
         assert ext.classify_document("Test.") == "unknown"
 
     def test_classify_normalizes_output(self) -> None:
-        client = MagicMock(spec=httpx.Client)
-        resp = MagicMock()
-        resp.raise_for_status = MagicMock()
-        resp.json.return_value = {"message": {"content": "  Report  "}}
-        client.post = MagicMock(return_value=resp)
-        ext = MetadataExtractor(client)
+        provider = MagicMock()
+        provider.chat_sync = MagicMock(return_value="  Report  ")
+        ext = MetadataExtractor(provider)
         assert ext.classify_document("Test.") == "report"
 
 
@@ -153,12 +145,9 @@ class TestTopicExtraction:
         assert ext.extract_topics("Test.") == []
 
     def test_extract_topics_handles_json_error(self) -> None:
-        client = MagicMock(spec=httpx.Client)
-        resp = MagicMock()
-        resp.raise_for_status = MagicMock()
-        resp.json.return_value = {"message": {"content": "not json"}}
-        client.post = MagicMock(return_value=resp)
-        ext = MetadataExtractor(client)
+        provider = MagicMock()
+        provider.chat_sync = MagicMock(return_value="not json")
+        ext = MetadataExtractor(provider)
         assert ext.extract_topics("Test.") == []
 
 
@@ -361,7 +350,6 @@ class TestExtractAll:
         assert metadata["structural"]["heading_level"] == 2
 
     def test_extract_all_disabled_features_not_extracted(self) -> None:
-        client = MagicMock(spec=httpx.Client)
         with patch.multiple(
             config,
             ENABLE_ENTITY_EXTRACTION=False,
@@ -369,7 +357,7 @@ class TestExtractAll:
             ENABLE_TOPIC_TAGGING=False,
             ENABLE_LANGUAGE_DETECTION=False,
         ):
-            ext = MetadataExtractor(client)
+            ext = MetadataExtractor(None)
             chunk = {"content": "Test content with enough words for detection.", "section_header": ""}
             metadata = ext.extract_all(chunk=chunk)
             assert "entities" not in metadata
@@ -449,19 +437,19 @@ class TestExtractAll:
 
 
 class TestChatHelper:
-    def test_chat_raises_without_client(self) -> None:
+    def test_chat_returns_empty_without_client(self) -> None:
         ext = MetadataExtractor(None)
-        with pytest.raises(RuntimeError, match="Ollama client not available"):
-            ext._chat("test prompt")
+        result = ext._chat("test prompt")
+        assert result == ""
 
     def test_chat_calls_llm(self, extractor: MetadataExtractor) -> None:
         result = extractor._chat("test prompt")
         assert isinstance(result, str)
-        extractor._llm.chat.assert_called()
+        extractor._llm.chat_sync.assert_called()
 
     def test_chat_handles_transport_error(self) -> None:
-        client = MagicMock(spec=httpx.Client)
-        client.post = MagicMock(side_effect=Exception("connection refused"))
-        ext = MetadataExtractor(client)
-        with pytest.raises(Exception):
+        provider = MagicMock()
+        provider.chat_sync = MagicMock(side_effect=Exception("connection refused"))
+        ext = MetadataExtractor(provider)
+        with pytest.raises(Exception):  # noqa: B017
             ext._chat("test prompt")

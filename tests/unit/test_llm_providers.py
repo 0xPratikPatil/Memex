@@ -282,9 +282,10 @@ class TestGoogleLLM:
 
     def test_init_raises_import_error(self) -> None:
         """Should raise ImportError with helpful message when SDK missing."""
-        with patch.dict(
-            "sys.modules", {"google": None, "google.generativeai": None}
-        ), pytest.raises(ImportError, match="pip install google-generativeai"):
+        with (
+            patch.dict("sys.modules", {"google": None, "google.generativeai": None}),
+            pytest.raises(ImportError, match="pip install google-generativeai"),
+        ):
             from memex.engine.llm.google import GoogleLLM
 
             GoogleLLM(api_key="fake")
@@ -310,9 +311,10 @@ class TestHuggingFaceEmbedder:
 
     def test_init_raises_import_error(self) -> None:
         """Should raise ImportError when sentence-transformers missing."""
-        with patch.dict(
-            "sys.modules", {"sentence_transformers": None}
-        ), pytest.raises(ImportError, match="pip install sentence-transformers"):
+        with (
+            patch.dict("sys.modules", {"sentence_transformers": None}),
+            pytest.raises(ImportError, match="pip install sentence-transformers"),
+        ):
             from memex.engine.llm.huggingface import HuggingFaceEmbedder
 
             HuggingFaceEmbedder()
@@ -487,6 +489,7 @@ class TestFactories:
 
     def test_chat_sync_runs_in_event_loop(self) -> None:
         """chat_sync should delegate to chat() and return the result."""
+
         # Test the base class chat_sync method
         class FakeLLM(LLMProvider):
             async def chat(self, prompt: str, *, model: str | None = None) -> str:
@@ -500,12 +503,12 @@ class TestFactories:
         """get_llm(None) should use module-level config from memex.engine.core.config."""
         from unittest.mock import patch as _patch
 
-        with _patch("memex.engine.core.config.LLM_PROVIDER", "ollama"), _patch(
-            "memex.engine.core.config.LLM_BASE_URL", ""
-        ), _patch("memex.engine.core.config.LLM_API_KEY", ""), _patch(
-            "memex.engine.core.config.CHAT_MODEL", "test-model"
-        ), _patch(
-            "memex.engine.core.config.OLLAMA_EMBED_URL", "http://localhost:11434"
+        with (
+            _patch("memex.engine.core.config.LLM_PROVIDER", "ollama"),
+            _patch("memex.engine.core.config.LLM_BASE_URL", ""),
+            _patch("memex.engine.core.config.LLM_API_KEY", ""),
+            _patch("memex.engine.core.config.CHAT_MODEL", "test-model"),
+            _patch("memex.engine.core.config.OLLAMA_EMBED_URL", "http://localhost:11434"),
         ):
             from memex.engine.llm import get_llm
 
@@ -522,6 +525,7 @@ class TestEmbedProviderABC:
 
     def test_subclass_must_implement_embed(self) -> None:
         """Instantiating subclass without embed should fail."""
+
         class Incomplete(EmbedProvider):
             pass
 
@@ -534,6 +538,7 @@ class TestLLMProviderABC:
 
     def test_subclass_must_implement_chat(self) -> None:
         """Instantiating subclass without chat should fail."""
+
         class Incomplete(LLMProvider):
             pass
 

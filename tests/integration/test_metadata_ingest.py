@@ -222,23 +222,29 @@ class TestEntityExtractionLLM:
             pytest.skip("Ollama not reachable")
         return httpx.Client(timeout=60.0)
 
-    def test_extract_entities_returns_dict(self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.fixture
+    def ollama_llm(self) -> object:
+        from memex.engine.llm.ollama import OllamaLLM
+
+        return OllamaLLM(base_url="http://localhost:11434", model="qwen3.5:0.8b", timeout=60.0)
+
+    def test_extract_entities_returns_dict(self, ollama_llm: object, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("memex.engine.core.config.ENABLE_METADATA_EXTRACTION", True)
         monkeypatch.setattr("memex.engine.core.config.ENABLE_ENTITY_EXTRACTION", True)
         monkeypatch.setattr("memex.engine.core.config.CHAT_MODEL", "qwen3.5:0.8b")
 
-        extractor = MetadataExtractor(ollama_client)
+        extractor = MetadataExtractor(ollama_llm)  # type: ignore[arg-type]
         entities = extractor.extract_entities("Alice Smith from Acme Corp reported revenue of $10M in New York.")
         assert isinstance(entities, dict)
 
     def test_extract_entities_returns_valid_structure(
-        self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch
+        self, ollama_llm: object, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr("memex.engine.core.config.ENABLE_METADATA_EXTRACTION", True)
         monkeypatch.setattr("memex.engine.core.config.ENABLE_ENTITY_EXTRACTION", True)
         monkeypatch.setattr("memex.engine.core.config.CHAT_MODEL", "qwen3.5:0.8b")
 
-        extractor = MetadataExtractor(ollama_client)
+        extractor = MetadataExtractor(ollama_llm)  # type: ignore[arg-type]
         entities = extractor.extract_entities(
             "Alice Smith from Acme Corp launched Widget Pro in New York on 2026-01-15."
         )
@@ -252,17 +258,17 @@ class TestEntityExtractionLLM:
 @pytest.mark.integration
 class TestTopicExtractionLLM:
     @pytest.fixture
-    def ollama_client(self) -> httpx.Client:
-        if not _ollama_reachable():
-            pytest.skip("Ollama not reachable")
-        return httpx.Client(timeout=60.0)
+    def ollama_llm(self) -> object:
+        from memex.engine.llm.ollama import OllamaLLM
 
-    def test_extract_topics_returns_list(self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch) -> None:
+        return OllamaLLM(base_url="http://localhost:11434", model="qwen3.5:0.8b", timeout=60.0)
+
+    def test_extract_topics_returns_list(self, ollama_llm: object, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("memex.engine.core.config.ENABLE_METADATA_EXTRACTION", True)
         monkeypatch.setattr("memex.engine.core.config.ENABLE_TOPIC_TAGGING", True)
         monkeypatch.setattr("memex.engine.core.config.CHAT_MODEL", "qwen3.5:0.8b")
 
-        extractor = MetadataExtractor(ollama_client)
+        extractor = MetadataExtractor(ollama_llm)  # type: ignore[arg-type]
         topics = extractor.extract_topics("This document covers quarterly financial analysis and revenue forecasting.")
         assert isinstance(topics, list)
 
@@ -270,14 +276,12 @@ class TestTopicExtractionLLM:
 @pytest.mark.integration
 class TestDocumentClassificationLLM:
     @pytest.fixture
-    def ollama_client(self) -> httpx.Client:
-        if not _ollama_reachable():
-            pytest.skip("Ollama not reachable")
-        return httpx.Client(timeout=60.0)
+    def ollama_llm(self) -> object:
+        from memex.engine.llm.ollama import OllamaLLM
 
-    def test_classify_document_returns_valid_type(
-        self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+        return OllamaLLM(base_url="http://localhost:11434", model="qwen3.5:0.8b", timeout=60.0)
+
+    def test_classify_document_returns_valid_type(self, ollama_llm: object, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("memex.engine.core.config.ENABLE_METADATA_EXTRACTION", True)
         monkeypatch.setattr("memex.engine.core.config.ENABLE_DOC_CLASSIFICATION", True)
         monkeypatch.setattr("memex.engine.core.config.CHAT_MODEL", "qwen3.5:0.8b")
@@ -296,7 +300,7 @@ class TestDocumentClassificationLLM:
             "other",
             "unknown",
         }
-        extractor = MetadataExtractor(ollama_client)
+        extractor = MetadataExtractor(ollama_llm)  # type: ignore[arg-type]
         doc_type = extractor.classify_document("This quarterly report presents financial results for Q3 2026.")
         assert doc_type in valid
 
@@ -335,12 +339,12 @@ class TestExtractAllIntegration:
         assert "topics" not in metadata
 
     @pytest.fixture
-    def ollama_client(self) -> httpx.Client:
-        if not _ollama_reachable():
-            pytest.skip("Ollama not reachable")
-        return httpx.Client(timeout=60.0)
+    def ollama_llm(self) -> object:
+        from memex.engine.llm.ollama import OllamaLLM
 
-    def test_extract_all_with_llm_features(self, ollama_client: httpx.Client, monkeypatch: pytest.MonkeyPatch) -> None:
+        return OllamaLLM(base_url="http://localhost:11434", model="qwen3.5:0.8b", timeout=60.0)
+
+    def test_extract_all_with_llm_features(self, ollama_llm: object, monkeypatch: pytest.MonkeyPatch) -> None:
         if not _langdetect_available():
             pytest.skip("langdetect not installed")
 
@@ -351,7 +355,7 @@ class TestExtractAllIntegration:
         monkeypatch.setattr("memex.engine.core.config.ENABLE_LANGUAGE_DETECTION", True)
         monkeypatch.setattr("memex.engine.core.config.CHAT_MODEL", "qwen3.5:0.8b")
 
-        extractor = MetadataExtractor(ollama_client)
+        extractor = MetadataExtractor(ollama_llm)  # type: ignore[arg-type]
         chunk = {
             "content": "Alice Smith from Acme Corp reported revenue of $10M on 2026-01-15.",
             "section_header": "## Revenue",

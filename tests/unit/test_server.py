@@ -216,9 +216,7 @@ class TestRagIngestBatch:
         items = ["https://example.com/doc"]
         with patch("memex.engine.ingestion.ingestion.IngestionOrchestrator") as mock_orch_class:
             mock_orch = mock_orch_class.return_value
-            mock_orch.ingest_batch = AsyncMock(return_value={
-                items[0]: "Success (2 chunks, 1.0s conversion)"
-            })
+            mock_orch.ingest_batch = AsyncMock(return_value={items[0]: "Success (2 chunks, 1.0s conversion)"})
 
             result = await rag_ingest_batch(
                 IngestBatchInput(items=items),
@@ -314,9 +312,7 @@ class TestRagQuery:
             mock_config.ENABLE_ANSWER = False
             mock_config.CHARACTER_LIMIT = 25000
 
-            result = await rag_query(
-                QueryInput(query="revenue", top_k=5, use_reranking=True)
-            )
+            result = await rag_query(QueryInput(query="revenue", top_k=5, use_reranking=True))
 
             assert isinstance(result, str)
             assert "Search Results" in result
@@ -337,9 +333,7 @@ class TestRagQuery:
             mock_config.MMR_FETCH_K = 20
             mock_config.MMR_LAMBDA_MULT = 0.5
 
-            result = await rag_query(
-                QueryInput(query="revenue", top_k=5, search_mode="mmr")
-            )
+            result = await rag_query(QueryInput(query="revenue", top_k=5, search_mode="mmr"))
 
             assert isinstance(result, str)
             assert "Search Results" in result
@@ -388,9 +382,7 @@ class TestRagQuery:
             mock_config.SEARCH_MODE = "hybrid"
             mock_config.ENABLE_ANSWER = False
 
-            result = await rag_query(
-                QueryInput(query="nonexistent", top_k=5)
-            )
+            result = await rag_query(QueryInput(query="nonexistent", top_k=5))
 
             assert "No results found" in result
 
@@ -466,9 +458,7 @@ class TestRagQuery:
                     sources=["/docs/report.pdf"],
                 )
 
-                result = await rag_query(
-                    QueryInput(query="revenue", top_k=5, generate_answer=True)
-                )
+                result = await rag_query(QueryInput(query="revenue", top_k=5, generate_answer=True))
 
                 assert isinstance(result, str)
                 assert "Revenue was $10M [1]." in result
@@ -500,9 +490,7 @@ class TestRagQuery:
                     sources=[],
                 )
 
-                result = await rag_query(
-                    QueryInput(query="quantum physics", top_k=5, generate_answer=True)
-                )
+                result = await rag_query(QueryInput(query="quantum physics", top_k=5, generate_answer=True))
 
                 assert isinstance(result, str)
                 assert "not contain enough information" in result
@@ -532,9 +520,7 @@ class TestRagQuery:
                     sources=[],
                 )
 
-                result = await rag_query(
-                    QueryInput(query="revenue", top_k=5, generate_answer=True)
-                )
+                result = await rag_query(QueryInput(query="revenue", top_k=5, generate_answer=True))
 
                 # Should return the refusal message as markdown
                 assert isinstance(result, str)
@@ -583,9 +569,7 @@ class TestRagQuery:
             mock_config.MMR_FETCH_K = 20
             mock_config.MMR_LAMBDA_MULT = 0.5
 
-            await rag_query(
-                QueryInput(query="revenue", top_k=5, search_mode="mmr")
-            )
+            await rag_query(QueryInput(query="revenue", top_k=5, search_mode="mmr"))
 
             # MMR should be used even though config says hybrid
             mock_engine.mmr_search.assert_called_once()

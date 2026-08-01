@@ -8,6 +8,19 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from memex.engine.evaluation import (
+    BenchmarkResult,
+    EvalDataset,
+    EvalRunner,
+    PerformanceBenchmark,
+    compute_all_metrics,
+    hit_at_k,
+    keyword_coverage,
+    mean_reciprocal_rank,
+    ndcg_at_k,
+    precision_at_k,
+    recall_at_k,
+)
 from memex.engine.evaluation.golden import GoldenQuery, GoldenSet, match_source
 from memex.engine.evaluation.metrics import (
     EvalResult,
@@ -27,19 +40,6 @@ from memex.engine.evaluation.metrics import (
     recall_at_k as new_recall_at_k,
 )
 from memex.engine.evaluation.sweep import sweep
-from memex.engine.evaluation import (
-    BenchmarkResult,
-    EvalDataset,
-    EvalRunner,
-    PerformanceBenchmark,
-    compute_all_metrics,
-    hit_at_k,
-    keyword_coverage,
-    mean_reciprocal_rank,
-    ndcg_at_k,
-    precision_at_k,
-    recall_at_k,
-)
 
 # ── hit_at_k tests ──────────────────────────────────────────────────────────
 
@@ -484,9 +484,7 @@ class TestGoldenSetYAML:
     def test_load_from_yaml_mapping(self, tmp_path: Path) -> None:
         path = tmp_path / "golden.yaml"
         path.write_text(
-            "queries:\n"
-            "  - query: q1\n"
-            "    expected_sources: [a.pdf]\n",
+            "queries:\n  - query: q1\n    expected_sources: [a.pdf]\n",
             encoding="utf-8",
         )
 
@@ -497,10 +495,7 @@ class TestGoldenSetYAML:
     def test_yaml_with_filters(self, tmp_path: Path) -> None:
         path = tmp_path / "golden.yaml"
         path.write_text(
-            "- query: q1\n"
-            "  expected_sources: [a.pdf]\n"
-            "  filters:\n"
-            "    company_name: apple\n",
+            "- query: q1\n  expected_sources: [a.pdf]\n  filters:\n    company_name: apple\n",
             encoding="utf-8",
         )
 
@@ -510,8 +505,7 @@ class TestGoldenSetYAML:
     def test_yaml_single_string_expected(self, tmp_path: Path) -> None:
         path = tmp_path / "golden.yaml"
         path.write_text(
-            "- query: q1\n"
-            "  expected_sources: a.pdf\n",
+            "- query: q1\n  expected_sources: a.pdf\n",
             encoding="utf-8",
         )
 
@@ -747,12 +741,20 @@ class TestEvalResult:
 class TestSweep:
     def test_two_variants(self) -> None:
         baseline = EvalResult(
-            avg_recall=0.5, avg_precision=0.4, avg_hit_rate=0.6,
-            avg_mrr=0.45, avg_keyword_coverage=0.7, total_queries=5,
+            avg_recall=0.5,
+            avg_precision=0.4,
+            avg_hit_rate=0.6,
+            avg_mrr=0.45,
+            avg_keyword_coverage=0.7,
+            total_queries=5,
         )
         improved = EvalResult(
-            avg_recall=0.8, avg_precision=0.7, avg_hit_rate=0.9,
-            avg_mrr=0.75, avg_keyword_coverage=0.85, total_queries=5,
+            avg_recall=0.8,
+            avg_precision=0.7,
+            avg_hit_rate=0.9,
+            avg_mrr=0.75,
+            avg_keyword_coverage=0.85,
+            total_queries=5,
         )
 
         result = sweep([("baseline", baseline), ("improved", improved)])
@@ -772,12 +774,20 @@ class TestSweep:
 
     def test_delta_sign(self) -> None:
         baseline = EvalResult(
-            avg_recall=0.8, avg_precision=0.8, avg_hit_rate=0.8,
-            avg_mrr=0.8, avg_keyword_coverage=0.8, total_queries=1,
+            avg_recall=0.8,
+            avg_precision=0.8,
+            avg_hit_rate=0.8,
+            avg_mrr=0.8,
+            avg_keyword_coverage=0.8,
+            total_queries=1,
         )
         worse = EvalResult(
-            avg_recall=0.5, avg_precision=0.5, avg_hit_rate=0.5,
-            avg_mrr=0.5, avg_keyword_coverage=0.5, total_queries=1,
+            avg_recall=0.5,
+            avg_precision=0.5,
+            avg_hit_rate=0.5,
+            avg_mrr=0.5,
+            avg_keyword_coverage=0.5,
+            total_queries=1,
         )
 
         result = sweep([("baseline", baseline), ("worse", worse)])
