@@ -28,6 +28,7 @@ contextual_vecs = embed(strip_context_prefix(...))   # raw      → "contextual_
 ```
 
 At search time (line 778):
+
 ```
 dense_vector_name = "contextual_dense" if effective_contextual else "dense"
 ```
@@ -48,7 +49,7 @@ sequential path (line 165) which checks:
 if strategy == "surrounding":
     contexts = _batch_context_from_surrounding(...)
 else:
-    contexts = [_context_from_header(...)]   # ← "summary" lands here
+    contexts = [_context_from_header(...)]  # ← "summary" lands here
 ```
 
 Result: all chunks get `_context_from_header()` instead of
@@ -251,12 +252,12 @@ Instead of sequential embedding (dense+sparse → wait → contextual):
 
 ```python
 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-    dense_future       = pool.submit(embed, raw_texts)      # "dense"
-    sparse_future      = pool.submit(sparse_embed, chunk_texts)
-    contextual_future  = pool.submit(embed, chunk_texts)    # "contextual_dense"
-    dense_vecs         = dense_future.result()
-    sparse_vecs        = sparse_future.result()
-    contextual_vecs    = contextual_future.result()
+    dense_future = pool.submit(embed, raw_texts)  # "dense"
+    sparse_future = pool.submit(sparse_embed, chunk_texts)
+    contextual_future = pool.submit(embed, chunk_texts)  # "contextual_dense"
+    dense_vecs = dense_future.result()
+    sparse_vecs = sparse_future.result()
+    contextual_vecs = contextual_future.result()
 ```
 
 ### 2D: MMR search — same dense/sparse parallelism

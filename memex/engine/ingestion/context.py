@@ -136,8 +136,7 @@ class ContextGenerator:
 
         if strategy == "header":
             return [
-                self._apply_chunk_context(c, self._context_from_header(c.get("section_header", "")))
-                for c in chunks
+                self._apply_chunk_context(c, self._context_from_header(c.get("section_header", ""))) for c in chunks
             ]
 
         # LLM-based strategies: batch chunks
@@ -222,7 +221,9 @@ class ContextGenerator:
         if len(lines) < len(batch):
             logger.debug(
                 "Batch context parse: got %d lines for %d chunks (model=%s)",
-                len(lines), len(batch), config.CONTEXT_MODEL or config.CHAT_MODEL,
+                len(lines),
+                len(batch),
+                config.CONTEXT_MODEL or config.CHAT_MODEL,
             )
         while len(lines) < len(batch):
             lines.append("")

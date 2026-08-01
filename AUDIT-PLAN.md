@@ -1,8 +1,36 @@
 # Memex RAG — Comprehensive Audit & Fix Plan
 
-**Date**: 2026-07-29
+**Date**: 2026-07-29 (updated 2026-08-01)
 **Auditor**: Performance Engineer (AI)
 **Scope**: Architecture, Docker, RAG pipeline, MCP API, coding standards, security, performance, testing, dependencies
+
+---
+
+## 2026-08-01 Update: Contextual Retrieval + Search Pipeline Fixes
+
+### Issues Found
+
+| # | Severity | Issue | Root Cause |
+|---|----------|-------|------------|
+| C1 | Critical | `context_prefix` empty on most chunks | Single-batch docs bypass summary strategy; batch LLM failures silently produce empty contexts |
+| C2 | Critical | Inverted vector assignment | `dense` embedded enriched text, `contextual_dense` embedded raw text |
+| C3 | High | Event-loop-is-closed crash | `chat_sync` uses `asyncio.run()` inside `ThreadPoolExecutor` threads |
+| C4 | Medium | Search queries sequential | Dense + sparse + HyDE + multi-query Qdrant queries ran one after another |
+| C5 | Medium | No startup compatibility check | Collections without `contextual_dense` vector silently degraded |
+
+### Fixes Delivered (commits `39d59ee`, `6702fcc`)
+
+| Fix | What |
+|-----|------|
+| Vector swap | `dense` ← raw content, `contextual_dense` ← enriched content |
+| Batch routing | Single-batch docs use `_batch_context_from_summary`, not header fallback |
+| Resilience chain | Batch → per-chunk → header → empty; catches all failure modes |
+| Thread safety | Removed `ThreadPoolExecutor` from LLM calls; sequential by design since Ollama serializes |
+| Search parallelism | Dense + sparse + contextual embeddings run in one pool; dense + sparse + HyDE + multi-query Qdrant queries parallelized |
+| Startup check | Warns if `contextual_dense` vector missing from collection |
+| Parse logging | Debug logs when batch context parsing returns fewer lines than expected |
+
+### Test Coverage: 561/561 unit tests pass (4 new tests added)
 
 ---
 
