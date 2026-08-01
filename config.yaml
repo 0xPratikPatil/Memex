@@ -20,7 +20,7 @@ embedding:
   # provider: openai                       #   openai: needs api_key below
   # provider: huggingface                  #   huggingface: model is HF repo name
   # provider: fastembed                    #   fastembed: in-process, no network
-  model: qwen3-embedding:0.6b             # ollama model name
+  model: bge-m3             # ollama model name
   # model: snowflake-arctic-embed2:latest  #   alt ollama (1024d)
   # model: nomic-embed-text:latest         #   alt ollama (768d)
   # model: text-embedding-3-small          #   for openai provider
@@ -70,7 +70,7 @@ chunking:
   overlap: 128                             # token overlap between chunks
   min_length: 30                           # skip chunks shorter than this
   merge_peers: true                        # merge small neighbor chunks
-  tokenizer: Qwen/Qwen3-Embedding-0.6B     # HF tokenizer for token-counting
+  tokenizer: BAAI/bge-m3       # HF tokenizer for token-counting
 
 # ── Sparse Embeddings (BM25) ──────────────────────────────────────────────────
 sparse:
@@ -84,7 +84,7 @@ reranker:
   # enabled: false                         #   skip reranking entirely
   provider: docker                         # docker (ml-services container) | local (sentence-transformers)
   # provider: local                        #   in-process, GPU if available
-  model: Qwen/Qwen3-Reranker-0.6B
+  model: BAAI/bge-reranker-base
   fallback_model: BAAI/bge-reranker-base
   type: auto                               # auto | cross-encoder | causal-lm
 

@@ -80,43 +80,21 @@ class QueryExpander:
 
         effective_query = result.rewritten or query
 
-        hyde_task = None
-        multi_task = None
-
+        # HyDE and Multi-Query run sequentially to avoid Event-loop-is-closed
+        # errors from asyncio.run() inside ThreadPoolExecutor threads.
         if config.ENABLE_HYDE:
-            hyde_task = self._hyde_embed
+            try:
+                result.hyde_vector = self._hyde_embed(effective_query)
+                logger.debug("HyDE vector computed (%d dims)", len(result.hyde_vector))
+            except Exception:
+                logger.warning("HyDE failed, skipping", exc_info=True)
+
         if config.ENABLE_MULTI_QUERY:
-            multi_task = self._multi_query
-
-        if hyde_task and multi_task:
-            import concurrent.futures
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                hyde_future = pool.submit(hyde_task, effective_query)
-                multi_future = pool.submit(multi_task, effective_query)
-                try:
-                    result.hyde_vector = hyde_future.result()
-                    logger.debug("HyDE vector computed (%d dims)", len(result.hyde_vector))
-                except Exception:
-                    logger.warning("HyDE failed, skipping", exc_info=True)
-                try:
-                    result.paraphrases = multi_future.result()
-                    logger.debug("Generated %d paraphrases", len(result.paraphrases))
-                except Exception:
-                    logger.warning("Multi-query failed, skipping", exc_info=True)
-        else:
-            if hyde_task:
-                try:
-                    result.hyde_vector = hyde_task(effective_query)
-                    logger.debug("HyDE vector computed (%d dims)", len(result.hyde_vector))
-                except Exception:
-                    logger.warning("HyDE failed, skipping", exc_info=True)
-            if multi_task:
-                try:
-                    result.paraphrases = multi_task(effective_query)
-                    logger.debug("Generated %d paraphrases", len(result.paraphrases))
-                except Exception:
-                    logger.warning("Multi-query failed, skipping", exc_info=True)
+            try:
+                result.paraphrases = self._multi_query(effective_query)
+                logger.debug("Generated %d paraphrases", len(result.paraphrases))
+            except Exception:
+                logger.warning("Multi-query failed, skipping", exc_info=True)
 
         if config.ENABLE_CACHE:
             try:

@@ -148,20 +148,14 @@ class ContextGenerator:
             batch = chunks[batch_start : batch_start + batch_size]
             all_batches.append((batch, batch_start))
 
-        # For summary strategy, batches are independent — run concurrently when >1
+        # For summary strategy, process batches sequentially.
+        # Ollama processes requests sequentially anyway, and using
+        # ThreadPoolExecutor causes "Event loop is closed" errors
+        # when asyncio.run() creates/destroys event loops in threads.
         if strategy == "summary":
-            if len(all_batches) > 1:
-                import concurrent.futures
-
-                def _process_batch(bi: tuple[list[dict[str, Any]], int]) -> tuple[int, list[str]]:
-                    batch, bs = bi
-                    return bs, self._batch_context_from_summary(batch, document_summary)
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-                    batch_results = dict(pool.map(_process_batch, all_batches))
-            else:
-                batch, batch_start = all_batches[0]
-                batch_results = {batch_start: self._batch_context_from_summary(batch, document_summary)}
+            batch_results: dict[int, list[str]] = {}
+            for batch, batch_start in all_batches:
+                batch_results[batch_start] = self._batch_context_from_summary(batch, document_summary)
 
             enriched: list[dict[str, Any]] = []
             for batch, batch_start in all_batches:
