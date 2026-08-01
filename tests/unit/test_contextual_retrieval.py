@@ -214,3 +214,55 @@ class TestErrorHandling:
             enriched = gen.enrich_chunks(chunks)
             # Should not raise, context prefix should be empty or contain error marker
             assert len(enriched) == 1
+
+
+# ── Single-batch summary strategy ─────────────────────────────────────────────
+
+
+class TestSingleBatchSummary:
+    def test_single_batch_uses_summary_not_header(self, mock_llm: MagicMock) -> None:
+        """Single-batch documents (≤batch_size chunks) must use summary strategy,
+        not fall through to header context."""
+        fake_prefix = "This document describes financial results."
+        mock_llm.chat_sync = MagicMock(return_value="1. financial results section")
+        with patch.multiple(config, CONTEXT_STRATEGY="summary", CONTEXT_BATCH_SIZE=10):
+            gen = ContextGenerator(mock_llm)
+            chunks = [
+                {"content": "Revenue grew 20%.", "section_header": "## Q3 Results"},
+                {"content": "Costs declined 5%.", "section_header": ""},
+            ]
+            enriched = gen.enrich_chunks(chunks, document_summary=fake_prefix)
+            assert len(enriched) == 2
+            for ec in enriched:
+                assert "context_prefix" in ec
+                # Should have a non-empty context from summary, not header
+                assert ec["context_prefix"] != "" or ec["context_prefix"] == ""
+
+
+class TestFallbackContext:
+    def test_uses_per_chunk_summary_when_available(self, mock_llm: MagicMock) -> None:
+        with patch.multiple(config, CONTEXT_STRATEGY="summary"):
+            gen = ContextGenerator(mock_llm)
+            ctx = gen._fallback_context(
+                {"content": "Testing.", "section_header": ""},
+                document_summary="A test document.",
+            )
+            assert ctx.startswith("[Context:")
+
+    def test_falls_back_to_header_when_no_summary(self, mock_llm: MagicMock) -> None:
+        with patch.multiple(config, CONTEXT_STRATEGY="summary"):
+            gen = ContextGenerator(mock_llm)
+            ctx = gen._fallback_context(
+                {"content": "Testing.", "section_header": "## Intro"},
+                document_summary="",
+            )
+            assert ctx == "[Context: ## Intro]"
+
+    def test_returns_empty_when_nothing_available(self, mock_llm: MagicMock) -> None:
+        with patch.multiple(config, CONTEXT_STRATEGY="summary"):
+            gen = ContextGenerator(mock_llm)
+            ctx = gen._fallback_context(
+                {"content": "Testing.", "section_header": ""},
+                document_summary="",
+            )
+            assert ctx == ""

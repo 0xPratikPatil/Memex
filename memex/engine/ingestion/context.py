@@ -97,6 +97,17 @@ class ContextGenerator:
         response = self._chat(prompt)
         return f"[Context: {response.strip()}]"
 
+    def _apply_chunk_context(
+        self,
+        chunk: dict[str, Any],
+        context: str,
+    ) -> dict[str, Any]:
+        enriched_chunk = {**chunk}
+        enriched_chunk["context_prefix"] = context
+        if context:
+            enriched_chunk["content"] = f"{context} {chunk['content']}".strip()
+        return enriched_chunk
+
     def enrich_chunks(
         self,
         chunks: list[dict[str, Any]],
@@ -108,8 +119,15 @@ class ContextGenerator:
           - ``context_prefix``: the generated context string
           - ``content``: original content prefixed with the context
 
-        For LLM-based strategies (summary, surrounding), chunks are processed
-        in batches of ``CONTEXT_BATCH_SIZE`` to reduce LLM round-trips.
+        Context generation follows a resilience chain:
+          1. Batch LLM call (summary or surrounding strategy)
+          2. Per-chunk LLM fallback on parse gaps
+          3. Section-header fallback on LLM failure
+          4. Empty string (no prefix) as last resort
+
+        For LLM-based strategies, chunks are processed in batches of
+        ``CONTEXT_BATCH_SIZE`` to reduce LLM round-trips. Summary batches
+        are run concurrently when there are multiple batches.
         """
         if not chunks:
             return chunks
@@ -117,74 +135,76 @@ class ContextGenerator:
         strategy = config.CONTEXT_STRATEGY.lower()
 
         if strategy == "header":
-            enriched: list[dict[str, Any]] = []
-            for chunk in chunks:
-                context = self._context_from_header(chunk.get("section_header", ""))
-                enriched_chunk = {**chunk}
-                enriched_chunk["context_prefix"] = context
-                if context:
-                    enriched_chunk["content"] = f"{context} {chunk['content']}".strip()
-                enriched.append(enriched_chunk)
-            return enriched
+            return [
+                self._apply_chunk_context(c, self._context_from_header(c.get("section_header", "")))
+                for c in chunks
+            ]
 
         # LLM-based strategies: batch chunks
         batch_size = config.CONTEXT_BATCH_SIZE
 
-        # Build all batches first
         all_batches: list[tuple[list[dict[str, Any]], int]] = []
         for batch_start in range(0, len(chunks), batch_size):
             batch = chunks[batch_start : batch_start + batch_size]
             all_batches.append((batch, batch_start))
 
-        # For summary strategy, all batches are independent — run concurrently
-        if strategy == "summary" and len(all_batches) > 1:
-            import concurrent.futures
+        # For summary strategy, batches are independent — run concurrently when >1
+        if strategy == "summary":
+            if len(all_batches) > 1:
+                import concurrent.futures
 
-            def _process_summary_batch(
-                batch_info: tuple[list[dict[str, Any]], int],
-            ) -> tuple[int, list[str]]:
-                batch, batch_start = batch_info
-                contexts = self._batch_context_from_summary(batch, document_summary)
-                return batch_start, contexts
+                def _process_batch(bi: tuple[list[dict[str, Any]], int]) -> tuple[int, list[str]]:
+                    batch, bs = bi
+                    return bs, self._batch_context_from_summary(batch, document_summary)
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-                batch_results = dict(pool.map(_process_summary_batch, all_batches))
+                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+                    batch_results = dict(pool.map(_process_batch, all_batches))
+            else:
+                batch, batch_start = all_batches[0]
+                batch_results = {batch_start: self._batch_context_from_summary(batch, document_summary)}
 
-            enriched = []
-            for batch_start in range(0, len(chunks), batch_size):
-                batch = chunks[batch_start : batch_start + batch_size]
+            enriched: list[dict[str, Any]] = []
+            for batch, batch_start in all_batches:
                 contexts = batch_results[batch_start]
                 for chunk, context in zip(batch, contexts, strict=True):
-                    enriched_chunk = {**chunk}
-                    enriched_chunk["context_prefix"] = context
-                    if context:
-                        enriched_chunk["content"] = f"{context} {chunk['content']}".strip()
-                    enriched.append(enriched_chunk)
+                    if not context:
+                        context = self._fallback_context(chunk, document_summary)
+                    enriched.append(self._apply_chunk_context(chunk, context))
             return enriched
 
-        # Sequential path for surrounding/header strategies
+        # Surrounding strategy
         enriched = []
         for batch, batch_start in all_batches:
-            if strategy == "surrounding":
-                contexts = self._batch_context_from_surrounding(chunks, batch_start, batch_size)
-            else:
-                contexts = [self._context_from_header(c.get("section_header", "")) for c in batch]
-
+            contexts = self._batch_context_from_surrounding(chunks, batch_start, batch_size)
             for chunk, context in zip(batch, contexts, strict=True):
-                enriched_chunk = {**chunk}
-                enriched_chunk["context_prefix"] = context
-                if context:
-                    enriched_chunk["content"] = f"{context} {chunk['content']}".strip()
-                enriched.append(enriched_chunk)
+                if not context:
+                    context = self._context_from_header(chunk.get("section_header", ""))
+                enriched.append(self._apply_chunk_context(chunk, context))
 
         return enriched
+
+    def _fallback_context(self, chunk: dict[str, Any], document_summary: str) -> str:
+        """Resilience chain: per-chunk summary → header → empty."""
+        if document_summary:
+            try:
+                ctx = self._context_from_summary(chunk["content"], document_summary)
+                if ctx:
+                    return ctx
+            except Exception:
+                logger.debug("Per-chunk context fallback failed for chunk: %s...", chunk["content"][:60])
+        return self._context_from_header(chunk.get("section_header", ""))
 
     def _batch_context_from_summary(
         self,
         batch: list[dict[str, Any]],
         summary: str,
     ) -> list[str]:
-        """Generate context for a batch of chunks using document summary."""
+        """Generate context for a batch of chunks using document summary.
+
+        Returns a list of context strings, one per chunk. Empty strings
+        indicate contexts that could not be generated; the caller's
+        resilience chain handles fallback.
+        """
         if not summary:
             return [""] * len(batch)
 
@@ -198,10 +218,18 @@ class ContextGenerator:
             f"Output exactly {len(batch)} lines, one prefix per chunk, "
             "numbered like: 1. prefix text\n2. prefix text\n..."
         )
-        response = self._chat(prompt)
-        # Parse numbered lines: "1. context" or "1) context"
+        try:
+            response = self._chat(prompt)
+        except Exception:
+            logger.warning("Batch context LLM call failed, returning empty contexts", exc_info=True)
+            return [""] * len(batch)
+
         lines = re.findall(r"(?:^|\n)\s*\d+[.)]\s*(.+)", response)
-        # Pad or truncate to match batch size
+        if len(lines) < len(batch):
+            logger.debug(
+                "Batch context parse: got %d lines for %d chunks (model=%s)",
+                len(lines), len(batch), config.CONTEXT_MODEL or config.CHAT_MODEL,
+            )
         while len(lines) < len(batch):
             lines.append("")
         return [f"[Context: {p.strip()}]" if p.strip() else "" for p in lines[: len(batch)]]
@@ -249,7 +277,11 @@ class ContextGenerator:
             f"Output exactly {len(batch)} lines, one prefix per chunk, "
             "numbered like: 1. prefix text\n2. prefix text\n..."
         )
-        response = self._chat(prompt, num_predict=200 * len(batch))
+        try:
+            response = self._chat(prompt, num_predict=200 * len(batch))
+        except Exception:
+            logger.warning("Batch surrounding context LLM call failed, returning empty contexts", exc_info=True)
+            return [""] * len(batch)
         # Parse numbered lines
         lines = re.findall(r"(?:^|\n)\s*\d+[.)]\s*(.+)", response)
         while len(lines) < len(batch):

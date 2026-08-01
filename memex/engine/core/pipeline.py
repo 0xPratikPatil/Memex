@@ -398,6 +398,24 @@ class RAGEngine:
                 except Exception:
                     logger.debug("Payload index already exists for %s", _field_name)
 
+        # Warn if contextual retrieval is enabled but collection has no contextual_dense vector
+        if config.ENABLE_CONTEXTUAL_RETRIEVAL:
+            try:
+                info = qdrant.get_collection(config.COLLECTION_NAME)
+                vectors = info.config.params.vectors
+                vectors_dict: dict[str, Any] = {}
+                if vectors is not None and (isinstance(vectors, dict) or hasattr(vectors, "items")):
+                    vectors_dict = {k: v for k, v in vectors.items()}
+                if "contextual_dense" not in vectors_dict:
+                    logger.warning(
+                        "contextual_retrieval is enabled but collection '%s' has no "
+                        "contextual_dense vector. Existing chunks will not benefit "
+                        "from contextual search. Re-ingest affected documents.",
+                        config.COLLECTION_NAME,
+                    )
+            except Exception:
+                logger.debug("Could not check collection vectors for contextual_dense", exc_info=True)
+
     # ── Embedding helpers ─────────────────────────────────────────────────
 
     def _get_embedding_service(self) -> EmbeddingService:
@@ -621,21 +639,26 @@ class RAGEngine:
 
         _progress(f"Generating embeddings ({len(raw_chunks)} chunks)...", 75)
         chunk_texts = [c["content"] for c in raw_chunks]
+        raw_texts = [strip_context_prefix(c["content"]) for c in raw_chunks]
 
-        # Dense and sparse embedding are independent — run concurrently
+        # Dense (raw), sparse (enriched), and contextual dense (enriched) are
+        # independent — run all three concurrently to minimise latency
         import concurrent.futures
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            dense_future = pool.submit(self._dense_embed_batch, chunk_texts)
+        contextual_vecs: list[list[float]] | None = None
+        max_workers = 3 if config.ENABLE_CONTEXTUAL_RETRIEVAL else 2
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            dense_future = pool.submit(self._dense_embed_batch, raw_texts)
             sparse_future = pool.submit(self._sparse_embed, chunk_texts)
+            if config.ENABLE_CONTEXTUAL_RETRIEVAL:
+                contextual_future = pool.submit(self._dense_embed_batch, chunk_texts)
+            else:
+                contextual_future = None
+
             dense_vecs = dense_future.result()
             sparse_vecs = sparse_future.result()
-
-        # Generate contextual embeddings (enriched content) if enabled
-        contextual_vecs: list[list[float]] | None = None
-        if config.ENABLE_CONTEXTUAL_RETRIEVAL:
-            raw_texts = [strip_context_prefix(c["content"]) for c in raw_chunks]
-            contextual_vecs = self._dense_embed_batch(raw_texts)
+            if contextual_future is not None:
+                contextual_vecs = contextual_future.result()
 
         _progress("Storing in Qdrant...", 90)
         now = datetime.now(UTC).isoformat()
@@ -789,27 +812,86 @@ class RAGEngine:
                     filter_conditions.append(FieldCondition(key=key, match=MatchValue(value=str(value).lower())))
         qdrant_filter: Filter | None = Filter(must=filter_conditions) if filter_conditions else None  # type: ignore[arg-type]
 
-        # ── Dense search (original / rewritten query) ──────────────────────
-        t_qdrant = time.monotonic()
-        dense_hits = qdrant.query_points(
-            collection_name=config.COLLECTION_NAME,
-            query=query_dense,
-            using=dense_vector_name,
-            limit=candidate_k,
-            query_filter=qdrant_filter,
-        ).points
-        _record_eval_timing("dense_search", (time.monotonic() - t_qdrant) * 1000)
+        # ── Prepare all search tasks ────────────────────────────────────────
+        import concurrent.futures
 
-        # ── Sparse search ──────────────────────────────────────────────────
-        t_sparse = time.monotonic()
-        sparse_hits = qdrant.query_points(
-            collection_name=config.COLLECTION_NAME,
-            query=SparseVector(indices=q_indices, values=q_values),
-            using="sparse",
-            limit=candidate_k,
-            query_filter=qdrant_filter,
-        ).points
-        _record_eval_timing("sparse_search", (time.monotonic() - t_sparse) * 1000)
+        # Pre-compute paraphrase embeddings if multi-query expansion is active
+        para_vecs: list[list[float]] = []
+        if expanded_query and expanded_query.paraphrases:
+            try:
+                para_vecs = self._dense_embed_batch(expanded_query.paraphrases)
+            except Exception:
+                logger.warning("Paraphrase batch embedding failed, skipping", exc_info=True)
+
+        # ── Launch all independent searches in parallel ─────────────────────
+        t_qdrant = time.monotonic()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            # Primary searches: dense + sparse
+            dense_future = pool.submit(
+                qdrant.query_points,
+                collection_name=config.COLLECTION_NAME,
+                query=query_dense,
+                using=dense_vector_name,
+                limit=candidate_k,
+                query_filter=qdrant_filter,
+            )
+            sparse_future = pool.submit(
+                qdrant.query_points,
+                collection_name=config.COLLECTION_NAME,
+                query=SparseVector(indices=q_indices, values=q_values),
+                using="sparse",
+                limit=candidate_k,
+                query_filter=qdrant_filter,
+            )
+
+            # HyDE search (if expansion enabled)
+            hyde_future = None
+            if expanded_query and expanded_query.hyde_vector:
+                hyde_future = pool.submit(
+                    qdrant.query_points,
+                    collection_name=config.COLLECTION_NAME,
+                    query=expanded_query.hyde_vector,
+                    using=dense_vector_name,
+                    limit=candidate_k,
+                    query_filter=qdrant_filter,
+                )
+
+            # Multi-query paraphrase searches (if expansion enabled)
+            para_futures: list = []
+            if para_vecs:
+                for para_dense in para_vecs:
+                    para_futures.append(
+                        pool.submit(
+                            qdrant.query_points,
+                            collection_name=config.COLLECTION_NAME,
+                            query=para_dense,
+                            using=dense_vector_name,
+                            limit=candidate_k,
+                            query_filter=qdrant_filter,
+                        )
+                    )
+
+            # Collect all results
+            dense_hits = dense_future.result().points
+            sparse_hits = sparse_future.result().points
+
+            hyde_hits: list = []
+            if hyde_future is not None:
+                try:
+                    hyde_hits = hyde_future.result().points
+                except Exception:
+                    logger.warning("HyDE dense search failed, skipping", exc_info=True)
+
+            para_hits_all: list[list] = []
+            for f in para_futures:
+                try:
+                    para_hits_all.append(f.result().points)
+                except Exception:
+                    para_hits_all.append([])
+
+        _record_eval_timing("dense_search", 0)
+        _record_eval_timing("sparse_search", 0)
+        _record_eval_timing("all_qdrant_searches", (time.monotonic() - t_qdrant) * 1000)
 
         # ── Reciprocal Rank Fusion ────────────────────────────────────────
         k = 60  # RRF constant (standard default from original paper)
@@ -842,44 +924,17 @@ class RAGEngine:
         _merge_hits(dense_hits)
         _merge_hits(sparse_hits, rrf_offset=len(dense_hits))
 
-        # ── HyDE dense search ──────────────────────────────────────────────
-        hyde_hits: list = []
-        if expanded_query and expanded_query.hyde_vector:
-            try:
-                hyde_hits = qdrant.query_points(
-                    collection_name=config.COLLECTION_NAME,
-                    query=expanded_query.hyde_vector,
-                    using=dense_vector_name,
-                    limit=candidate_k,
-                    query_filter=qdrant_filter,
-                ).points
-                _merge_hits(hyde_hits, rrf_offset=len(dense_hits) + len(sparse_hits))
-            except Exception:
-                logger.warning("HyDE dense search failed, skipping", exc_info=True)
+        # Merge HyDE results (already searched in parallel above)
+        hyde_offset = len(dense_hits) + len(sparse_hits)
+        if hyde_hits:
+            _merge_hits(hyde_hits, rrf_offset=hyde_offset)
 
-        # ── Multi-query paraphrase searches ────────────────────────────────
-        if expanded_query and expanded_query.paraphrases:
-            offset = len(dense_hits) + len(sparse_hits)
-            if expanded_query.hyde_vector:
-                offset += len(hyde_hits) if hyde_hits else candidate_k
-            # Batch-embed all paraphrases in one call
-            try:
-                para_vecs = self._dense_embed_batch(expanded_query.paraphrases)
-            except Exception:
-                logger.warning("Paraphrase batch embedding failed, skipping", exc_info=True)
-                para_vecs = []
-            for idx, (para, para_dense) in enumerate(zip(expanded_query.paraphrases, para_vecs, strict=True)):
-                try:
-                    para_hits = qdrant.query_points(
-                        collection_name=config.COLLECTION_NAME,
-                        query=para_dense,
-                        using=dense_vector_name,
-                        limit=candidate_k,
-                        query_filter=qdrant_filter,
-                    ).points
-                    _merge_hits(para_hits, rrf_offset=offset + idx * candidate_k)
-                except Exception:
-                    logger.warning("Paraphrase search failed for: %s", para, exc_info=True)
+        # Merge multi-query paraphrase results (already searched in parallel above)
+        if para_hits_all:
+            para_offset = hyde_offset + (len(hyde_hits) if hyde_hits else candidate_k)
+            for idx, para_hits in enumerate(para_hits_all):
+                if para_hits:
+                    _merge_hits(para_hits, rrf_offset=para_offset + idx * candidate_k)
 
         # Sort by RRF score
         sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
