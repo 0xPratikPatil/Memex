@@ -6,6 +6,7 @@ backed by a local or remote Ollama instance.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -26,13 +27,20 @@ class OllamaLLM(LLMProvider):
         self._model = model
         self._timeout = timeout
         self._client: httpx.AsyncClient | None = None
+        self._client_loop: asyncio.AbstractEventLoop | None = None
 
     def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None or self._client.is_closed:
+        # Track the event loop that created the client. chat_sync() runs
+        # asyncio.run() in a worker thread, so the client is bound to a
+        # temporary loop that closes afterwards. Recreate the client for
+        # the current loop instead of reusing the dead one.
+        loop = asyncio.get_running_loop()
+        if self._client is None or self._client.is_closed or self._client_loop is not loop:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(self._timeout, connect=10.0),
                 limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
             )
+            self._client_loop = loop
         return self._client
 
     async def chat(self, prompt: str, *, model: str | None = None) -> str:

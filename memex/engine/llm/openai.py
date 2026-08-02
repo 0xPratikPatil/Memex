@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -15,6 +16,7 @@ class _OpenAIBase:
     """Shared httpx client management for OpenAI-compatible APIs."""
 
     _client: httpx.AsyncClient | None = None
+    _client_loop: asyncio.AbstractEventLoop | None = None
 
     def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 60.0) -> None:
         self._base_url = base_url.rstrip("/")
@@ -23,13 +25,18 @@ class _OpenAIBase:
         self._timeout = timeout
 
     def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None or self._client.is_closed:
+        # chat_sync() runs asyncio.run() in a worker thread, which creates a
+        # client bound to a temporary loop. Recreate the client for the
+        # current loop instead of reusing the dead one.
+        loop = asyncio.get_running_loop()
+        if self._client is None or self._client.is_closed or self._client_loop is not loop:
             self._client = httpx.AsyncClient(
                 base_url=self._base_url,
                 timeout=httpx.Timeout(self._timeout, connect=10.0),
                 limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
                 headers={"Authorization": f"Bearer {self._api_key}"},
             )
+            self._client_loop = loop
         return self._client
 
 

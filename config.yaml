@@ -151,7 +151,7 @@ qdrant:
 mcp:
   host: 127.0.0.1
   port: 8080                               # only used for streamable HTTP transport
-  character_limit: 25000                   # max chars in tool response text
+  character_limit: 50000                   # max chars in tool response text
 
 # ── Search ────────────────────────────────────────────────────────────────────
 search:
@@ -169,7 +169,7 @@ search:
 sources:
   - type: local
     name: docs
-    path: /mnt/documents
+    path: /mnt/project/Family-Constitution/references
     extensions:
       - .pdf
       - .docx
