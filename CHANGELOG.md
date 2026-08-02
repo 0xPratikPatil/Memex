@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Inverted contextual retrieval vectors**: `dense` was embedding enriched content while `contextual_dense` embedded raw content — the complete opposite of intended behavior. Swapped assignment so `dense` = raw, `contextual_dense` = enriched. Existing collections must be re-ingested.
 - **Single-batch summary bypass**: Documents with ≤ `batch_size` (10) chunks fell through to header-strategy context generation instead of using the LLM summary strategy. All small documents had empty `context_prefix`.
 - **Resilience chain**: Added per-chunk fallback when batch context generation fails or returns gaps. Chain: batch LLM → per-chunk LLM → section header → empty.
-- **Event-loop-is-closed crash**: Removed `ThreadPoolExecutor` from context generation and query expansion. `chat_sync` uses `asyncio.run()` which creates/destroys event loops; inside threads this races with httpx async connection pool cleanup. Since Ollama processes requests sequentially, concurrent execution provided no speedup.
+- **Event-loop-is-closed crash**: httpx `AsyncClient` was created inside a temporary event loop (via `chat_sync` → `asyncio.run()` in a thread), stayed cached with `is_closed=False`, and poisoned the next `await llm.chat()`. Fixed by tracking the event loop in `OllamaLLM._get_client` and `_OpenAIBase._get_client` — client is recreated when the current loop differs.
+- **`rag_extract_filters` always returned "No LLM available"**: Server was calling `extract_filters` without the `llm_call` argument. Now passes `engine._llm.chat` so metadata filters are actually extracted via the LLM.
 
 ### Changed
 - **Search parallelism**: Dense + sparse Qdrant queries now run concurrently in a single `ThreadPoolExecutor`. HyDE and multi-query paraphrase searches also run in the same pool. ~40% latency reduction for the Qdrant fetch phase.
@@ -21,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `_fallback_context` method (resilience chain for context generation)
 - `_apply_chunk_context` helper (unified context application)
+- Loop-aware httpx client creation in `OllamaLLM` and `_OpenAIBase` (OpenAI/Groq/OpenRouter)
+- Regression test `test_chat_after_chat_sync_rebinds_client_to_loop`
 - 4 new unit tests: `TestSingleBatchSummary`, `TestFallbackContext`
 
 ## [0.5.0] - 2026-07-26

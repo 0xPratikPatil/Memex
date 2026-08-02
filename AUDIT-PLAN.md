@@ -1,6 +1,6 @@
 # Memex RAG — Comprehensive Audit & Fix Plan
 
-**Date**: 2026-07-29 (updated 2026-08-01)
+**Date**: 2026-07-29 (updated 2026-08-02)
 **Auditor**: Performance Engineer (AI)
 **Scope**: Architecture, Docker, RAG pipeline, MCP API, coding standards, security, performance, testing, dependencies
 
@@ -31,6 +31,26 @@
 | Parse logging | Debug logs when batch context parsing returns fewer lines than expected |
 
 ### Test Coverage: 561/561 unit tests pass (4 new tests added)
+
+---
+
+## 2026-08-02 Update: Event-Loop Fix + Filter Extraction
+
+### Issues Found
+
+| # | Severity | Issue | Root Cause |
+|---|----------|-------|------------|
+| C6 | Critical | Answer generation always failed with "Event loop is closed" | `chat_sync` (base.py:27) spawns `asyncio.run()` in a thread when called from a running loop; httpx `AsyncClient` created in the temporary loop stays cached (`is_closed=False`) and poisons the next `await llm.chat()` from the real loop |
+| C7 | Medium | `rag_extract_filters` always returned "No LLM available" | server.py:1075 called `extract_filters` without the `llm_call` argument |
+
+### Fixes Delivered (commits `1498cbd`, `e17aac0`)
+
+| Fix | What |
+|-----|------|
+| Loop-aware httpx client | `OllamaLLM._get_client` and `_OpenAIBase._get_client` track the event loop that created the client; recreate it when the current loop differs |
+| `rag_extract_filters` | Server now passes `engine._llm.chat` as `llm_call` to `extract_filters` |
+
+### Test Coverage: 562/562 unit tests pass (1 new regression test added)
 
 ---
 
