@@ -1075,6 +1075,7 @@ async def rag_extract_filters(input: ExtractFiltersInput) -> str:
         result = await extract_filters(
             query=input.query,
             available_fields=ctx.fields,
+            llm_call=engine._llm.chat,
         )
         output = ExtractedFiltersOutput(
             filters=result.filters,
