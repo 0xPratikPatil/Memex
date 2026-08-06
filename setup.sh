@@ -5,8 +5,11 @@
 #   ./setup.sh                              # use config.yaml defaults
 #   EMBED_MODEL=llama3.2:1b ./setup.sh      # override embedding model
 #   CHAT_MODEL=qwen2.5:1.5b ./setup.sh      # override chat model
+#   ./setup.sh --skip-prereqs               # skip system tool install (repeat runs)
 #
 # What it does:
+#   0. Auto-installs missing system prerequisites (Ubuntu/Debian): curl, git,
+#      python3, make, jq, uv, Docker Engine + Compose, NVIDIA driver + Toolkit
 #   1. Creates .env from .env.example if missing (secrets only)
 #   2. Creates config.yaml from config.example.yaml if missing
 #   3. Installs Python deps (uv sync) into project .venv
@@ -18,6 +21,15 @@
 # ══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# ── CLI flags ────────────────────────────────────────────────────────────────
+SKIP_PREREQS=false
+for arg in "$@"; do
+    case "$arg" in
+        --skip-prereqs) SKIP_PREREQS=true ;;
+        *) echo "  ✗ Unknown argument: $arg" >&2; exit 1 ;;
+    esac
+done
 
 # ── Load .env if it exists (does not override existing env vars) ────────────
 # Only export vars the shell script needs — Python reads .env via python-dotenv.
@@ -74,6 +86,148 @@ ok()   { echo "  ✓ $1"; }
 fail() { echo "  ✗ $1"; exit 1; }
 info() { echo "  → $1"; }
 
+# ── Prerequisite helpers (Step 0) ───────────────────────────────────────────
+need_sudo() {
+    if [ "$(id -u)" -eq 0 ]; then
+        return 0
+    fi
+    if ! command -v sudo &>/dev/null; then
+        echo "  ✗ 'sudo' not found — re-run as root or install sudo." >&2
+        exit 1
+    fi
+    if ! sudo -n true 2>/dev/null; then
+        echo "  → sudo requires a password — entering interactive mode." >&2
+    fi
+    return 0
+}
+
+apt_install() {
+    local pkg="$1"
+    if dpkg -s "$pkg" &>/dev/null; then
+        ok "$pkg (present)"
+        return 0
+    fi
+    info "installing $pkg"
+    if sudo apt-get install -y "$pkg" &>/dev/null; then
+        ok "$pkg"
+    else
+        echo "  ✗ apt-get install $pkg failed." >&2
+        echo "    Try manually: sudo apt-get install -y $pkg" >&2
+    fi
+}
+
+install_uv() {
+    if command -v uv &>/dev/null; then
+        ok "uv (present)"
+        return 0
+    fi
+    info "installing uv"
+    if curl -LsSf https://astral.sh/uv/install.sh | sh &>/dev/null; then
+        # astral installer puts uv in ~/.local/bin; ensure it's on PATH for this run
+        export PATH="$HOME/.local/bin:$PATH"
+        ok "uv"
+    else
+        echo "  ✗ uv install failed." >&2
+        echo "    Try manually: curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+    fi
+}
+
+install_docker() {
+    if command -v docker &>/dev/null && docker compose version &>/dev/null; then
+        ok "docker + compose (present)"
+        return 0
+    fi
+    info "installing Docker Engine + Compose via official apt repo"
+    if sudo apt-get update &>/dev/null \
+        && sudo apt-get install -y ca-certificates curl gnupg &>/dev/null \
+        && sudo install -m 0755 -d /etc/apt/keyrings &>/dev/null \
+        && curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+            | sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg &>/dev/null \
+        && sudo chmod a+r /etc/apt/keyrings/docker.gpg &>/dev/null; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        echo \
+            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+https://download.docker.com/linux/ubuntu ${VERSION_CODENAME:-stable} stable" \
+            | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+        if sudo apt-get update &>/dev/null \
+            && sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
+                docker-buildx-plugin docker-compose-plugin &>/dev/null; then
+            ok "docker + compose"
+        else
+            echo "  ✗ Docker apt install failed." >&2
+        fi
+    else
+        echo "  ✗ Docker repo setup failed." >&2
+    fi
+}
+
+install_nvidia() {
+    if command -v nvidia-smi &>/dev/null; then
+        ok "NVIDIA driver (present)"
+    else
+        info "installing NVIDIA driver"
+        if sudo apt-get install -y ubuntu-drivers-common &>/dev/null \
+            && sudo ubuntu-drivers install &>/dev/null; then
+            info "NVIDIA driver installed — reboot may be required"
+        else
+            echo "  ✗ NVIDIA driver install failed — run 'sudo ubuntu-drivers install' manually." >&2
+        fi
+    fi
+
+    # Container Toolkit: required for GPU passthrough to Docker containers.
+    if [ -x /usr/bin/nvidia-ctk ] || [ -x /usr/local/bin/nvidia-ctk ]; then
+        ok "NVIDIA Container Toolkit (present)"
+        return 0
+    fi
+    info "installing NVIDIA Container Toolkit"
+    if curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+            | sudo gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg &>/dev/null \
+        && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+            | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+            | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null \
+        && sudo apt-get update &>/dev/null \
+        && sudo apt-get install -y nvidia-container-toolkit &>/dev/null; then
+        ok "NVIDIA Container Toolkit"
+        sudo nvidia-ctk runtime configure --runtime=docker &>/dev/null \
+            && info "configured docker runtime" \
+            || echo "  → run manually: sudo nvidia-ctk runtime configure --runtime=docker" >&2
+    else
+        echo "  ✗ NVIDIA Container Toolkit install failed." >&2
+    fi
+}
+
+install_prereqs() {
+    [ "$SKIP_PREREQS" = true ] && { info "skipping system prerequisites (--skip-prereqs)"; return; }
+
+    echo "[0/8] System prerequisites"
+    need_sudo
+
+    # Ubuntu/Debian only
+    if ! command -v apt-get &>/dev/null; then
+        echo "  ✗ apt-get not found — this script auto-installs only on Ubuntu/Debian." >&2
+        echo "    Install curl, git, python3, make, jq, uv, Docker manually, then re-run." >&2
+        return
+    fi
+
+    info "updating apt index"
+    sudo apt-get update &>/dev/null || echo "  → apt-get update had issues, continuing" >&2
+
+    for pkg in curl ca-certificates git python3 python3-venv python3-pip make jq; do
+        apt_install "$pkg"
+    done
+
+    install_uv
+    install_docker
+
+    # GPU-aware: only attempt NVIDIA if a GPU is present
+    if lspci 2>/dev/null | grep -qi nvidia || ls /dev/nvidiactl &>/dev/null; then
+        install_nvidia
+    else
+        info "no NVIDIA GPU detected — ollama/docling will need CPU config or manual GPU setup"
+    fi
+}
+
 # ── Banner ──────────────────────────────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════╗"
@@ -85,6 +239,9 @@ echo "  chat    ${CHAT}"
 echo "  rerank  ${RERANK}"
 echo "  sparse  ${SPARSE}"
 echo ""
+
+# ── 0. System prerequisites ──────────────────────────────────────────────────
+install_prereqs
 
 # ── 0. Create config files if missing ──────────────────────────────────────────
 if [ ! -f .env ]; then
@@ -100,10 +257,21 @@ fi
 
 # ── 1. Python environment ──────────────────────────────────────────────────
 echo "[1/8] Python environment"
-if uv sync --extra local; then
-    ok "deps installed (with in-process ML)"
+# Use uv to install the pinned Python version (from .python-version) —
+# independent of whatever the system apt python3 happens to be.
+if command -v uv &>/dev/null; then
+    PY_VER=$(cat .python-version 2>/dev/null | head -n1 || true)
+    if [ -n "$PY_VER" ] && ! uv python find "$PY_VER" &>/dev/null; then
+        info "installing Python ${PY_VER} via uv"
+        uv python install "$PY_VER" &>/dev/null || info "uv python install failed — continuing with system python"
+    fi
+    if uv sync --extra local; then
+        ok "deps installed (with in-process ML)"
+    else
+        info "Python deps failed — run 'uv sync --extra local' manually later"
+    fi
 else
-    info "Python deps failed — run 'uv sync --extra local' manually later"
+    info "uv not found — run 'uv sync --extra local' manually later"
 fi
 
 # ── 2. Docker ───────────────────────────────────────────────────────────────

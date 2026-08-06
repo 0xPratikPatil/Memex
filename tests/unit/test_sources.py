@@ -97,20 +97,24 @@ class TestLocalSource:
             expected = hashlib.sha256(b"hello world").hexdigest()
             assert h == expected
 
-    def test_download(self) -> None:
+    def test_download_returns_original_path(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             src_dir = Path(td) / "src"
             dest_dir = Path(td) / "dest"
             src_dir.mkdir()
             dest_dir.mkdir()
-            (src_dir / "file.txt").write_text("content")
+            original = src_dir / "file.txt"
+            original.write_text("content")
 
             src = LocalSource(name="test", path=str(src_dir))
             f = src.list_files()[0]
             result = src.download(f, dest_dir)
 
+            # Local files are used directly — no copy to dest
+            assert result == original
             assert result.exists()
             assert result.read_text() == "content"
+            assert not (dest_dir / "file.txt").exists()
 
     def test_source_file_fields(self) -> None:
         with tempfile.TemporaryDirectory() as td:

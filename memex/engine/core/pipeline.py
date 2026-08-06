@@ -470,7 +470,7 @@ class RAGEngine:
         if not hasattr(self, "_sparse_model_local"):
             logger.info("Loading sparse model locally: %s", config.SPARSE_MODEL)
             self._sparse_model_local = SparseTextEmbedding(model_name=config.SPARSE_MODEL)
-        return [dict(emb) for emb in self._sparse_model_local.embed(texts)]
+        return [{str(k): float(v) for k, v in emb.as_dict().items()} for emb in self._sparse_model_local.embed(texts)]
 
     def _rerank(self, query: str, documents: list[str], top_k: int = 10) -> tuple[list[float], list[int]]:
         """Rerank documents via configured provider (http, local, or ollama)."""
@@ -917,7 +917,7 @@ class RAGEngine:
                         "language": payload.get("language", ""),
                         "keywords": payload.get("keywords", []),
                         "entities": payload.get("entities", {}),
-                        "dates": payload.get("dates", []),
+                        "dates": payload.get("entities", {}).get("dates", []),
                         "structural": payload.get("structural", {}),
                     }
 
@@ -1064,7 +1064,7 @@ class RAGEngine:
                 "language": payload.get("language", ""),
                 "keywords": payload.get("keywords", []),
                 "entities": payload.get("entities", {}),
-                "dates": payload.get("dates", []),
+                "dates": payload.get("entities", {}).get("dates", []),
                 "structural": payload.get("structural", {}),
             }
 

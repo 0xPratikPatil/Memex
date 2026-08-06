@@ -75,7 +75,7 @@ class QueryInput(BaseModel):
     )
     metadata_filter: dict[str, str | list[str]] | None = Field(
         default=None,
-        description="Filter by metadata fields (doc_type, topics, language, keywords, entities.people, dates)",
+        description="Filter by metadata fields (doc_type, topics, language, keywords, entities.people, entities.dates)",
     )
     offset: int = Field(
         default=0,

@@ -86,6 +86,11 @@ def _get_redis() -> Any:
     with _redis_lock:
         if _redis is not None:
             return _redis
+        # Skip Redis entirely when URL is empty
+        if not config.REDIS_URL:
+            logger.info("Cache backend: in-memory LRU (set caching.redis_url for Redis)")
+            _redis = True
+            return _redis
         try:
             import redis
 
@@ -100,7 +105,7 @@ def _get_redis() -> Any:
                 socket_timeout=5,
             )
             _redis.ping()
-            logger.info("Connected to Redis at %s", config.REDIS_URL)
+            logger.info("Cache backend: Redis at %s", config.REDIS_URL)
             return _redis
         except ImportError:
             logger.warning("redis package not installed, using in-memory cache")

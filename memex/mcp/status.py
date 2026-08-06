@@ -33,53 +33,46 @@ class ServiceChecker:
 
     async def check_service(self, name: str, url: str) -> ServiceStatus:
         """Check if a service is healthy."""
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+
+        if name == "ollama":
+            health_url = f"{base}/api/tags"
+        elif name == "qdrant":
+            health_url = f"{base}/"
+        elif name == "redis":
+            health_url = url
+        else:
+            health_url = f"{base}/health"
+
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                # Extract base URL (scheme + host + port only)
-                from urllib.parse import urlparse
+            if name == "redis":
+                import redis
 
-                parsed = urlparse(url)
-                base = f"{parsed.scheme}://{parsed.netloc}"
-
-                if name == "ollama":
-                    health_url = f"{base}/api/tags"
-                elif name == "qdrant":
-                    health_url = f"{base}/"
-                elif name == "redis":
-                    try:
-                        import redis
-
-                        r = redis.Redis.from_url(url)
-                        r.ping()
-                        return ServiceStatus(
-                            name=name,
-                            url=url,
-                            healthy=True,
-                            latency_ms=0.0,
-                        )
-                    except Exception as e:
-                        return ServiceStatus(
-                            name=name,
-                            url=url,
-                            healthy=False,
-                            error=str(e),
-                        )
-                else:
-                    health_url = f"{base}/health"
-
-                response = await client.get(health_url)
-                latency_ms = response.elapsed.total_seconds() * 1000
-
+                r = redis.Redis.from_url(url)
+                r.ping()
                 return ServiceStatus(
                     name=name,
-                    url=url,
+                    url=health_url,
+                    healthy=True,
+                    latency_ms=0.0,
+                )
+
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(health_url)
+                latency_ms = response.elapsed.total_seconds() * 1000
+                return ServiceStatus(
+                    name=name,
+                    url=health_url,
                     healthy=response.status_code == 200,
                     latency_ms=latency_ms,
                 )
-        except httpx.RequestError as e:
+        except (httpx.RequestError, Exception) as e:
             return ServiceStatus(
                 name=name,
-                url=url,
+                url=health_url,
                 healthy=False,
                 error=str(e),
             )

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -54,8 +53,8 @@ def _get_stored_hashes(engine, source_name: str) -> dict[str, str]:
             collection_name=config.COLLECTION_NAME,
             limit=500,
             offset=offset,
-            scroll_filter=Filter(must=[FieldCondition(key="source", match=MatchValue(value=source_name))]),
-            with_payload=["source", "content_hash"],
+            scroll_filter=Filter(must=[FieldCondition(key="source_name", match=MatchValue(value=source_name))]),
+            with_payload=["source", "source_name", "content_hash"],
             with_vectors=False,
         )
         points, next_offset = result
@@ -71,8 +70,14 @@ def _get_stored_hashes(engine, source_name: str) -> dict[str, str]:
     return stored
 
 
-def _ingest_file(engine, file_path: str, source_name: str) -> int:
-    """Download, convert, and ingest a single file. Returns chunk count."""
+def _ingest_file(engine, source_identifier: str, file_path: str, source_name: str) -> int:
+    """Convert and ingest a single file. Returns chunk count.
+
+    Args:
+        source_identifier: Logical path stored in Qdrant (real local path or S3 key).
+        file_path: Where the file actually lives for reading/parsing.
+        source_name: Source name for tracking/reconciliation.
+    """
     from memex.engine.ingestion.loader import parse_file
 
     result = parse_file(file_path)
@@ -82,7 +87,7 @@ def _ingest_file(engine, file_path: str, source_name: str) -> int:
     content_hash = engine.compute_file_hash(result.markdown.encode())
     count = engine.ingest_text(
         result.markdown,
-        source_identifier=file_path,
+        source_identifier=source_identifier,
         metadata={
             "content_type": file_path.rsplit(".", 1)[-1] if "." in file_path else "",
             "content_hash": content_hash,
@@ -142,111 +147,114 @@ async def sync(config_module, source_name: str | None = None, dry_run: bool = Fa
             suppress_deletions = True
 
     # 4. Get stored hashes for each source and reconcile
-    with tempfile.TemporaryDirectory(prefix="memex_sync_") as tmp_dir:
-        for src_cfg in source_configs:
-            src_type = src_cfg.get("type", "local")
-            src_name = src_cfg.get("name", src_type)
-            current_files = all_source_files.get(src_name, [])
-            source = get_source(src_type, src_cfg)
+    for src_cfg in source_configs:
+        src_type = src_cfg.get("type", "local")
+        src_name = src_cfg.get("name", src_type)
+        current_files = all_source_files.get(src_name, [])
+        source = get_source(src_type, src_cfg)
 
-            # Build current file map: path -> SourceFile
-            current_map: dict[str, SourceFile] = {f.path: f for f in current_files}
+        # Stable download destination per source (local sources ignore it —
+        # download() returns the real path directly).
+        download_dir: Path = getattr(source, "cache_dir", None) or Path.cwd()
 
-            # Build expanded path form map for cross-form matching
-            _current_form_map: dict[str, str] = {}
-            for fp in current_map:
-                for form in _path_forms(fp):
-                    _current_form_map[form] = fp
+        # Build current file map: path -> SourceFile
+        current_map: dict[str, SourceFile] = {f.path: f for f in current_files}
 
-            # Query stored hashes for this source
-            stored_hashes = _get_stored_hashes(engine, src_name)
+        # Build expanded path form map for cross-form matching
+        _current_form_map: dict[str, str] = {}
+        for fp in current_map:
+            for form in _path_forms(fp):
+                _current_form_map[form] = fp
 
-            # Resolve stored paths to canonical current paths via form expansion
-            resolved_stored: dict[str, str] = {}
-            for sp, h in stored_hashes.items():
-                if sp in current_map:
-                    resolved_stored[sp] = h
+        # Query stored hashes for this source
+        stored_hashes = _get_stored_hashes(engine, src_name)
+
+        # Resolve stored paths to canonical current paths via form expansion
+        resolved_stored: dict[str, str] = {}
+        for sp, h in stored_hashes.items():
+            if sp in current_map:
+                resolved_stored[sp] = h
+            else:
+                canonical = _current_form_map.get(sp)
+                if canonical:
+                    resolved_stored[canonical] = h
                 else:
-                    canonical = _current_form_map.get(sp)
-                    if canonical:
-                        resolved_stored[canonical] = h
-                    else:
-                        resolved_stored[sp] = h
-            stored_hashes = resolved_stored
+                    resolved_stored[sp] = h
+        stored_hashes = resolved_stored
 
-            stored_paths = set(stored_hashes.keys())
-            current_paths = set(current_map.keys())
+        stored_paths = set(stored_hashes.keys())
+        current_paths = set(current_map.keys())
 
-            # Determine new, changed, and unchanged files
-            new_paths = current_paths - stored_paths
-            common_paths = current_paths & stored_paths
+        # Determine new, changed, and unchanged files
+        new_paths = current_paths - stored_paths
+        common_paths = current_paths & stored_paths
 
-            for path in new_paths:
-                sf = current_map[path]
+        for path in new_paths:
+            sf = current_map[path]
+            if dry_run:
+                log.info("[dry-run] Would add: %s", path)
+                stats.added += 1
+                continue
+            try:
+                local_path = source.download(sf, download_dir)
+                chunk_count = _ingest_file(engine, sf.path, str(local_path), src_name)
+                stats.added += 1
+                log.info("Added '%s' (%d chunks)", path, chunk_count)
+            except Exception as exc:
+                log.error("Failed to ingest '%s': %s", path, exc)
+                stats.errors.append(f"ingest failed for '{path}': {exc}")
+
+        for path in common_paths:
+            sf = current_map[path]
+            try:
+                current_hash = source.get_content_hash(sf)
+            except Exception as exc:
+                log.error("Failed to hash '%s': %s", path, exc)
+                stats.errors.append(f"hash failed for '{path}': {exc}")
+                continue
+
+            stored_hash = stored_hashes.get(path, "")
+            if current_hash == stored_hash:
+                stats.unchanged += 1
+                continue
+
+            if dry_run:
+                log.info("[dry-run] Would update: %s", path)
+                stats.changed += 1
+                continue
+
+            # Changed file: delete old chunks then ingest new
+            try:
+                engine.delete_by_source(path)
+                local_path = source.download(sf, download_dir)
+                chunk_count = _ingest_file(engine, sf.path, str(local_path), src_name)
+                stats.changed += 1
+                log.info("Updated '%s' (%d chunks)", path, chunk_count)
+            except Exception as exc:
+                log.error("Failed to update '%s': %s", path, exc)
+                stats.errors.append(f"update failed for '{path}': {exc}")
+
+        # 5. Detect deleted files
+        deleted_paths = stored_paths - current_paths
+        if deleted_paths and not suppress_deletions:
+            for path in deleted_paths:
                 if dry_run:
-                    log.info("[dry-run] Would add: %s", path)
-                    stats.added += 1
+                    log.info("[dry-run] Would delete: %s", path)
+                    stats.deleted += 1
                     continue
-                try:
-                    local_path = source.download(sf, Path(tmp_dir))
-                    chunk_count = _ingest_file(engine, str(local_path), src_name)
-                    stats.added += 1
-                    log.info("Added '%s' (%d chunks)", path, chunk_count)
-                except Exception as exc:
-                    log.error("Failed to ingest '%s': %s", path, exc)
-                    stats.errors.append(f"ingest failed for '{path}': {exc}")
-
-            for path in common_paths:
-                sf = current_map[path]
-                try:
-                    current_hash = source.get_content_hash(sf)
-                except Exception as exc:
-                    log.error("Failed to hash '%s': %s", path, exc)
-                    stats.errors.append(f"hash failed for '{path}': {exc}")
-                    continue
-
-                stored_hash = stored_hashes.get(path, "")
-                if current_hash == stored_hash:
-                    stats.unchanged += 1
-                    continue
-
-                if dry_run:
-                    log.info("[dry-run] Would update: %s", path)
-                    stats.changed += 1
-                    continue
-
-                # Changed file: delete old chunks then ingest new
                 try:
                     engine.delete_by_source(path)
-                    local_path = source.download(sf, Path(tmp_dir))
-                    chunk_count = _ingest_file(engine, str(local_path), src_name)
-                    stats.changed += 1
-                    log.info("Updated '%s' (%d chunks)", path, chunk_count)
+                    stats.deleted += 1
+                    log.info("Deleted '%s'", path)
                 except Exception as exc:
-                    log.error("Failed to update '%s': %s", path, exc)
-                    stats.errors.append(f"update failed for '{path}': {exc}")
-
-            # 5. Detect deleted files
-            deleted_paths = stored_paths - current_paths
-            if deleted_paths and not suppress_deletions:
-                for path in deleted_paths:
-                    if dry_run:
-                        log.info("[dry-run] Would delete: %s", path)
-                        stats.deleted += 1
-                        continue
-                    try:
-                        engine.delete_by_source(path)
-                        stats.deleted += 1
-                        log.info("Deleted '%s'", path)
-                    except Exception as exc:
-                        log.error("Failed to delete '%s': %s", path, exc)
-                        stats.errors.append(f"delete failed for '{path}': {exc}")
-            elif deleted_paths and suppress_deletions:
-                log.warning(
-                    "Suppressing %d deletions for source '%s' (listing failed or empty)",
-                    len(deleted_paths),
-                    src_name,
-                )
+                    log.error("Failed to delete '%s': %s", path, exc)
+                    stats.errors.append(f"delete failed for '{path}': {exc}")
+        elif deleted_paths and suppress_deletions:
+            log.warning(
+                "Suppressing %d deletions for source '%s' (listing failed or empty)",
+                len(deleted_paths),
+                src_name,
+            )
 
     log.info("Sync complete: %s", stats.summary())
     return stats

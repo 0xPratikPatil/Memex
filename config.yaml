@@ -120,9 +120,9 @@ metadata:
 
 # ── Caching ───────────────────────────────────────────────────────────────────
 caching:
-  enabled: true                            # in-memory LRU (Redis opt-in)
-  redis_url: "redis://localhost:6379/0"    # uncomment redis in docker-compose.yml to use
-  # redis_url: ""                          #   empty = in-memory only
+  enabled: true                            # in-memory LRU cache (works out of the box)
+  redis_url: "redis://localhost:6379/0"  # uncomment for persistent cross-restart cache
+  # redis_url: ""                            # empty = in-memory only (default)
   ttl_embedding: 86400                     # 24h — embedding cache
   ttl_search: 3600                         # 1h — search result cache
   ttl_parse: 604800                        # 7d — parsed document cache

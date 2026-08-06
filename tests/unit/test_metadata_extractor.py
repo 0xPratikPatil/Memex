@@ -179,45 +179,6 @@ class TestLanguageDetection:
             assert lang == ""
 
 
-# ── Date extraction ────────────────────────────────────────────────────────
-
-
-class TestDateExtraction:
-    def test_extract_dates_returns_list(self, extractor: MetadataExtractor) -> None:
-        dates = extractor.extract_dates("Report published on 2026-01-15 and updated on March 5, 2026.")
-        assert isinstance(dates, list)
-
-    def test_extract_dates_finds_iso_dates(self) -> None:
-        ext = MetadataExtractor(None)
-        dates = ext.extract_dates("The deadline is 2026-07-26 for submission.")
-        assert any(d["value"] == "2026-07-26" for d in dates)
-
-    def test_extract_dates_finds_written_dates(self) -> None:
-        ext = MetadataExtractor(None)
-        dates = ext.extract_dates("Published on January 15, 2026.")
-        assert any("January" in d["value"] for d in dates)
-
-    def test_extract_dates_finds_quarter(self) -> None:
-        ext = MetadataExtractor(None)
-        dates = ext.extract_dates("Q3 2026 results are in.")
-        assert any(d["format"] == "quarter" for d in dates)
-
-    def test_extract_dates_finds_fiscal_year(self) -> None:
-        ext = MetadataExtractor(None)
-        dates = ext.extract_dates("FY2026 budget approved.")
-        assert any(d["format"] == "fiscal_year" for d in dates)
-
-    def test_extract_dates_deduplicates(self) -> None:
-        ext = MetadataExtractor(None)
-        dates = ext.extract_dates("2026-01-15 and 2026-01-15 are the same date.")
-        values = [d["value"] for d in dates]
-        assert len(values) == len(set(values))
-
-    def test_extract_dates_no_dates_returns_empty(self) -> None:
-        ext = MetadataExtractor(None)
-        assert ext.extract_dates("No dates here.") == []
-
-
 # ── Keyword extraction ─────────────────────────────────────────────────────
 
 
@@ -404,10 +365,10 @@ class TestExtractAll:
             assert "keywords" in metadata
             assert isinstance(metadata["keywords"], list)
 
-    def test_extract_all_dates_always_present(self) -> None:
+    def test_extract_all_dates_from_entities(self) -> None:
         with patch.multiple(
             config,
-            ENABLE_ENTITY_EXTRACTION=False,
+            ENABLE_ENTITY_EXTRACTION=True,
             ENABLE_DOC_CLASSIFICATION=False,
             ENABLE_TOPIC_TAGGING=False,
             ENABLE_LANGUAGE_DETECTION=False,
@@ -415,8 +376,8 @@ class TestExtractAll:
             ext = MetadataExtractor(None)
             chunk = {"content": "Report dated 2026-01-15.", "section_header": ""}
             metadata = ext.extract_all(chunk=chunk)
-            assert "dates" in metadata
-            assert len(metadata["dates"]) > 0
+            # Without LLM, entities is empty, so no dates
+            assert "entities" not in metadata or metadata["entities"] == {}
 
     def test_extract_all_structural_always_present(self) -> None:
         with patch.multiple(

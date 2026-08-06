@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import shutil
 from pathlib import Path
 
 from memex.engine.sources import Source, SourceFile, register_source
@@ -64,8 +63,5 @@ class LocalSource(Source):
         return h.hexdigest()
 
     def download(self, file: SourceFile, dest: Path) -> Path:
-        """Copy the local file to *dest* and return the target path."""
-        dest.mkdir(parents=True, exist_ok=True)
-        target = dest / file.name
-        shutil.copy2(file.path, target)
-        return target
+        """Local files are already on disk — return the path directly (no copy)."""
+        return Path(file.path)

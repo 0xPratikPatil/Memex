@@ -17,17 +17,6 @@ from memex.engine.llm.base import LLMProvider
 
 logger = logging.getLogger("metadata-extractor")
 
-# ── Rule-based date patterns ──────────────────────────────────────────────────
-
-_DATE_PATTERNS: list[tuple[str, str]] = [
-    (r"\b\d{4}-\d{2}-\d{2}\b", "iso"),
-    (r"\b\d{1,2}/\d{1,2}/\d{4}\b", "slash"),
-    (r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{1,2},?\s+\d{4}\b", "written"),
-    (r"\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4}\b", "written_alt"),
-    (r"\b(?:Q[1-4])\s+\d{4}\b", "quarter"),
-    (r"\b(?:FY|fy)\s*\d{4}\b", "fiscal_year"),
-]
-
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 _URL_RE = re.compile(r"https?://[^\s<>\"']+")
 _PHONE_RE = re.compile(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}")
@@ -75,10 +64,6 @@ class MetadataExtractor:
             if lang:
                 metadata["language"] = lang
 
-        dates = self.extract_dates(chunk["content"])
-        if dates:
-            metadata["dates"] = dates
-
         keywords = self.extract_keywords(chunk["content"])
         if keywords:
             metadata["keywords"] = keywords
@@ -92,7 +77,7 @@ class MetadataExtractor:
     def extract_entities(self, text: str) -> dict[str, list[str]]:
         """Extract named entities from text using LLM.
 
-        Returns dict with keys: people, organizations, dates, locations, products.
+        Returns dict with keys: people, organizations, locations, products, dates.
         Each value is a list of unique strings (capped by config).
         """
         if not self._llm:
@@ -100,8 +85,14 @@ class MetadataExtractor:
             return {}
 
         prompt = (
-            "Extract named entities from this text. Return JSON with keys: "
-            "people, organizations, dates, locations, products. "
+            "Extract named entities from this text. Return JSON with these keys:\n"
+            "- people: full names of people mentioned\n"
+            "- organizations: company, agency, or institution names\n"
+            "- locations: cities, countries, addresses, or place names\n"
+            "- products: product names, model numbers, or brand names\n"
+            '- dates: all dates mentioned, as readable strings (e.g. "January 15, 2026", '
+            '"Q3 2025", "2024"). Normalize partial dates (e.g. "Jan" -> "January"). '
+            "Deduplicate: if the same date appears multiple ways, keep the most complete form.\n\n"
             "Each value is a list of unique strings. Only output JSON.\n\n"
             f"Text: {text[:1000]}"
         )
@@ -168,6 +159,8 @@ class MetadataExtractor:
 
         prompt = (
             f"Extract up to {config.MAX_TOPICS_PER_CHUNK} topic labels from this text. "
+            "Topics should be short noun phrases (2-4 words) that describe the main subjects. "
+            'Avoid generic labels like "information" or "details". '
             "Return as JSON array of strings. Only output JSON.\n\n"
             f"Text: {text[:1000]}"
         )
@@ -196,23 +189,6 @@ class MetadataExtractor:
             return result if isinstance(result, str) else ""
         except Exception:
             return ""
-
-    # ── Temporal extraction ───────────────────────────────────────────────
-
-    def extract_dates(self, text: str) -> list[dict[str, str]]:
-        """Extract dates from text using regex patterns.
-
-        Returns list of {"value": "...", "format": "..."} dicts.
-        """
-        dates: list[dict[str, str]] = []
-        seen: set[str] = set()
-        for pattern, fmt in _DATE_PATTERNS:
-            for match in re.finditer(pattern, text, re.IGNORECASE):
-                val = match.group(0)
-                if val not in seen:
-                    seen.add(val)
-                    dates.append({"value": val, "format": fmt})
-        return dates
 
     # ── Keyword extraction ────────────────────────────────────────────────
 
@@ -395,7 +371,13 @@ class MetadataExtractor:
 
         tasks = []
         if config.ENABLE_ENTITY_EXTRACTION:
-            tasks.append("entities (JSON with keys: people, orgs, dates, locations, products — each a list)")
+            tasks.append(
+                "entities (JSON object with keys: people (full names), "
+                "organizations (companies/agencies), locations (places), "
+                "products (product names), dates (readable date strings like "
+                '"January 15, 2026" or "Q3 2025" — normalize and deduplicate). '
+                "Each value is a list of unique strings."
+            )
         if config.ENABLE_TOPIC_TAGGING:
             tasks.append(f"topics (JSON array of up to {config.MAX_TOPICS_PER_CHUNK} topic labels)")
         if doc_type and config.ENABLE_DOC_CLASSIFICATION:
@@ -430,7 +412,6 @@ class MetadataExtractor:
                     lang = self.detect_language(chunk["content"])
                     if lang:
                         meta["language"] = lang
-                meta["dates"] = self.extract_dates(chunk["content"])
                 meta["keywords"] = self.extract_keywords(chunk["content"])
                 meta["structural"] = self.extract_structural(chunk_with_index, source_identifier)
             return normalized
@@ -460,7 +441,6 @@ class MetadataExtractor:
                 lang = self.detect_language(chunk["content"])
                 if lang:
                     meta["language"] = lang
-            meta["dates"] = self.extract_dates(chunk["content"])
             meta["keywords"] = self.extract_keywords(chunk["content"])
             meta["structural"] = self.extract_structural(chunk_with_index, source_identifier)
             results.append(meta)

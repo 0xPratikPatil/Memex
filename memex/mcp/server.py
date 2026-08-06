@@ -180,6 +180,10 @@ def _friendly_error(exc: Exception) -> str:
     msg = str(exc).lower()
 
     if "cannot reach docling" in msg:
+        if "timeout" in msg:
+            return "Docling service timed out (port 5001). It may be overloaded or handling a large document. Retry."
+        if "disconnected" in msg or "read" in msg:
+            return "Docling server disconnected (port 5001). It may be overloaded or restarting. Retry in a moment."
         return "Docling service is unreachable (port 5001). Run: docker compose up -d docling"
     if "cannot reach ollama" in msg:
         return "Ollama service is unreachable (port 11434). Run: docker compose up -d ollama"
@@ -421,7 +425,7 @@ When contextual retrieval is enabled, the search can use context-enriched
 embeddings for better retrieval of ambiguous chunks.
 
 Supports metadata filtering when metadata extraction is enabled. Filter by
-document type, topics, language, keywords, entities, or dates stored in the
+document type, topics, language, keywords, or entities stored in the
 Qdrant payload.
 
 Supports search modes:
@@ -444,7 +448,7 @@ Args:
   - response_format ('markdown' | 'json'): Output format (default: 'markdown').
   - metadata_filter (object, optional): Filter by metadata fields. Keys are
     payload field names (e.g. "doc_type", "topics", "language", "keywords",
-    "entities.people", "dates"). Values are strings or lists of strings.
+    "entities.people", "entities.dates"). Values are strings or lists of strings.
     Example: {"doc_type": "report", "topics": ["finance", "revenue"]}.
   - offset (number): Pagination offset, skip first N results (default: 0).
   - limit (number): Max results per page, 1-50 (default: 10).
@@ -905,19 +909,19 @@ async def rag_service_status() -> str:
                 latency_ms = response.elapsed.total_seconds() * 1000
                 statuses[name] = {
                     "healthy": response.status_code == 200,
-                    "url": url,
+                    "url": health_url,
                     "latency_ms": round(latency_ms, 2),
                 }
             except httpx.RequestError as e:
                 statuses[name] = {
                     "healthy": False,
-                    "url": url,
+                    "url": health_url,
                     "error": str(e),
                 }
             except Exception as e:
                 statuses[name] = {
                     "healthy": False,
-                    "url": url,
+                    "url": health_url,
                     "error": str(e),
                 }
 

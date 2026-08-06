@@ -82,7 +82,8 @@ metadata:
 
 caching:
   enabled: true
-  redis_url: "redis://localhost:6379/0"
+  redis_url: "redis://localhost:6379/0"  # uncomment for persistent cross-restart cache
+  # redis_url: ""                            # empty = in-memory only (default)
   ttl_embedding: 86400
   ttl_search: 3600
   ttl_parse: 604800

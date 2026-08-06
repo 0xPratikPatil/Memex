@@ -87,6 +87,32 @@ class TestGetStoredHashes:
 
         assert len(result) == 1
 
+    def test_filters_by_source_name(self) -> None:
+        mock_point = MagicMock()
+        mock_point.payload = {"source": "/docs/a.pdf", "content_hash": "abc"}
+
+        mock_qdrant = MagicMock()
+        mock_qdrant.scroll.return_value = ([mock_point], None)
+
+        mock_engine = MagicMock()
+        mock_engine._get_qdrant.return_value = mock_qdrant
+
+        with patch("memex.engine.sources.sync.config") as mock_config:
+            mock_config.COLLECTION_NAME = "memex"
+            _get_stored_hashes(mock_engine, "my-source")
+
+        # Filter must match the stored source_name payload field, not `source`
+        import qdrant_client.models
+
+        call_kwargs = mock_qdrant.scroll.call_args[1]
+        flt = call_kwargs["scroll_filter"]
+        assert isinstance(flt, qdrant_client.models.Filter)
+        assert len(flt.must) == 1
+        condition = flt.must[0]
+        assert isinstance(condition, qdrant_client.models.FieldCondition)
+        assert condition.key == "source_name"
+        assert condition.match.value == "my-source"
+
 
 # ── _ingest_file tests ──────────────────────────────────────────────────────
 
@@ -106,7 +132,7 @@ class TestIngestFile:
         mock_result.processing_time = 1.0
 
         with patch("memex.engine.ingestion.loader.parse_file", return_value=mock_result):
-            count = _ingest_file(mock_engine, str(test_file), "my-source")
+            count = _ingest_file(mock_engine, str(test_file), str(test_file), "my-source")
 
         assert count == 5
         mock_engine.ingest_text.assert_called_once()
@@ -129,7 +155,7 @@ class TestIngestFile:
             patch("memex.engine.ingestion.loader.parse_file", return_value=mock_result),
             pytest.raises(RuntimeError, match="Docling conversion failed"),
         ):
-            _ingest_file(mock_engine, str(test_file), "my-source")
+            _ingest_file(mock_engine, str(test_file), str(test_file), "my-source")
 
 
 # ── sync() tests ─────────────────────────────────────────────────────────────
@@ -194,6 +220,9 @@ class TestSync:
         assert stats.changed == 0
         assert stats.deleted == 0
         mock_engine.ingest_text.assert_called_once()
+        # source_identifier must be the real source path, not a temp path
+        call_kwargs = mock_engine.ingest_text.call_args[1]
+        assert call_kwargs["source_identifier"] == "/tmp/docs/report.pdf"
 
     @pytest.mark.asyncio
     async def test_detects_changed_files(self, mock_yaml_config: MagicMock) -> None:

@@ -161,7 +161,6 @@ def _get_known_metadata_fields() -> list[FieldInfo]:
         FieldInfo(name="language", type="string", values=[], count=0),
         FieldInfo(name="keywords", type="list", values=[], count=0),
         FieldInfo(name="entities", type="list", values=[], count=0),
-        FieldInfo(name="dates", type="list", values=[], count=0),
     ]
 
 

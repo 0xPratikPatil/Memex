@@ -96,7 +96,6 @@ class TestKnownMetadataFields:
         assert "language" in names
         assert "keywords" in names
         assert "entities" in names
-        assert "dates" in names
 
     def test_all_have_zero_count(self) -> None:
         fields = _get_known_metadata_fields()
