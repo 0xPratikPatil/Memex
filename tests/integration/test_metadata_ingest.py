@@ -128,49 +128,20 @@ class TestStructuralMetadata:
 
 @pytest.mark.integration
 class TestDateExtraction:
-    def test_extract_iso_date(self) -> None:
-        extractor = MetadataExtractor(None)
-        dates = extractor.extract_dates("The deadline is 2026-07-26 for submission.")
-        assert any(d["value"] == "2026-07-26" and d["format"] == "iso" for d in dates)
+    """Dates are extracted by the LLM inside `entities.dates` (regex extractor removed)."""
 
-    def test_extract_written_date(self) -> None:
-        extractor = MetadataExtractor(None)
-        dates = extractor.extract_dates("Published on January 15, 2026 in the journal.")
-        assert any("January" in d["value"] and d["format"] == "written" for d in dates)
+    def test_extract_entities_returns_dates_key_when_llm_present(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        if not _ollama_reachable():
+            pytest.skip("Ollama not reachable")
+        from memex.engine.llm.ollama import OllamaLLM
 
-    def test_extract_quarter(self) -> None:
-        extractor = MetadataExtractor(None)
-        dates = extractor.extract_dates("Q3 2026 results are in.")
-        assert any(d["value"] == "Q3 2026" and d["format"] == "quarter" for d in dates)
-
-    def test_extract_fiscal_year(self) -> None:
-        extractor = MetadataExtractor(None)
-        dates = extractor.extract_dates("FY2026 budget has been approved.")
-        assert any(d["format"] == "fiscal_year" for d in dates)
-
-    def test_extract_slash_date(self) -> None:
-        extractor = MetadataExtractor(None)
-        dates = extractor.extract_dates("Signed on 07/26/2026 by the director.")
-        assert any(d["format"] == "slash" for d in dates)
-
-    def test_multiple_formats_in_one_text(self) -> None:
-        extractor = MetadataExtractor(None)
-        dates = extractor.extract_dates("Published January 15, 2026. Deadline: 2026-07-26. Q1 2026 review.")
-        formats = {d["format"] for d in dates}
-        assert "iso" in formats
-        assert "written" in formats
-        assert "quarter" in formats
-
-    def test_deduplicates_repeated_dates(self) -> None:
-        extractor = MetadataExtractor(None)
-        dates = extractor.extract_dates("2026-07-26 is the date. Remember: 2026-07-26.")
-        values = [d["value"] for d in dates]
-        assert values.count("2026-07-26") == 1
-
-    def test_no_dates_returns_empty_list(self) -> None:
-        extractor = MetadataExtractor(None)
-        dates = extractor.extract_dates("No temporal information in this sentence.")
-        assert dates == []
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_METADATA_EXTRACTION", True)
+        monkeypatch.setattr("memex.engine.core.config.ENABLE_ENTITY_EXTRACTION", True)
+        llm = OllamaLLM(base_url="http://localhost:11434", model="qwen3.5:0.8b", timeout=60.0)
+        extractor = MetadataExtractor(llm)  # type: ignore[arg-type]
+        entities = extractor.extract_entities("The deadline is 2026-07-26 for submission.")
+        assert isinstance(entities, dict)
+        assert "dates" in entities
 
 
 @pytest.mark.integration
@@ -332,7 +303,6 @@ class TestExtractAllIntegration:
         )
         assert "structural" in metadata
         assert "keywords" in metadata
-        assert "dates" in metadata
         assert "language" in metadata
         assert "entities" not in metadata
         assert "doc_type" not in metadata
@@ -369,7 +339,6 @@ class TestExtractAllIntegration:
         )
         assert "structural" in metadata
         assert "keywords" in metadata
-        assert "dates" in metadata
         assert "language" in metadata
         assert "entities" in metadata
         assert "doc_type" in metadata

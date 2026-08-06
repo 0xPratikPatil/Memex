@@ -37,8 +37,8 @@ class TestQueryExpanderIntegration:
         monkeypatch.setattr(config, "ENABLE_QUERY_EXPANSION", True)
         monkeypatch.setattr(config, "ENABLE_QUERY_REWRITE", True)
         monkeypatch.setattr(config, "ENABLE_MULTI_QUERY", True)
-        monkeypatch.setattr(config, "CHAT_MODEL", "qwen3.5:0.8b")
-        llm = OllamaLLM(base_url="http://localhost:11434", model="qwen3.5:0.8b", timeout=60.0)
+        monkeypatch.setattr(config, "CHAT_MODEL", config.CHAT_MODEL)
+        llm = OllamaLLM(base_url="http://localhost:11434", model=config.CHAT_MODEL, timeout=60.0)
         embedder = OllamaEmbedder(base_url="http://localhost:11434", model="qwen3-embedding:0.6b", timeout=60.0)
         return QueryExpander(llm, embedder)
 
@@ -70,9 +70,9 @@ class TestQueryExpanderIntegration:
 
         monkeypatch.setattr(config, "ENABLE_QUERY_REWRITE", True)
         monkeypatch.setattr(config, "ENABLE_MULTI_QUERY", True)
-        monkeypatch.setattr(config, "CHAT_MODEL", "qwen3.5:0.8b")
+        monkeypatch.setattr(config, "CHAT_MODEL", config.CHAT_MODEL)
         monkeypatch.setattr(config, "OLLAMA_EMBED_URL", "http://localhost:19999/api/embeddings")
-        llm = OllamaLLM(base_url="http://localhost:19999", model="qwen3.5:0.8b", timeout=1.0)
+        llm = OllamaLLM(base_url="http://localhost:19999", model=config.CHAT_MODEL, timeout=1.0)
         embedder = OllamaEmbedder(base_url="http://localhost:19999", model="qwen3-embedding:0.6b", timeout=1.0)
         expander = QueryExpander(llm, embedder)
         result = expander.expand("test query")
