@@ -1,23 +1,25 @@
 # Docker — Memex RAG
 
-Reference for the Memex Docker backend. The MCP server runs on the host (`uv run memex`), not in Docker. All four backend services run in containers on a shared bridge network, bound to `127.0.0.1`.
+Reference for the Memex Docker backend. The MCP server runs on the host (`uv run memex`), not in Docker. All five backend services run in containers on a shared bridge network, bound to `127.0.0.1`.
 
 ## Architecture Overview
 
 ```
 Host machine
 ├── MCP Server (uv run memex)                 # Python process on host
-│   ├── HTTP → qdrant    :6333               # Vector DB (HNSW, 1024d)
-│   ├── HTTP → ollama    :11434              # LLM inference (Docker-only)
-│   ├── HTTP → docling   :5001               # Document parsing + chunking
+│   ├── HTTP → qdrant      :6333             # Vector DB (HNSW, 1024d)
+│   ├── HTTP → ollama      :11434            # LLM inference (Docker-only)
+│   ├── HTTP → docling     :5001             # Document parsing + chunking
 │   ├── HTTP → ml-services :5002             # BM25 sparse + reranker (Docker)
+│   ├── HTTP → redis       :6379             # Caching (persistent layer)
 │   └── In-process ML: fastembed + sentence-transformers  # local fallback mode
 │
-└── Docker Compose (4 containers, all on 127.0.0.1)
+└── Docker Compose (5 containers, all on 127.0.0.1)
     ├── memex-qdrant     qdrant/qdrant:v1.18            :6333, :6334
     ├── memex-ollama     ollama/ollama:0.32.4            :11434
     ├── memex-docling    docling-serve-cu130:v1.27.0     :5001
-    └── memex-ml         ml-services (built from Dockerfile) :5002
+    ├── memex-ml         ml-services (built from Dockerfile) :5002
+    └── memex-redis      redis:7.4.10-alpine             :6379
          [network: backend — internal: false for host access]
 ```
 
@@ -27,7 +29,7 @@ All ports bind to `127.0.0.1` only. In the default `docker` mode, sparse BM25 em
 
 ```bash
 ./setup.sh                       # one-command bootstrap (Docker + models + deps)
-docker compose up -d             # start all 4 backend services
+docker compose up -d             # start all 5 backend services
 docker compose ps                # verify all healthy
 uv run memex                     # start MCP server
 ```
@@ -37,7 +39,7 @@ Alternatively, start services individually without `setup.sh`:
 ```bash
 docker compose up -d qdrant            # vector DB only
 docker compose up -d qdrant ollama     # vector DB + LLM
-docker compose up -d                   # full stack (all 4 services)
+docker compose up -d                   # full stack (all 5 services)
 ```
 
 ## Service Details
@@ -142,7 +144,7 @@ labels:
 ```
 
 ### Init
-All four services use `init: true` for proper PID 1 signal handling.
+All five services use `init: true` for proper PID 1 signal handling.
 
 ### Network
 All services share a single `backend` bridge network (`internal: false` so the host MCP server can reach containers via `127.0.0.1`).
@@ -170,12 +172,12 @@ docker compose exec -T ollama ollama pull qwen3-embedding:0.6b
 docker compose exec -T ollama ollama pull qwen2.5:1.5b
 ```
 
-### Full Local (all 4 services)
-Everything local: vector DB, LLM inference, document parsing, and ML services (sparse + reranker).
+### Full Local (all 5 services)
+Everything local: vector DB, LLM inference, document parsing, ML services (sparse + reranker), and Redis (caching).
 ```bash
 docker compose up -d           # or: ./setup.sh
 ```
-This is the default `./setup.sh` path — all four services started.
+This is the default `./setup.sh` path — all five services started.
 
 ### In-Process ML (no ml-services container)
 If you prefer BM25 and reranking to run in-process on the host:

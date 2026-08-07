@@ -54,17 +54,19 @@ uv run memex serve
 ```
 Host machine
 ├── MCP Server (uv run memex)                  # Python process on host
-│   ├── HTTP → qdrant    :6333                # Vector DB (HNSW, 1024d)
-│   ├── HTTP → ollama    :11434               # LLM inference (Docker-only)
-│   ├── HTTP → docling   :5001                # Document parsing + chunking
+│   ├── HTTP → qdrant      :6333              # Vector DB (HNSW, 1024d)
+│   ├── HTTP → ollama      :11434             # LLM inference (Docker-only)
+│   ├── HTTP → docling     :5001              # Document parsing + chunking
 │   ├── HTTP → ml-services :5002              # BM25 sparse + reranker (Docker)
+│   ├── HTTP → redis       :6379              # Caching (persistent layer)
 │   └── In-process ML: fastembed + sentence-transformers  # local fallback mode
 │
-└── Docker Compose (4 containers, all on 127.0.0.1)
+└── Docker Compose (5 containers, all on 127.0.0.1)
     ├── memex-qdrant     qdrant/qdrant:v1.18            :6333, :6334
     ├── memex-ollama     ollama/ollama:0.32.4            :11434
     ├── memex-docling    docling-serve-cu130:v1.27.0     :5001
-    └── memex-ml         ml-services (built from Dockerfile) :5002
+    ├── memex-ml         ml-services (built from Dockerfile) :5002
+    └── memex-redis      redis:7.4.10-alpine             :6379
          [network: backend — internal: false for host access]
 ```
 
@@ -165,7 +167,7 @@ Key config sections:
 
 ## Docker
 
-Four containers — all ports bound to `127.0.0.1`, GPU support via NVIDIA runtime:
+Five containers — all ports bound to `127.0.0.1`, GPU support via NVIDIA runtime:
 
 | Service | Image | Port | Purpose |
 |---------|-------|------|---------|
