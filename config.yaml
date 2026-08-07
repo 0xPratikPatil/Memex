@@ -59,7 +59,7 @@ converter:
   docling_chart_extract: false             # extract chart data (needs serve-side model)
   docling_ocr: true                        # OCR for scanned PDFs/images
   docling_image_export: embedded           # embedded | referenced | placeholder
-  docling_pdf_backend: ""                  # "" (auto) | "pypdfium2" | "default"
+  docling_pdf_backend: "pypdfium2"        # pypdfium2 (robust) | "default" | "" (auto)
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
 chunking:

@@ -66,7 +66,7 @@ Host machine
 └── Docker Compose (5 containers, all on 127.0.0.1)
     ├── memex-qdrant     qdrant/qdrant:v1.18            :6333, :6334
     ├── memex-ollama     ollama/ollama:0.32.4            :11434
-    ├── memex-docling    docling-serve-cu130:v1.27.0     :5001
+    ├── memex-docling    docling-serve-cu130:v1.30.0     :5001
     ├── memex-ml         ml-services (built from Dockerfile) :5002
     └── memex-redis      redis:7.4.10-alpine             :6379
          [network: backend — internal: false for host access]
@@ -175,7 +175,7 @@ Five containers — all ports bound to `127.0.0.1`, GPU support via NVIDIA runti
 |---------|-------|------|---------|
 | Qdrant | `qdrant/qdrant:v1.18` | `6333` | Vector DB (HNSW, 1024d) |
 | Ollama | `ollama/ollama:0.32.4` | `11434` | LLM inference (embeddings + chat) |
-| Docling | `ghcr.io/docling-project/docling-serve-cu130:v1.27.0` | `5001` | Document parsing + HybridChunker |
+| Docling | `ghcr.io/docling-project/docling-serve-cu130:v1.30.0` | `5001` | Document parsing + HybridChunker |
 | ML Services | Built from `Dockerfile` | `5002` | BM25 sparse embeddings + reranker |
 | Redis | `redis:7.4.10-alpine` | `6379` | Caching (persistent layer) |
 

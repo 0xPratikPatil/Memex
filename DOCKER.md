@@ -17,7 +17,7 @@ Host machine
 └── Docker Compose (5 containers, all on 127.0.0.1)
     ├── memex-qdrant     qdrant/qdrant:v1.18            :6333, :6334
     ├── memex-ollama     ollama/ollama:0.32.4            :11434
-    ├── memex-docling    docling-serve-cu130:v1.27.0     :5001
+    ├── memex-docling    docling-serve-cu130:v1.30.0     :5001
     ├── memex-ml         ml-services (built from Dockerfile) :5002
     └── memex-redis      redis:7.4.10-alpine             :6379
          [network: backend — internal: false for host access]
@@ -64,7 +64,7 @@ docker compose up -d                   # full stack (all 5 services)
 |---------|-------|------|-----|-------------|-------|
 | `qdrant` | `qdrant/qdrant:v1.18` | `6333` (REST), `6334` (gRPC) | No | TCP port check, interval=15s, start_period=15s, retries=5 | HNSW index, 1024d vectors. `init: true`. memlock unlimited. |
 | `ollama` | `ollama/ollama:0.32.4` | `11434` | Yes (`nvidia`, count: all) | TCP port check, interval=15s, start_period=30s, retries=5 | `OLLAMA_KEEP_ALIVE: 24h`, `OLLAMA_NUM_PARALLEL: 4`, `OLLAMA_MAX_LOADED_MODELS: 2`. Models persist in `ollama_data` volume. |
-| `docling` | `ghcr.io/docling-project/docling-serve-cu130:v1.27.0` | `5001` | Yes (`nvidia`, count: all) | HTTP `/health`, interval=30s, start_period=30s, retries=5 | Document parsing (PDF, DOCX, HTML, images) + HybridChunker. CUDA 13.0 image. |
+| `docling` | `ghcr.io/docling-project/docling-serve-cu130:v1.30.0` | `5001` | Yes (`nvidia`, count: all) | HTTP `/health`, interval=30s, start_period=30s, retries=5 | Document parsing (PDF, DOCX, HTML, images) + HybridChunker. CUDA 13.0 image. |
 | `ml-services` | Built from `Dockerfile` | `5002` | Yes (`nvidia`, count: all) | HTTP `/health`, interval=30s, start_period=90s, retries=5 | Sparse BM25 embeddings (Qdrant/bm25) + reranker (Qwen3-Reranker-0.6B). PyTorch CUDA base. |
 
 ### Resource Limits
@@ -293,7 +293,7 @@ docker stats                               # resource usage
 
 ## Anti-Patterns
 
-- **`:latest` tags** — always pin to specific versions. The compose file uses `v1.18`, `0.32.4`, `v1.27.0`.
+- **`:latest` tags** — always pin to specific versions. The compose file uses `v1.18`, `0.32.4`, `v1.30.0`.
 - **`0.0.0.0` binding** — always bind to `127.0.0.1`. No external exposure.
 - **Secrets in compose or images** — all credentials go in `.env` (gitignored).
 - **Data in container filesystem** — always use named volumes (`memex_qdrant_data`, `memex_ollama_data`).

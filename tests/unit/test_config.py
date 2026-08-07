@@ -118,7 +118,7 @@ class TestDoclingEnrichmentDefaults:
         reload(config)
         assert config.DOCLING_IMAGE_EXPORT == "embedded"
 
-    def test_pdf_backend_default_empty(self, monkeypatch):
+    def test_pdf_backend_default_pypdfium2(self, monkeypatch):
         monkeypatch.setenv("DOCLING_PDF_BACKEND", "")
         reload(config)
-        assert config.DOCLING_PDF_BACKEND == ""
+        assert config.DOCLING_PDF_BACKEND == "pypdfium2"

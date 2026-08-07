@@ -128,7 +128,7 @@ services:
   # Docling Serve — Document parsing & conversion (PDF, DOCX, HTML, etc.)
   # ══════════════════════════════════════════════════════════════════════════════
   docling:
-    image: ghcr.io/docling-project/docling-serve-cu130:v1.27.0
+    image: ghcr.io/docling-project/docling-serve-cu130:v1.30.0
     container_name: memex-docling
     init: true
     ports:
