@@ -185,19 +185,21 @@ docker compose down -v        # stop + remove persisted data
 
 ## AI Coding Tool Integration
 
-Memex runs as an MCP server. Connect it to any MCP-compatible coding tool:
+Memex runs as an MCP server over stdio. Connect it to any MCP-compatible coding tool:
 
 ### OpenCode
 
-Add to `~/.config/opencode/config.json`:
+Add to `~/.config/opencode/opencode.jsonc`:
 
 ```json
 {
-  "mcpServers": {
+  "mcp": {
     "memex": {
-      "command": "uv",
-      "args": ["run", "memex"],
-      "cwd": "/path/to/memex"
+      "type": "local",
+      "command": ["uv", "run", "memex", "serve"],
+      "cwd": "/path/to/memex",
+      "enabled": true,
+      "timeout": 60000
     }
   }
 }
@@ -205,15 +207,19 @@ Add to `~/.config/opencode/config.json`:
 
 ### Claude Code
 
-Add to `~/.claude/claude_desktop_config.json`:
+```bash
+claude mcp add memex -- uv run memex serve
+```
+
+Or add to `.mcp.json` in your project root:
 
 ```json
 {
   "mcpServers": {
     "memex": {
+      "type": "stdio",
       "command": "uv",
-      "args": ["run", "memex"],
-      "cwd": "/path/to/memex"
+      "args": ["run", "memex", "serve"]
     }
   }
 }
@@ -221,31 +227,32 @@ Add to `~/.claude/claude_desktop_config.json`:
 
 ### Cursor / Windsurf
 
-Add to MCP settings (Settings → MCP → Add Server):
+Create `.cursor/mcp.json` in your project:
 
 ```json
 {
-  "memex": {
-    "command": "uv",
-    "args": ["run", "memex"],
-    "cwd": "/path/to/memex"
+  "mcpServers": {
+    "memex": {
+      "command": "uv",
+      "args": ["run", "memex", "serve"],
+      "cwd": "/path/to/memex"
+    }
   }
 }
 ```
 
 ### VS Code (GitHub Copilot)
 
-Add to `.vscode/settings.json` or global settings:
+Create `.vscode/mcp.json` in your project:
 
 ```json
 {
-  "mcp": {
-    "servers": {
-      "memex": {
-        "command": "uv",
-        "args": ["run", "memex"],
-        "cwd": "/path/to/memex"
-      }
+  "servers": {
+    "memex": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "memex", "serve"],
+      "cwd": "${workspaceFolder}"
     }
   }
 }
