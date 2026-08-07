@@ -121,8 +121,8 @@ metadata:
 # ── Caching ───────────────────────────────────────────────────────────────────
 caching:
   enabled: true                            # in-memory LRU cache (works out of the box)
-  redis_url: "redis://localhost:6379/0"  # uncomment for persistent cross-restart cache
-  # redis_url: ""                            # empty = in-memory only (default)
+  redis_url: "redis://localhost:6379/0"   # persistent cross-restart cache
+  # redis_url: ""                            # empty = in-memory only (no Redis)
   ttl_embedding: 86400                     # 24h — embedding cache
   ttl_search: 3600                         # 1h — search result cache
   ttl_parse: 604800                        # 7d — parsed document cache

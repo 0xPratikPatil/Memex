@@ -21,7 +21,7 @@ Host machine
          [network: backend — internal: false for host access]
 ```
 
-All ports bind to `127.0.0.1` only. In the default `docker` mode, sparse BM25 embeddings and cross-encoder reranking run in the ml-services container. In `local` mode (via `uv sync --extra local`), they run in-process on the host instead. Redis caching is opt-in (commented out in compose).
+All ports bind to `127.0.0.1` only. In the default `docker` mode, sparse BM25 embeddings and cross-encoder reranking run in the ml-services container. In `local` mode (via `uv sync --extra local`), they run in-process on the host instead. Redis provides persistent caching across restarts.
 
 ## Quick Start
 
@@ -240,7 +240,7 @@ Two named volumes, both persisted across container restarts and `docker compose 
 | `memex_qdrant_data` | `/qdrant/storage` in qdrant | HNSW vector index, payload data, collection config |
 | `memex_ollama_data` | `/root/.ollama` in ollama | Downloaded models (several GB each), model configs |
 
-Redis has a commented-out `memex_redis_data` volume — uncomment if enabling Redis.
+Redis uses `memex_redis_data` for AOF persistence.
 
 Inspect volumes:
 ```bash

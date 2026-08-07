@@ -71,14 +71,14 @@ All features are controlled via `config.yaml`. The master toggle for each group 
 - **Hybrid** (`search.mode=hybrid`): Dense (qwen3-embedding:0.6b, 1024d, fallback bge-m3) + Sparse (BM25 via Docker ml-services or in-process fastembed) + RRF fusion (k=60) + rerank (Docker ml-services or in-process sentence-transformers, Qwen/Qwen3-Reranker-0.6B, fallback BAAI/bge-reranker-base).
 - **Similarity** (`search.mode=similarity`): Dense only.
 - **MMR** (`search.mode=mmr`): Maximal Marginal Relevance for diverse results. Parameters: `search.mmr.fetch_k`=20, `search.mmr.lambda_mult`=0.5.
-- **Search Cache** (`caching.enabled`, `caching.ttl_search`=3600): In-memory LRU cache (Redis opt-in) caches full result sets for repeated queries.
+- **Search Cache** (`caching.enabled`, `caching.ttl_search`=3600): In-memory LRU cache with Redis persistent layer caches full result sets for repeated queries.
 
 ### Ingestion
 - **Docling HybridChunker** (`chunking.strategy=hybrid`): Tokenizer-aware, structure-preserving chunking on DoclingDocument. Repeats table headers across boundaries.
 - **Multi-format Embedding**: Table chunks → HTML, code chunks → fenced markdown, images → `[Image: caption]`.
 - **Docling Enrichment**: Picture classification (`converter.docling_picture_classify`=true), code/formula/chart extraction (opt-in, needs serve-side models).
 - **Content-Hash Dedup** (`ingestion/hashing.py`): SHA256-based dedup prevents re-indexing identical content. Partial ingest recovery on crash.
-- **Embedding Cache** (`caching.enabled`, `caching.ttl_embedding`=86400): In-memory LRU caches dense vectors (Redis opt-in).
+- **Embedding Cache** (`caching.enabled`, `caching.ttl_embedding`=86400): In-memory LRU caches dense vectors (Redis persistent layer).
 
 ### Contextual Retrieval (`contextual_retrieval.enabled`)
 - **Strategy** (`contextual_retrieval.strategy=summary`): LLM-generated context prefixes for each chunk, improving embedding quality.
@@ -190,7 +190,7 @@ MCP Server (host process, uv run memex)
   ├── HTTP ──► Docker: ML Services (:5002) [Docker mode]
   │               BM25 sparse embeddings + reranker
   │
-  ├── HTTP ──► Docker: Redis (:6379) [opt-in, commented out]
+  ├── HTTP ──► Docker: Redis (:6379)
   │               persistent cache layer
   │
   └── In-process (via [local] extras):

@@ -19,7 +19,7 @@ Thin MCP server for personal RAG. Models run in Docker; MCP only does HTTP orche
 uv run memex serve
 ```
 
-`setup.sh` handles the full setup: installs system prerequisites, creates `.env` and `config.yaml` from templates if missing, starts all Docker services, pulls Ollama models, and verifies health checks.
+`setup.sh` handles the full setup: installs system prerequisites, creates `.env` and `config.yaml` from templates if missing, starts all Docker services (including Redis), pulls Ollama models, and verifies health checks.
 
 ### Override models via env vars
 
@@ -83,7 +83,7 @@ Host machine
 - **Multi-format embedding** — table chunks → HTML, code chunks → fenced markdown, images → `[Image: caption]`
 - **Metadata extraction** — entities, topics, document classification, language detection, dates, keywords
 - **Content-hash dedup** — SHA256-based; skips re-indexing unchanged content; partial ingest recovery
-- **Search cache** — in-memory LRU (Redis opt-in); caches full result sets
+- **Search cache** — in-memory LRU with Redis persistent layer; caches full result sets
 - **Embedding cache** — in-memory LRU; caches dense vectors
 - **Pluggable sources** — local directories + S3 buckets; defined in `config.yaml`
 - **Sync engine** — reconciles collection against sources (add, replace, delete); safety rails suppress deletions on source failure
@@ -159,7 +159,7 @@ Key config sections:
 | `query_expansion.multi_query_count` | `3` | number of paraphrases |
 | `contextual_retrieval.enabled` | `true` | context prefixes on chunks |
 | `metadata.extraction_enabled` | `true` | entities, topics, classification, language |
-| `caching.enabled` | `true` | embedding + search cache (Redis opt-in) |
+| `caching.enabled` | `true` | embedding + search cache (Redis persistent layer) |
 | `answer.enabled` | `true` | citation-based answer generation |
 | `mcp.character_limit` | `25000` | max chars in MCP tool response |
 
@@ -173,7 +173,7 @@ Four containers — all ports bound to `127.0.0.1`, GPU support via NVIDIA runti
 | Ollama | `ollama/ollama:0.32.4` | `11434` | LLM inference (embeddings + chat) |
 | Docling | `ghcr.io/docling-project/docling-serve-cu130:v1.27.0` | `5001` | Document parsing + HybridChunker |
 | ML Services | Built from `Dockerfile` | `5002` | BM25 sparse embeddings + reranker |
-| Redis | `redis:7.4.10-alpine` | `6379` | Caching (opt-in, commented out) |
+| Redis | `redis:7.4.10-alpine` | `6379` | Caching (persistent layer) |
 
 ```bash
 docker compose up -d          # start all services
@@ -182,6 +182,76 @@ docker compose logs -f ollama # tail logs
 docker compose down           # stop everything
 docker compose down -v        # stop + remove persisted data
 ```
+
+## AI Coding Tool Integration
+
+Memex runs as an MCP server. Connect it to any MCP-compatible coding tool:
+
+### OpenCode
+
+Add to `~/.config/opencode/config.json`:
+
+```json
+{
+  "mcpServers": {
+    "memex": {
+      "command": "uv",
+      "args": ["run", "memex"],
+      "cwd": "/path/to/memex"
+    }
+  }
+}
+```
+
+### Claude Code
+
+Add to `~/.claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "memex": {
+      "command": "uv",
+      "args": ["run", "memex"],
+      "cwd": "/path/to/memex"
+    }
+  }
+}
+```
+
+### Cursor / Windsurf
+
+Add to MCP settings (Settings → MCP → Add Server):
+
+```json
+{
+  "memex": {
+    "command": "uv",
+    "args": ["run", "memex"],
+    "cwd": "/path/to/memex"
+  }
+}
+```
+
+### VS Code (GitHub Copilot)
+
+Add to `.vscode/settings.json` or global settings:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "memex": {
+        "command": "uv",
+        "args": ["run", "memex"],
+        "cwd": "/path/to/memex"
+      }
+    }
+  }
+}
+```
+
+After connecting, the agent can use all 13 MCP tools (`rag_query`, `rag_ingest_file`, `rag_sync`, etc.) to search, ingest, and manage your personal knowledge base.
 
 ## Providers
 

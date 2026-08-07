@@ -172,33 +172,33 @@ services:
       - "com.memex.service=docling"
       - "com.memex.description=Document parsing and hybrid chunking (Docling HybridChunker)"
 
-  # ── Redis (opt-in) — add this block if you want Redis caching ──
-  # redis:
-  #   image: redis:7.4.10-alpine
-  #   container_name: memex-redis
-  #   init: true
-  #   ports:
-  #     - "127.0.0.1:6379:6379"
-  #   command:
-  #     - redis-server
-  #     - --appendonly yes
-  #     - --maxmemory 256mb
-  #     - --maxmemory-policy allkeys-lru
-  #   volumes:
-  #     - redis_data:/data
-  #   tmpfs:
-  #     - /tmp:exec,size=32M
-  #   networks:
-  #     - backend
-  #   healthcheck:
-  #     test: ["CMD", "redis-cli", "ping"]
-  #     interval: 15s
-  #     timeout: 5s
-  #     start_period: 10s
-  #     retries: 5
-  #   restart: unless-stopped
-  #   security_opt:
-  #     - no-new-privileges:true
+  # ── Redis — persistent caching layer ──
+  redis:
+    image: redis:7.4.10-alpine
+    container_name: memex-redis
+    init: true
+    ports:
+      - "127.0.0.1:6379:6379"
+    command:
+      - redis-server
+      - --appendonly yes
+      - --maxmemory 256mb
+      - --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    tmpfs:
+      - /tmp:exec,size=32M
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
   # ══════════════════════════════════════════════════════════════════════════════
   # ML Services — Sparse BM25 + reranker (production: Docker, dev: pip)
   # ══════════════════════════════════════════════════════════════════════════════
@@ -271,5 +271,5 @@ volumes:
     name: memex_qdrant_data
   ollama_data:
     name: memex_ollama_data
-  # redis_data:
-  #   name: memex_redis_data  # uncomment if using opt-in Redis
+  redis_data:
+    name: memex_redis_data
