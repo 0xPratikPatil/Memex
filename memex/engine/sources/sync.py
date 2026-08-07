@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from memex.engine.core import config
+from memex.engine.core.progress import FileProgress, ProgressCallback
 from memex.engine.sources import SourceFile, get_source
 
 log = logging.getLogger(__name__)
@@ -98,7 +99,12 @@ def _ingest_file(engine, source_identifier: str, file_path: str, source_name: st
     return count
 
 
-async def sync(config_module, source_name: str | None = None, dry_run: bool = False) -> SyncStats:
+async def sync(
+    config_module,
+    source_name: str | None = None,
+    dry_run: bool = False,
+    progress_cb: ProgressCallback | None = None,
+) -> SyncStats:
     """Sync collection against configured sources.
 
     1. Load sources from config
@@ -188,66 +194,97 @@ async def sync(config_module, source_name: str | None = None, dry_run: bool = Fa
         # Determine new, changed, and unchanged files
         new_paths = current_paths - stored_paths
         common_paths = current_paths & stored_paths
+        deleted_paths = stored_paths - current_paths
+
+        # Fire reconciliation progress with total file count
+        total_files = len(new_paths) + len(common_paths) + len(deleted_paths)
+        file_idx = 0
+
+        def _emit(path: str, stage: str, idx: int, total: int, chunks: int = 0, error: str = "") -> None:
+            if progress_cb is not None:
+                progress_cb(FileProgress(
+                    path=path, total=total, current=idx,
+                    stage=stage, chunks=chunks, error=error,
+                ))
 
         for path in new_paths:
             sf = current_map[path]
+            file_idx += 1
             if dry_run:
                 log.info("[dry-run] Would add: %s", path)
+                _emit(path, "Done", file_idx, total_files)
                 stats.added += 1
                 continue
             try:
+                _emit(path, "Parsing", file_idx, total_files)
                 local_path = source.download(sf, download_dir)
+                _emit(path, "Ingesting", file_idx, total_files)
                 chunk_count = _ingest_file(engine, sf.path, str(local_path), src_name)
+                _emit(path, "Done", file_idx, total_files, chunks=chunk_count)
                 stats.added += 1
                 log.info("Added '%s' (%d chunks)", path, chunk_count)
             except Exception as exc:
                 log.error("Failed to ingest '%s': %s", path, exc)
+                _emit(path, "Error", file_idx, total_files, error=str(exc))
                 stats.errors.append(f"ingest failed for '{path}': {exc}")
 
         for path in common_paths:
             sf = current_map[path]
+            file_idx += 1
             try:
+                _emit(path, "Hashing", file_idx, total_files)
                 current_hash = source.get_content_hash(sf)
             except Exception as exc:
                 log.error("Failed to hash '%s': %s", path, exc)
+                _emit(path, "Error", file_idx, total_files, error=str(exc))
                 stats.errors.append(f"hash failed for '{path}': {exc}")
                 continue
 
             stored_hash = stored_hashes.get(path, "")
             if current_hash == stored_hash:
+                _emit(path, "Done", file_idx, total_files)
                 stats.unchanged += 1
                 continue
 
             if dry_run:
                 log.info("[dry-run] Would update: %s", path)
+                _emit(path, "Done", file_idx, total_files)
                 stats.changed += 1
                 continue
 
             # Changed file: delete old chunks then ingest new
             try:
                 engine.delete_by_source(path)
+                _emit(path, "Parsing", file_idx, total_files)
                 local_path = source.download(sf, download_dir)
+                _emit(path, "Ingesting", file_idx, total_files)
                 chunk_count = _ingest_file(engine, sf.path, str(local_path), src_name)
+                _emit(path, "Done", file_idx, total_files, chunks=chunk_count)
                 stats.changed += 1
                 log.info("Updated '%s' (%d chunks)", path, chunk_count)
             except Exception as exc:
                 log.error("Failed to update '%s': %s", path, exc)
+                _emit(path, "Error", file_idx, total_files, error=str(exc))
                 stats.errors.append(f"update failed for '{path}': {exc}")
 
         # 5. Detect deleted files
-        deleted_paths = stored_paths - current_paths
         if deleted_paths and not suppress_deletions:
             for path in deleted_paths:
+                file_idx += 1
                 if dry_run:
                     log.info("[dry-run] Would delete: %s", path)
+                    _emit(path, "Done", file_idx, total_files)
                     stats.deleted += 1
                     continue
                 try:
+                    _emit(path, "Deleting", file_idx, total_files)
                     engine.delete_by_source(path)
+                    _emit(path, "Done", file_idx, total_files)
                     stats.deleted += 1
                     log.info("Deleted '%s'", path)
                 except Exception as exc:
                     log.error("Failed to delete '%s': %s", path, exc)
+                    _emit(path, "Error", file_idx, total_files, error=str(exc))
                     stats.errors.append(f"delete failed for '{path}': {exc}")
         elif deleted_paths and suppress_deletions:
             log.warning(

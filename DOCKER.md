@@ -1,31 +1,33 @@
 # Docker — Memex RAG
 
-Reference for the Memex Docker backend. The MCP server runs on the host (`uv run memex`), not in Docker. All three backend services run in containers on a shared bridge network, bound to `127.0.0.1`.
+Reference for the Memex Docker backend. The MCP server runs on the host (`uv run memex`), not in Docker. All four backend services run in containers on a shared bridge network, bound to `127.0.0.1`.
 
 ## Architecture Overview
 
 ```
 Host machine
 ├── MCP Server (uv run memex)                 # Python process on host
-│   ├── HTTP → qdrant   :6333                # Vector DB (HNSW, 1024d)
-│   ├── HTTP → ollama   :11434               # LLM inference (Docker-only)
-│   ├── HTTP → docling  :5001                # Document parsing + chunking
-│   └── In-process ML: BM25 sparse + reranker # fastembed + sentence-transformers
+│   ├── HTTP → qdrant    :6333               # Vector DB (HNSW, 1024d)
+│   ├── HTTP → ollama    :11434              # LLM inference (Docker-only)
+│   ├── HTTP → docling   :5001               # Document parsing + chunking
+│   ├── HTTP → ml-services :5002             # BM25 sparse + reranker (Docker)
+│   └── In-process ML: fastembed + sentence-transformers  # local fallback mode
 │
-└── Docker Compose (memex project)
-    ├── memex-qdrant   qdrant/qdrant:v1.18            :6333, :6334
-    ├── memex-ollama   ollama/ollama:0.32.4            :11434
-    └── memex-docling  docling-serve-cu130:v1.27.0     :5001
-         [network: memex_backend — internal: false for host access]
+└── Docker Compose (4 containers, all on 127.0.0.1)
+    ├── memex-qdrant     qdrant/qdrant:v1.18            :6333, :6334
+    ├── memex-ollama     ollama/ollama:0.32.4            :11434
+    ├── memex-docling    docling-serve-cu130:v1.27.0     :5001
+    └── memex-ml         ml-services (built from Dockerfile) :5002
+         [network: backend — internal: false for host access]
 ```
 
-All ports bind to `127.0.0.1` only. Sparse BM25 embeddings and cross-encoder reranking run in-process on the host (installed via `uv sync --extra local`). Redis caching is opt-in (commented out in compose).
+All ports bind to `127.0.0.1` only. In the default `docker` mode, sparse BM25 embeddings and cross-encoder reranking run in the ml-services container. In `local` mode (via `uv sync --extra local`), they run in-process on the host instead. Redis caching is opt-in (commented out in compose).
 
 ## Quick Start
 
 ```bash
 ./setup.sh                       # one-command bootstrap (Docker + models + deps)
-docker compose up -d             # start all 3 backend services
+docker compose up -d             # start all 4 backend services
 docker compose ps                # verify all healthy
 uv run memex                     # start MCP server
 ```
@@ -33,9 +35,9 @@ uv run memex                     # start MCP server
 Alternatively, start services individually without `setup.sh`:
 
 ```bash
-docker compose up -d qdrant      # vector DB only
-docker compose up -d ollama      # vector DB + LLM
-docker compose up -d docling     # full stack (all 3)
+docker compose up -d qdrant            # vector DB only
+docker compose up -d qdrant ollama     # vector DB + LLM
+docker compose up -d                   # full stack (all 4 services)
 ```
 
 ## Service Details
@@ -45,6 +47,7 @@ docker compose up -d docling     # full stack (all 3)
 | `qdrant` | `qdrant/qdrant:v1.18` | `6333` (REST), `6334` (gRPC) | No | TCP port check, interval=15s, start_period=15s, retries=5 | HNSW index, 1024d vectors. `init: true`. memlock unlimited. |
 | `ollama` | `ollama/ollama:0.32.4` | `11434` | Yes (`nvidia`, count: all) | TCP port check, interval=15s, start_period=30s, retries=5 | `OLLAMA_KEEP_ALIVE: 24h`, `OLLAMA_NUM_PARALLEL: 4`, `OLLAMA_MAX_LOADED_MODELS: 2`. Models persist in `ollama_data` volume. |
 | `docling` | `ghcr.io/docling-project/docling-serve-cu130:v1.27.0` | `5001` | Yes (`nvidia`, count: all) | HTTP `/health`, interval=30s, start_period=30s, retries=5 | Document parsing (PDF, DOCX, HTML, images) + HybridChunker. CUDA 13.0 image. |
+| `ml-services` | Built from `Dockerfile` | `5002` | Yes (`nvidia`, count: all) | HTTP `/health`, interval=30s, start_period=90s, retries=5 | Sparse BM25 embeddings (Qdrant/bm25) + reranker (Qwen3-Reranker-0.6B). PyTorch CUDA base. |
 
 ### Resource Limits
 
@@ -53,6 +56,7 @@ docker compose up -d docling     # full stack (all 3)
 | `qdrant` | 1.0 | 1G | 0.25 | 256M |
 | `ollama` | 4.0 | 6G | 1.0 | 2G |
 | `docling` | 4.0 | 6G | 0.5 | 2G |
+| `ml-services` | 4.0 | 4G | 0.5 | 1G |
 
 ### Dev Overrides (`compose.override.yaml`)
 
@@ -75,6 +79,7 @@ ports:
   - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
   - "127.0.0.1:${OLLAMA_PORT:-11434}:11434"
   - "127.0.0.1:${DOCLING_PORT:-5001}:5001"
+  - "127.0.0.1:${ML_SERVICES_PORT:-5002}:5002"
 ```
 Port numbers are configurable via environment variables (`.env`) with defaults as shown. No `0.0.0.0` binding anywhere.
 
@@ -82,7 +87,7 @@ Port numbers are configurable via environment variables (`.env`) with defaults a
 Every service has `healthcheck` with `interval`, `timeout`, `start_period`, and `retries`. See Service Details table above for exact values. The `compose.override.yaml` tightens intervals for development.
 
 ### Resource Limits
-Every service has `deploy.resources.limits` and `reservations` (see Resource Limits table). GPU services (ollama, docling) include `reservations.devices` for NVIDIA GPU allocation.
+Every service has `deploy.resources.limits` and `reservations` (see Resource Limits table). GPU services (ollama, docling, ml-services) include `reservations.devices` for NVIDIA GPU allocation.
 
 ### Logging
 Every service uses `json-file` driver with rotation:
@@ -113,6 +118,7 @@ All services restart automatically unless explicitly stopped.
 | `qdrant` | 30s |
 | `ollama` | 60s |
 | `docling` | 60s |
+| `ml-services` | 30s |
 
 Longer periods for model-heavy services (ollama, docling) to allow graceful shutdown.
 
@@ -123,6 +129,7 @@ Every service mounts `/tmp` as tmpfs:
 | `qdrant` | 64M |
 | `ollama` | 256M |
 | `docling` | 128M |
+| `ml-services` | 64M |
 
 Keeps temp writes off the container filesystem.
 
@@ -135,7 +142,7 @@ labels:
 ```
 
 ### Init
-All three services use `init: true` for proper PID 1 signal handling.
+All four services use `init: true` for proper PID 1 signal handling.
 
 ### Network
 All services share a single `backend` bridge network (`internal: false` so the host MCP server can reach containers via `127.0.0.1`).
@@ -163,12 +170,28 @@ docker compose exec -T ollama ollama pull qwen3-embedding:0.6b
 docker compose exec -T ollama ollama pull qwen2.5:1.5b
 ```
 
-### Full Local (all 3)
-Everything local: vector DB, LLM inference, and document parsing.
+### Full Local (all 4 services)
+Everything local: vector DB, LLM inference, document parsing, and ML services (sparse + reranker).
 ```bash
 docker compose up -d           # or: ./setup.sh
 ```
-This is the default `./setup.sh` path — all three services started.
+This is the default `./setup.sh` path — all four services started.
+
+### In-Process ML (no ml-services container)
+If you prefer BM25 and reranking to run in-process on the host:
+```bash
+# 1. Install local ML extras
+uv sync --extra local
+
+# 2. Start only the core 3 services (skip ml-services)
+docker compose up -d qdrant ollama docling
+
+# 3. Set config.yaml to use local providers
+# sparse:
+#   provider: local
+# reranker:
+#   provider: local
+```
 
 ## Ollama Management
 
@@ -217,14 +240,14 @@ Two named volumes, both persisted across container restarts and `docker compose 
 | `memex_qdrant_data` | `/qdrant/storage` in qdrant | HNSW vector index, payload data, collection config |
 | `memex_ollama_data` | `/root/.ollama` in ollama | Downloaded models (several GB each), model configs |
 
+Redis has a commented-out `memex_redis_data` volume — uncomment if enabling Redis.
+
 Inspect volumes:
 ```bash
 docker volume ls | grep memex
 docker volume inspect memex_qdrant_data
 docker volume inspect memex_ollama_data
 ```
-
-Redis has a commented-out `memex_redis_data` volume — uncomment if enabling Redis.
 
 ## When to Rebuild vs Restart
 
@@ -235,6 +258,7 @@ Redis has a commented-out `memex_redis_data` volume — uncomment if enabling Re
 | Volume data (wipe everything) | `docker compose down -v` (**destroys** all persisted data) |
 | Image update (`compose.yml` image tag) | `docker compose down && docker compose up -d` |
 | MCP server Python (host) | Just restart `uv run memex` — no Docker changes needed |
+| ML Services Dockerfile changes | `docker compose up -d --build ml-services` |
 
 ## Debugging
 
@@ -242,6 +266,7 @@ Redis has a commented-out `memex_redis_data` volume — uncomment if enabling Re
 docker compose ps                          # service status
 docker compose logs -f ollama              # tail Ollama logs
 docker compose logs -f docling             # tail Docling logs
+docker compose logs -f ml-services         # tail ML Services logs
 docker compose restart ollama              # restart one service
 docker compose down && docker compose up -d  # full restart
 docker compose config --quiet              # validate compose syntax

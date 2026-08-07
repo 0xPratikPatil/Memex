@@ -15,6 +15,7 @@ memex/
     ├── core/
     │   ├── config.py            # All config keys as module-level constants
     │   ├── pipeline.py          # RAGEngine: embedding, hybrid search, MMR, rerank, ingest
+    │   ├── progress.py          # FileProgress dataclass + ProgressCallback type alias
     │   └── yaml_config.py       # YamlConfig with dot-notation + ${VAR} substitution
     ├── ingestion/
     │   ├── loader.py            # parse_file / parse_url → Docling conversion
@@ -67,7 +68,7 @@ All features are controlled via `config.yaml`. The master toggle for each group 
 - Does not activate in MMR search mode (server.py line 487).
 
 ### Search (`search.mode`)
-- **Hybrid** (`search.mode=hybrid`): Dense (qwen3-embedding:0.6b, 1024d, fallback bge-m3) + Sparse (BM25 in-process via fastembed) + RRF fusion (k=60) + cross-encoder/causal-LM rerank (in-process via sentence-transformers, Qwen/Qwen3-Reranker-0.6B, fallback BAAI/bge-reranker-base).
+- **Hybrid** (`search.mode=hybrid`): Dense (qwen3-embedding:0.6b, 1024d, fallback bge-m3) + Sparse (BM25 via Docker ml-services or in-process fastembed) + RRF fusion (k=60) + rerank (Docker ml-services or in-process sentence-transformers, Qwen/Qwen3-Reranker-0.6B, fallback BAAI/bge-reranker-base).
 - **Similarity** (`search.mode=similarity`): Dense only.
 - **MMR** (`search.mode=mmr`): Maximal Marginal Relevance for diverse results. Parameters: `search.mmr.fetch_k`=20, `search.mmr.lambda_mult`=0.5.
 - **Search Cache** (`caching.enabled`, `caching.ttl_search`=3600): In-memory LRU cache (Redis opt-in) caches full result sets for repeated queries.
@@ -143,7 +144,7 @@ All configuration lives in `config.yaml`. Copy `config.example.yaml` to `config.
 | `reranker.model` | `Qwen/Qwen3-Reranker-0.6B` | Primary reranker |
 | `reranker.fallback_model` | `BAAI/bge-reranker-base` | Fallback reranker |
 | `reranker.type` | `auto` | cross-encoder / causal-lm / auto |
-| `sparse.model` | `Qdrant/bm25` | BM25 sparse model (in-process) |
+| `sparse.model` | `Qdrant/bm25` | BM25 sparse model (Docker ml-services or in-process fastembed) |
 | `query_expansion.enabled` | `true` | Master toggle for HyDE + rewrite + multi-query |
 | `query_expansion.hyde` | `true` | Hypothetical document embedding |
 | `query_expansion.query_rewrite` | `true` | Query rewriting |
@@ -186,6 +187,9 @@ MCP Server (host process, uv run memex)
   ├── HTTP ──► Docker: Qdrant (:6333)
   │               vector DB (1024d HNSW index)
   │
+  ├── HTTP ──► Docker: ML Services (:5002) [Docker mode]
+  │               BM25 sparse embeddings + reranker
+  │
   ├── HTTP ──► Docker: Redis (:6379) [opt-in, commented out]
   │               persistent cache layer
   │
@@ -203,10 +207,10 @@ MCP Server (host process, uv run memex)
 - **Logging**: `json-file` driver with `max-size: 10m` and `max-file: 3` on every service.
 - **Security**: `no-new-privileges:true` on every service, no privileged containers.
 - **Restart policy**: `unless-stopped` for all persistent services.
-- **stop_grace_period**: 30s (qdrant), 60s (ollama/docling).
+- **stop_grace_period**: 30s (qdrant, ml-services), 60s (ollama/docling).
 - **Single network**: All services share the `backend` bridge network (MCP server runs on host).
 - **Tmpfs for /tmp**: Every service has tmpfs mount — keeps temp writes off the container filesystem.
-- **Container names**: `memex-qdrant`, `memex-ollama`, `memex-docling`.
+- **Container names**: `memex-qdrant`, `memex-ollama`, `memex-docling`, `memex-ml`.
 - **Service labels**: Each service has `com.memex.service` and `com.memex.description` labels.
 - **Override file**: `compose.override.yaml` is auto-loaded with tighter dev health checks.
 - **Ollama runs in Docker only** — never install Ollama on the host.
@@ -252,17 +256,30 @@ make clean                    # Remove caches and build artifacts
 uv run memex
 uv run memex serve -c config.yaml
 
-# Ingest files or directories
+# Ingest files or directories (shows Rich progress bar per file)
 memex ingest /path/to/docs --recursive
 memex ingest report.pdf --verbose
 
-# Sync collection against configured sources
+# Sync collection against configured sources (shows Rich progress bar with file stages)
 memex sync --dry-run
 memex sync --source-name docs
 
-# Evaluate retrieval quality
+# Evaluate retrieval quality (shows per-query progress + results table)
 memex eval golden.yaml --top-k 5
 ```
+
+### Progress Tracking
+
+All CLI commands use Rich live progress bars. The `sync` command exposes a `progress_cb` callback for per-file stage reporting:
+
+```python
+from memex.engine.core.progress import FileProgress, ProgressCallback
+
+async def my_callback(progress: FileProgress) -> None:
+    print(f"[{progress.stage.value}] {progress.file_path} ({progress.file_idx}/{progress.total_files})")
+```
+
+Sync stages: `Scanning` → `Reconciling` → `Hashing` → `Parsing` → `Ingesting` → `Done` | `Error` | `Deleting`
 
 ## LLM Providers
 

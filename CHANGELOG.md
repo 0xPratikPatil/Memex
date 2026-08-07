@@ -15,16 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`rag_extract_filters` always returned "No LLM available"**: Server was calling `extract_filters` without the `llm_call` argument. Now passes `engine._llm.chat` so metadata filters are actually extracted via the LLM.
 
 ### Changed
+- **Documentation overhaul**: README prerequisites section, 4-container Docker architecture, enhanced quick start, ml-services container references across DOCKER.md/AGENTS.md/config.example.yaml.
 - **Search parallelism**: Dense + sparse Qdrant queries now run concurrently in a single `ThreadPoolExecutor`. HyDE and multi-query paraphrase searches also run in the same pool. ~40% latency reduction for the Qdrant fetch phase.
 - **Contextual embedding parallel**: Dense, sparse, and contextual embeddings run in a single thread pool during ingestion instead of sequentially.
 - **Startup vector check**: On startup, warns if collection is missing `contextual_dense` vector.
 
 ### Added
+- **Rich progress bars**: Live progress with per-file stage tracking for `memex sync`, `memex ingest`, and `memex eval` CLI commands. Sync shows file-level progress (Scanning → Reconciling → Hashing → Parsing → Ingesting → Done). Ingest shows inline per-file progress. Eval shows per-query progress.
+- `FileProgress` dataclass in `memex/engine/core/progress.py` with `ProgressCallback` type alias.
+- `sync()` engine accepts `progress_cb` parameter for stage-based progress reporting.
+- `rag_sync` MCP tool reports progress via `ctx.report_progress()` during sync operations.
+- `memex eval` now runs actual golden-set evaluation with Rich tables (was a stub).
 - `_fallback_context` method (resilience chain for context generation)
 - `_apply_chunk_context` helper (unified context application)
 - Loop-aware httpx client creation in `OllamaLLM` and `_OpenAIBase` (OpenAI/Groq/OpenRouter)
 - Regression test `test_chat_after_chat_sync_rebinds_client_to_loop`
 - 4 new unit tests: `TestSingleBatchSummary`, `TestFallbackContext`
+- `rich>=13,<14` added as required dependency
 
 ## [0.5.0] - 2026-07-26
 

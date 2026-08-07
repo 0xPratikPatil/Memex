@@ -967,14 +967,24 @@ Error Handling:
         openWorldHint=True,
     ),
 )
-async def rag_sync(input: SyncInput) -> str:
+async def rag_sync(input: SyncInput, ctx: Context) -> str:
     try:
+        from memex.engine.core.progress import FileProgress
         from memex.engine.sources.sync import sync
+
+        async def _report(progress: FileProgress) -> None:
+            msg = f"[{progress.stage.value}] {progress.file_path}"
+            await ctx.report_progress(
+                progress=progress.file_idx,
+                total=progress.total_files,
+                message=msg,
+            )
 
         result = await sync(
             config_module=config,
             source_name=input.source_name,
             dry_run=input.dry_run,
+            progress_cb=_report,
         )
         output = SyncStatsOutput(
             added=result.added,

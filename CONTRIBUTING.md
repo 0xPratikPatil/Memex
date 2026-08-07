@@ -119,7 +119,7 @@ make test
 pytest tests/unit/test_config.py -v
 
 # Run with coverage
-pytest tests/ --cov=memex --cov=rag --cov-report=html
+pytest tests/ --cov=memex --cov-report=html
 
 # Run only failed tests
 pytest --lf

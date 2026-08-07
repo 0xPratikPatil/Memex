@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 
 import typer
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
+from rich.table import Table
 
 from memex import __version__
+from memex.engine.core.progress import FileProgress
 
 app = typer.Typer(help="Memex RAG — CLI commands")
+console = Console()
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -21,6 +28,16 @@ def _setup_logging(verbose: bool) -> None:
         format="%(message)s",
         stream=sys.stderr,
     )
+
+
+def _progress_columns() -> list:
+    return [
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+    ]
 
 
 @app.command()
@@ -33,7 +50,6 @@ def ingest(
 ) -> None:
     """Ingest files or directories into the RAG knowledge base."""
     _setup_logging(verbose)
-    log = logging.getLogger("memex.cli.ingest")
 
     from memex.engine.core.pipeline import RAGEngine
     from memex.engine.core.yaml_config import YamlConfig
@@ -41,56 +57,72 @@ def ingest(
 
     target = Path(path)
     if not target.exists():
-        typer.echo(f"Error: path does not exist: {path}", err=True)
+        console.print(f"[red]Error:[/red] path does not exist: {path}")
         raise typer.Exit(code=1)
 
     YamlConfig(config_path)
 
     if target.is_dir():
-        log.info("Ingesting directory: %s (recursive=%s)", target, recursive)
         files = sorted(target.rglob("*") if recursive else target.iterdir())
         files = [f for f in files if f.is_file()]
     else:
-        log.info("Ingesting file: %s", target)
         files = [target]
 
     if not files:
-        typer.echo("No files found to ingest.", err=True)
+        console.print("[yellow]No files found to ingest.[/yellow]")
         raise typer.Exit(code=1)
 
-    typer.echo(f"Found {len(files)} file(s) to ingest.")
-
     engine = RAGEngine()
-    engine._get_qdrant()  # ensure collection exists
+    engine._get_qdrant()
 
+    total = len(files)
     ingested = 0
+    total_chunks = 0
     errors: list[str] = []
-    for file_path in files:
-        try:
-            result = parse_file(str(file_path))
-            if not result.ok:
-                errors.append(f"{file_path}: {result.status} — {result.errors}")
-                continue
-            content_hash = engine.compute_file_hash(result.markdown.encode())
-            chunks = engine.ingest_text(
-                result.markdown,
-                source_identifier=str(file_path),
-                metadata={
-                    "content_type": file_path.suffix.lstrip("."),
-                    "content_hash": content_hash,
-                    "source_name": source_name or target.name,
-                },
-                content_hash=content_hash,
-            )
-            ingested += 1
-            log.info("Ingested %s (%d chunks)", file_path.name, chunks)
-        except Exception as exc:
-            errors.append(f"{file_path}: {exc}")
 
-    typer.echo(f"Ingested: {ingested}, Errors: {len(errors)}")
+    with Progress(*_progress_columns(), console=console) as progress:
+        task = progress.add_task("Ingesting...", total=total)
+
+        for file_path in files:
+            progress.update(task, description=f"[bold blue]{file_path.name}[/bold blue] — Parsing")
+            try:
+                result = parse_file(str(file_path))
+                if not result.ok:
+                    errors.append(f"{file_path}: {result.status} — {result.errors}")
+                    progress.update(task, advance=1, description=f"[red]{file_path.name} — Error[/red]")
+                    continue
+
+                progress.update(task, description=f"[bold blue]{file_path.name}[/bold blue] — Ingesting")
+                content_hash = engine.compute_file_hash(result.markdown.encode())
+                chunks = engine.ingest_text(
+                    result.markdown,
+                    source_identifier=str(file_path),
+                    metadata={
+                        "content_type": file_path.suffix.lstrip("."),
+                        "content_hash": content_hash,
+                        "source_name": source_name or target.name,
+                    },
+                    content_hash=content_hash,
+                )
+                ingested += 1
+                total_chunks += chunks
+                desc = f"[green]{file_path.name}[/green] — Done ({chunks} chunks)"
+                progress.update(task, advance=1, description=desc)
+            except Exception as exc:
+                errors.append(f"{file_path}: {exc}")
+                progress.update(task, advance=1, description=f"[red]{file_path.name} — Error[/red]")
+
+    table = Table(title="Ingest Complete", show_header=False, title_style="bold")
+    table.add_column("Metric", style="bold")
+    table.add_column("Value")
+    table.add_row("Ingested", f"[green]{ingested}[/green]")
+    table.add_row("Errors", f"[red]{len(errors)}[/red]" if errors else "0")
+    table.add_row("Total chunks", str(total_chunks))
+    console.print(Panel(table))
+
     if errors:
         for err in errors:
-            typer.echo(f"  failed: {err}", err=True)
+            console.print(f"  [red]failed:[/red] {err}")
         raise typer.Exit(code=1)
 
 
@@ -110,25 +142,49 @@ def sync(
 
     yaml_config = YamlConfig(config_path)
 
-    async def _run() -> SyncStats:
-        return await rag_sync(yaml_config, source_name=source_name, dry_run=dry_run)  # type: ignore[return-value]
+    with Progress(*_progress_columns(), console=console) as progress:
+        task = progress.add_task("Syncing...", total=None)
 
-    stats = asyncio.run(_run())
+        def _on_progress(p: FileProgress) -> None:
+            filename = os.path.basename(p.path) if p.path else p.path
+            if p.stage == "Done" and p.chunks > 0:
+                label = f"[green]{filename}[/green] — Done ({p.chunks} chunks)"
+            elif p.stage == "Error":
+                label = f"[red]{filename} — {p.error}[/red]"
+            elif p.stage == "Done":
+                label = f"[dim]{filename} — Unchanged[/dim]"
+            else:
+                label = f"[bold blue]{filename}[/bold blue] — {p.stage}"
+
+            if p.total > 0 and progress.tasks[task].total != p.total:
+                progress.update(task, total=p.total)
+            progress.update(task, completed=p.current, description=label)
+
+        async def _run() -> SyncStats:
+            return await rag_sync(yaml_config, source_name=source_name, dry_run=dry_run, progress_cb=_on_progress)  # type: ignore[return-value]
+
+        stats = asyncio.run(_run())
+        progress.update(task, completed=stats.added + stats.changed + stats.unchanged + stats.deleted)
 
     prefix = "would " if dry_run else ""
-    typer.echo(
-        f"added={stats.added} {prefix}changed={stats.changed} "
-        f"{prefix}deleted={stats.deleted} unchanged={stats.unchanged} "
-        f"errors={len(stats.errors)}"
-    )
+    table = Table(title="Sync Complete", show_header=False, title_style="bold")
+    table.add_column("Metric", style="bold")
+    table.add_column("Value")
+    table.add_row("Added", f"[green]{stats.added}[/green]")
+    table.add_row(f"{prefix.title()}Changed", f"[yellow]{stats.changed}[/yellow]")
+    table.add_row(f"{prefix.title()}Deleted", f"[red]{stats.deleted}[/red]" if stats.deleted else "0")
+    table.add_row("Unchanged", str(stats.unchanged))
+    table.add_row("Errors", f"[red]{len(stats.errors)}[/red]" if stats.errors else "0")
+    console.print(Panel(table))
+
     if stats.errors:
         for err in stats.errors:
-            typer.echo(f"  failed: {err}", err=True)
+            console.print(f"  [red]failed:[/red] {err}")
         raise typer.Exit(code=1)
 
 
-@app.command()
-def eval(
+@app.command(name="eval")
+def eval_cmd(
     golden_set: str = typer.Argument(..., help="Path to golden set YAML/JSON file"),
     top_k: int = typer.Option(5, "--top-k", "-k", help="Number of results per query"),
     compare_rerank: bool = typer.Option(False, "--compare-rerank", help="Compare with/without reranking"),
@@ -138,18 +194,95 @@ def eval(
     """Evaluate retrieval quality against a golden set."""
     _setup_logging(verbose)
 
+    from memex.engine.core.pipeline import RAGEngine
     from memex.engine.core.yaml_config import YamlConfig
+    from memex.engine.evaluation.golden import GoldenSet, match_source
+    from memex.engine.evaluation.metrics import keyword_coverage
 
     golden_path = Path(golden_set)
     if not golden_path.exists():
-        typer.echo(f"Error: golden set file not found: {golden_set}", err=True)
+        console.print(f"[red]Error:[/red] golden set file not found: {golden_set}")
         raise typer.Exit(code=1)
 
     YamlConfig(config_path)
 
-    typer.echo(f"Loaded golden set: {golden_set}")
-    typer.echo(f"Top-K: {top_k}, Compare rerank: {compare_rerank}")
-    typer.echo("(evaluation framework not yet integrated)")
+    if golden_path.suffix in (".yaml", ".yml"):
+        golden = GoldenSet.from_yaml(str(golden_path))
+    else:
+        golden = GoldenSet.from_json(str(golden_path))
+
+    engine = RAGEngine()
+    engine._get_qdrant()
+
+    total = len(golden.queries)
+
+    if total == 0:
+        console.print("[yellow]No queries in golden set.[/yellow]")
+        raise typer.Exit(code=1)
+
+    results_table = Table(title="Query Results")
+    results_table.add_column("Query", max_width=40)
+    results_table.add_column("Hits", justify="right")
+    results_table.add_column("Precision", justify="right")
+    results_table.add_column("Keywords", justify="right")
+
+    total_hits = 0
+    total_precision = 0.0
+    total_keyword_cov = 0.0
+
+    with Progress(*_progress_columns(), console=console) as progress:
+        task = progress.add_task("Evaluating...", total=total)
+
+        for gq in golden.queries:
+            progress.update(task, description=f"[bold blue]{gq.query[:50]}...[/bold blue]")
+
+            search_results = engine.search(gq.query, top_k=top_k)
+            result_sources = [r.get("source", "") for r in search_results]
+
+            hits = sum(1 for s in gq.expected_sources if match_source(s, result_sources))
+            precision = hits / top_k if top_k > 0 else 0.0
+            kw_cov = (
+                keyword_coverage(gq.expected_keywords, [r.get("text", "") for r in search_results])
+                if gq.expected_keywords
+                else 0.0
+            )
+
+            total_hits += hits
+            total_precision += precision
+            total_keyword_cov += kw_cov
+
+            hit_str = f"{hits}/{len(gq.expected_sources)}" if gq.expected_sources else "—"
+            results_table.add_row(gq.query[:40], hit_str, f"{precision:.1%}", f"{kw_cov:.1%}")
+
+            progress.update(task, advance=1)
+
+    avg_precision = total_precision / total if total > 0 else 0.0
+    avg_keyword = total_keyword_cov / total if total > 0 else 0.0
+
+    agg_table = Table(title="Aggregate Metrics", show_header=False, title_style="bold")
+    agg_table.add_column("Metric", style="bold")
+    agg_table.add_column("Value")
+    agg_table.add_row("Queries", str(total))
+    agg_table.add_row("Total hits", str(total_hits))
+    agg_table.add_row("Avg precision", f"{avg_precision:.1%}")
+    agg_table.add_row("Avg keyword coverage", f"{avg_keyword:.1%}")
+
+    console.print()
+    console.print(results_table)
+    console.print(Panel(agg_table))
+
+    if compare_rerank:
+        console.print("\n[yellow]Comparing with reranking disabled...[/yellow]")
+        with Progress(*_progress_columns(), console=console) as progress:
+            task = progress.add_task("Evaluating (no rerank)...", total=total)
+            nr_hits = 0
+            for gq in golden.queries:
+                search_results = engine.search(gq.query, top_k=top_k, use_reranking=False)
+                result_sources = [r.get("source", "") for r in search_results]
+                nr_hits += sum(1 for s in gq.expected_sources if match_source(s, result_sources))
+                progress.update(task, advance=1)
+
+        console.print(f"With reranking: {total_hits} hits | Without: {nr_hits} hits | Delta: {total_hits - nr_hits:+d}")
 
 
 @app.command()

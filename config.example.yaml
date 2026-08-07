@@ -16,7 +16,8 @@ embedding:
   api_key: ${OPENAI_API_KEY}
 
 sparse:
-  provider: local
+  provider: docker                          # docker (ml-services container) | local (fastembed)
+  # provider: local                         #   in-process fastembed, slower first load
   model: Qdrant/bm25
 
 llm:

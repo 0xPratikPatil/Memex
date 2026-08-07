@@ -2,46 +2,80 @@
 
 Thin MCP server for personal RAG. Models run in Docker; MCP only does HTTP orchestration.
 
+## Prerequisites
+
+- **Python 3.12+** — check with `python3 --version`
+- **Docker Engine + Compose** — check with `docker compose version`
+- **NVIDIA GPU + drivers** (recommended) — for Ollama and Docling acceleration
+- **uv** — Python package manager: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+
 ## Quick Start
 
 ```bash
-./setup.sh            # bootstrap Docker + models + deps
-uv run memex serve    # start MCP server (stdio transport)
+# 1. Bootstrap everything (Docker services, models, Python deps)
+./setup.sh
+
+# 2. Start the MCP server
+uv run memex serve
 ```
 
-Override models via env vars:
+`setup.sh` handles the full setup: installs system prerequisites, creates `.env` and `config.yaml` from templates if missing, starts all Docker services, pulls Ollama models, and verifies health checks.
+
+### Override models via env vars
 
 ```bash
 EMBED_MODEL=qwen3-embedding:0.6b CHAT_MODEL=qwen2.5:1.5b ./setup.sh
 ```
 
+### Manual setup (without setup.sh)
+
+```bash
+# 1. Create config files
+cp .env.example .env              # add any API keys needed
+cp config.example.yaml config.yaml  # edit to taste
+
+# 2. Install Python deps
+uv sync --extra local             # includes fastembed + sentence-transformers
+
+# 3. Start Docker services
+docker compose up -d
+docker compose ps                 # verify all healthy
+
+# 4. Pull Ollama models
+docker compose exec -T ollama ollama pull qwen3-embedding:0.6b
+docker compose exec -T ollama ollama pull qwen2.5:1.5b
+
+# 5. Start MCP server
+uv run memex serve
+```
+
 ## Architecture
 
 ```
-┌───────────────────────────────────────────────────────────────────┐
-│  HOST MACHINE                                                     │
-│  ┌─────────────────────┐                                          │
-│  │  memex MCP Server    │───HTTP──▶ Docker (127.0.0.1)            │
-│  │  (uv run memex)      │           ┌──────────────────────────┐  │
-│  │  • Python (stdio)    │           │ Qdrant   :6333  vector DB │  │
-│  └─────────────────────┘           │ Ollama   :11434 LLM/embed│  │
-│                                     │ Docling  :5001  converter │  │
-│  In-process ML (host)              └──────────────────────────┘  │
-│  ┌─────────────────────┐                                          │
-│  │ fastembed (BM25)     │                                          │
-│  │ sentence-transformers│──reranker (Qwen3-Reranker-0.6B)        │
-│  └─────────────────────┘                                          │
-└───────────────────────────────────────────────────────────────────┘
+Host machine
+├── MCP Server (uv run memex)                  # Python process on host
+│   ├── HTTP → qdrant    :6333                # Vector DB (HNSW, 1024d)
+│   ├── HTTP → ollama    :11434               # LLM inference (Docker-only)
+│   ├── HTTP → docling   :5001                # Document parsing + chunking
+│   ├── HTTP → ml-services :5002              # BM25 sparse + reranker (Docker)
+│   └── In-process ML: fastembed + sentence-transformers  # local fallback mode
+│
+└── Docker Compose (4 containers, all on 127.0.0.1)
+    ├── memex-qdrant     qdrant/qdrant:v1.18            :6333, :6334
+    ├── memex-ollama     ollama/ollama:0.32.4            :11434
+    ├── memex-docling    docling-serve-cu130:v1.27.0     :5001
+    └── memex-ml         ml-services (built from Dockerfile) :5002
+         [network: backend — internal: false for host access]
 ```
 
 ## Features
 
 - **Multi-provider LLM** — Ollama, OpenAI, Anthropic, Groq, Google, OpenRouter
 - **Multi-provider embedding** — Ollama, OpenAI, HuggingFace, FastEmbed
-- **Hybrid search** — dense (qwen3-embedding:0.6b, 1024d) + sparse BM25 (fastembed in-process) + RRF fusion (k=60)
-- **MMR search** — Maximal Marginal Relevance for diverse results, configurable λ
-- **Cross-encoder reranking** — Qwen/Qwen3-Reranker-0.6B (in-process via sentence-transformers), fallback to BAAI/bge-reranker-base
-- **Query expansion** — HyDE, Multi-Query (3 paraphrases + RRF), Query Rewrite (master toggle per-method)
+- **Hybrid search** — dense (qwen3-embedding:0.6b, 1024d) + sparse BM25 + RRF fusion (k=60)
+- **MMR search** — Maximal Marginal Relevance for diverse results, configurable lambda
+- **Cross-encoder reranking** — Qwen3-Reranker-0.6B (Docker or in-process), fallback to bge-reranker-base
+- **Query expansion** — HyDE, Multi-Query (N paraphrases + RRF), Query Rewrite (master toggle per-method)
 - **Contextual Retrieval** — LLM-generated context prefixes on every chunk for better embedding quality
 - **Cited answers** — structured answers with `[N]` citations, refusal detection (`INSUFFICIENT_CONTEXT`), citation confidence
 - **Agent filter tools** — discover metadata fields/values; extract filters from natural language
@@ -53,6 +87,7 @@ EMBED_MODEL=qwen3-embedding:0.6b CHAT_MODEL=qwen2.5:1.5b ./setup.sh
 - **Embedding cache** — in-memory LRU; caches dense vectors
 - **Pluggable sources** — local directories + S3 buckets; defined in `config.yaml`
 - **Sync engine** — reconciles collection against sources (add, replace, delete); safety rails suppress deletions on source failure
+- **Rich progress bars** — live per-file stage tracking for `sync`, `ingest`, and `eval` CLI commands
 - **Golden-set evaluation** — recall@K, precision@K, hit_rate@K, MRR, keyword_coverage
 - **Eval sweep** — compare multiple retrieval configs side-by-side with delta comparison
 
@@ -83,6 +118,12 @@ memex sync           sync collection against sources (--dry-run, --source-name)
 memex eval GOLDEN    evaluate retrieval against golden set (--top-k, --compare-rerank)
 ```
 
+All CLI commands display Rich progress bars with per-file stage tracking:
+
+- **`memex ingest`** — inline progress per file (Converting → Ingesting → Done/Error)
+- **`memex sync`** — file-level progress through reconciliation stages (Scanning → Reconciling → Hashing → Parsing → Ingesting → Done)
+- **`memex eval`** — per-query progress with results table and aggregate metrics
+
 ## Configuration
 
 `config.yaml` is the single source of truth. Copy from the template:
@@ -91,27 +132,56 @@ memex eval GOLDEN    evaluate retrieval against golden set (--top-k, --compare-r
 cp config.example.yaml config.yaml
 ```
 
-Key sections:
+Secrets go in `.env` (gitignored) and are referenced as `${VAR}` in `config.yaml`:
+
+```bash
+cp .env.example .env
+# Edit .env — only needed if using cloud providers or Qdrant Cloud
+```
+
+Key config sections:
 
 | Path | Default | Notes |
 |------|---------|-------|
+| `embedding.provider` | `ollama` | ollama / openai / huggingface / fastembed |
 | `embedding.model` | `qwen3-embedding:0.6b` | 1024d, Ollama |
 | `embedding.fallback_model` | `bge-m3` | fallback if primary unavailable |
+| `llm.provider` | `ollama` | ollama / openai / openrouter / anthropic / groq / google |
 | `llm.model` | `qwen2.5:1.5b` | Ollama chat model |
 | `chunking.strategy` | `hybrid` | hybrid / recursive / fixed |
 | `chunking.size` | `1024` | target tokens per chunk |
-| `reranker.model` | `Qwen/Qwen3-Reranker-0.6B` | in-process via sentence-transformers |
-| `reranker.fallback_model` | `BAAI/bge-reranker-base` | fallback reranker |
+| `sparse.provider` | `docker` | docker (ml-services container) / local (fastembed) |
+| `reranker.provider` | `docker` | docker (ml-services container) / local (sentence-transformers) |
+| `reranker.model` | `Qwen/Qwen3-Reranker-0.6B` | primary reranker |
 | `search.mode` | `hybrid` | similarity / hybrid / mmr |
 | `search.mmr.lambda_mult` | `0.5` | MMR diversity weight |
 | `query_expansion.enabled` | `true` | master toggle for HyDE + rewrite + multi-query |
 | `query_expansion.multi_query_count` | `3` | number of paraphrases |
 | `contextual_retrieval.enabled` | `true` | context prefixes on chunks |
-| `contextual_retrieval.strategy` | `summary` | context generation strategy |
 | `metadata.extraction_enabled` | `true` | entities, topics, classification, language |
 | `caching.enabled` | `true` | embedding + search cache (Redis opt-in) |
 | `answer.enabled` | `true` | citation-based answer generation |
-| `sources` | local `/mnt/documents` | pluggable local + S3 sources |
+| `mcp.character_limit` | `25000` | max chars in MCP tool response |
+
+## Docker
+
+Four containers — all ports bound to `127.0.0.1`, GPU support via NVIDIA runtime:
+
+| Service | Image | Port | Purpose |
+|---------|-------|------|---------|
+| Qdrant | `qdrant/qdrant:v1.18` | `6333` | Vector DB (HNSW, 1024d) |
+| Ollama | `ollama/ollama:0.32.4` | `11434` | LLM inference (embeddings + chat) |
+| Docling | `ghcr.io/docling-project/docling-serve-cu130:v1.27.0` | `5001` | Document parsing + HybridChunker |
+| ML Services | Built from `Dockerfile` | `5002` | BM25 sparse embeddings + reranker |
+| Redis | `redis:7.4.10-alpine` | `6379` | Caching (opt-in, commented out) |
+
+```bash
+docker compose up -d          # start all services
+docker compose ps             # verify all healthy
+docker compose logs -f ollama # tail logs
+docker compose down           # stop everything
+docker compose down -v        # stop + remove persisted data
+```
 
 ## Providers
 
@@ -132,29 +202,8 @@ Key sections:
 |----------|----------|-------|
 | `ollama` | local (Docker) | default; qwen3-embedding:0.6b |
 | `openai` | remote | needs `api_key` + model |
-| `huggingface` | local (in-process) | loaded via transformers |
-| `fastembed` | local (in-process) | loaded via fastembed |
-
-## Docker
-
-Three required containers + one optional:
-
-| Service | Image | Port |
-|---------|-------|------|
-| Qdrant | `qdrant/qdrant:v1.18` | `127.0.0.1:6333` |
-| Ollama | `ollama/ollama:0.32.4` | `127.0.0.1:11434` |
-| Docling | `ghcr.io/docling-project/docling-serve-cu130:v1.27.0` | `127.0.0.1:5001` |
-| Redis (opt-in) | `redis:7.4.10-alpine` | `127.0.0.1:6379` |
-
-All ports bind to `127.0.0.1` only. GPU support via NVIDIA runtime on Ollama and Docling.
-
-```bash
-docker compose up -d          # start all services
-docker compose ps             # verify all healthy
-docker compose logs -f ollama # tail logs
-docker compose down           # stop everything
-docker compose down -v        # stop + remove persisted data
-```
+| `huggingface` | remote (HF API) | needs `api_key` + model |
+| `fastembed` | local (in-process) | no network, `uv sync --extra local` |
 
 ## Development
 
@@ -174,3 +223,12 @@ make typecheck  # mypy
 ```
 
 Requirements: Python >= 3.12, Docker.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow and code style.
+
+## Documentation
+
+- [DOCKER.md](DOCKER.md) — Docker service reference, deployment modes, debugging
+- [CONTRIBUTING.md](CONTRIBUTING.md) — Development workflow, testing, code style
+- [CHANGELOG.md](CHANGELOG.md) — Version history
+- [AGENTS.md](AGENTS.md) — OpenCode agent instructions (features, config, architecture)
