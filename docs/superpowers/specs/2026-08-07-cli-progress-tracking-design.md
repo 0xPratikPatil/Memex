@@ -32,15 +32,18 @@ The CLI commands (`sync`, `ingest`, `eval`) give no feedback during execution. F
 from dataclasses import dataclass
 from typing import Callable
 
+
 @dataclass
 class FileProgress:
     """Progress state for a single file operation."""
-    path: str              # file path or identifier
-    total: int             # total files to process
-    current: int           # 1-indexed file number
-    stage: str             # stage label
-    chunks: int = 0        # chunks produced (on success)
-    error: str = ""        # error message (on failure)
+
+    path: str  # file path or identifier
+    total: int  # total files to process
+    current: int  # 1-indexed file number
+    stage: str  # stage label
+    chunks: int = 0  # chunks produced (on success)
+    error: str = ""  # error message (on failure)
+
 
 ProgressCallback = Callable[[FileProgress], None]
 ```

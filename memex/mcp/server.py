@@ -972,13 +972,23 @@ async def rag_sync(input: SyncInput, ctx: Context) -> str:
         from memex.engine.core.progress import FileProgress
         from memex.engine.sources.sync import sync
 
-        async def _report(progress: FileProgress) -> None:
-            msg = f"[{progress.stage.value}] {progress.file_path}"
-            await ctx.report_progress(
-                progress=progress.file_idx,
-                total=progress.total_files,
-                message=msg,
-            )
+        def _report(progress: FileProgress) -> None:
+            msg = f"[{progress.stage}] {progress.path}"
+
+            async def _send() -> None:
+                await ctx.report_progress(
+                    progress=progress.current,
+                    total=progress.total,
+                    message=msg,
+                )
+
+            import asyncio
+
+            try:
+                loop = asyncio.get_running_loop()
+                _task = loop.create_task(_send())  # noqa: RUF006
+            except RuntimeError:
+                pass
 
         result = await sync(
             config_module=config,

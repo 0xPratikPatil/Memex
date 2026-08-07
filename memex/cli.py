@@ -196,8 +196,8 @@ def eval_cmd(
 
     from memex.engine.core.pipeline import RAGEngine
     from memex.engine.core.yaml_config import YamlConfig
-    from memex.engine.evaluation.golden import GoldenSet, match_source
-    from memex.engine.evaluation.metrics import keyword_coverage
+    from memex.engine.evaluation.golden import GoldenSet
+    from memex.engine.evaluation.runner import compute_all_metrics
 
     golden_path = Path(golden_set)
     if not golden_path.exists():
@@ -227,7 +227,7 @@ def eval_cmd(
     results_table.add_column("Keywords", justify="right")
 
     total_hits = 0
-    total_precision = 0.0
+    total_mrr = 0.0
     total_keyword_cov = 0.0
 
     with Progress(*_progress_columns(), console=console) as progress:
@@ -236,27 +236,26 @@ def eval_cmd(
         for gq in golden.queries:
             progress.update(task, description=f"[bold blue]{gq.query[:50]}...[/bold blue]")
 
-            search_results = engine.search(gq.query, top_k=top_k)
-            result_sources = [r.get("source", "") for r in search_results]
-
-            hits = sum(1 for s in gq.expected_sources if match_source(s, result_sources))
-            precision = hits / top_k if top_k > 0 else 0.0
-            kw_cov = (
-                keyword_coverage(gq.expected_keywords, [r.get("text", "") for r in search_results])
-                if gq.expected_keywords
-                else 0.0
+            search_results = engine.hybrid_search(gq.query, top_k=top_k)
+            metrics = compute_all_metrics(
+                retrieved=search_results,
+                expected_sources=list(gq.expected_sources),
+                expected_keywords=list(gq.expected_keywords) if gq.expected_keywords else None,
+                k=top_k,
             )
 
+            hits = int(metrics.get(f"hit@{top_k}", 0.0) * top_k)
             total_hits += hits
-            total_precision += precision
-            total_keyword_cov += kw_cov
+            total_mrr += metrics.get("mrr", 0.0)
+            total_keyword_cov += metrics.get("keyword_coverage", 0.0)
 
             hit_str = f"{hits}/{len(gq.expected_sources)}" if gq.expected_sources else "—"
-            results_table.add_row(gq.query[:40], hit_str, f"{precision:.1%}", f"{kw_cov:.1%}")
+            kw_val = metrics.get("keyword_coverage", 0.0)
+            results_table.add_row(gq.query[:40], hit_str, f"{metrics.get('mrr', 0.0):.1%}", f"{kw_val:.1%}")
 
             progress.update(task, advance=1)
 
-    avg_precision = total_precision / total if total > 0 else 0.0
+    avg_mrr = total_mrr / total if total > 0 else 0.0
     avg_keyword = total_keyword_cov / total if total > 0 else 0.0
 
     agg_table = Table(title="Aggregate Metrics", show_header=False, title_style="bold")
@@ -264,7 +263,7 @@ def eval_cmd(
     agg_table.add_column("Value")
     agg_table.add_row("Queries", str(total))
     agg_table.add_row("Total hits", str(total_hits))
-    agg_table.add_row("Avg precision", f"{avg_precision:.1%}")
+    agg_table.add_row("Avg MRR", f"{avg_mrr:.1%}")
     agg_table.add_row("Avg keyword coverage", f"{avg_keyword:.1%}")
 
     console.print()
@@ -277,9 +276,13 @@ def eval_cmd(
             task = progress.add_task("Evaluating (no rerank)...", total=total)
             nr_hits = 0
             for gq in golden.queries:
-                search_results = engine.search(gq.query, top_k=top_k, use_reranking=False)
-                result_sources = [r.get("source", "") for r in search_results]
-                nr_hits += sum(1 for s in gq.expected_sources if match_source(s, result_sources))
+                search_results = engine.hybrid_search(gq.query, top_k=top_k, rerank=False)
+                metrics = compute_all_metrics(
+                    retrieved=search_results,
+                    expected_sources=list(gq.expected_sources),
+                    k=top_k,
+                )
+                nr_hits += int(metrics.get(f"hit@{top_k}", 0.0) * top_k)
                 progress.update(task, advance=1)
 
         console.print(f"With reranking: {total_hits} hits | Without: {nr_hits} hits | Delta: {total_hits - nr_hits:+d}")

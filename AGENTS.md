@@ -275,6 +275,7 @@ All CLI commands use Rich live progress bars. The `sync` command exposes a `prog
 ```python
 from memex.engine.core.progress import FileProgress, ProgressCallback
 
+
 async def my_callback(progress: FileProgress) -> None:
     print(f"[{progress.stage.value}] {progress.file_path} ({progress.file_idx}/{progress.total_files})")
 ```

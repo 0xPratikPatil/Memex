@@ -202,10 +202,16 @@ async def sync(
 
         def _emit(path: str, stage: str, idx: int, total: int, chunks: int = 0, error: str = "") -> None:
             if progress_cb is not None:
-                progress_cb(FileProgress(
-                    path=path, total=total, current=idx,
-                    stage=stage, chunks=chunks, error=error,
-                ))
+                progress_cb(
+                    FileProgress(
+                        path=path,
+                        total=total,
+                        current=idx,
+                        stage=stage,
+                        chunks=chunks,
+                        error=error,
+                    )
+                )
 
         for path in new_paths:
             sf = current_map[path]
