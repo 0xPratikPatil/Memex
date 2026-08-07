@@ -25,6 +25,22 @@ Host machine
 
 All ports bind to `127.0.0.1` only. In the default `docker` mode, sparse BM25 embeddings and cross-encoder reranking run in the ml-services container. In `local` mode (via `uv sync --extra local`), they run in-process on the host instead. Redis provides persistent caching across restarts.
 
+## Server Hardening (`setup.sh`)
+
+On a fresh Ubuntu 22.04/24.04 server, `setup.sh` runs an idempotent hardening phase before starting services:
+
+1. **Kernel swap accounting** — adds `cgroup_enable=memory swapaccount=1` to `GRUB_CMDLINE_LINUX` in `/etc/default/grub` and runs `update-grub`. Fixes Docker's `WARNING: no swap limit support`. Requires a **reboot** — setup stops with a message and you re-run `./setup.sh` afterward. Skip with `--no-hardening`.
+2. **Docker daemon config** — merges `/etc/docker/daemon.json` (preserving existing keys, backing up the original) to set the `cgroupfs` cgroup driver and `nvidia` as the default runtime:
+   ```json
+   {
+     "exec-opts": ["native.cgroupdriver=cgroupfs"],
+     "default-runtime": "nvidia",
+     "runtimes": { "nvidia": { "path": "nvidia-container-runtime", "runtimeArgs": [] } }
+   }
+   ```
+   The `cgroupfs` driver avoids the known NVIDIA issue where `systemctl daemon-reload` causes containers to lose GPU access (`Failed to initialize NVML: Unknown Error`).
+3. **GPU passthrough verification** — runs `docker run --rm --gpus all nvidia-smi`. Non-blocking: if it fails, setup warns (with fallback diagnostics) and continues.
+
 ## Quick Start
 
 ```bash

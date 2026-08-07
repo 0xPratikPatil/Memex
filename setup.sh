@@ -6,27 +6,33 @@
 #   EMBED_MODEL=llama3.2:1b ./setup.sh      # override embedding model
 #   CHAT_MODEL=qwen2.5:1.5b ./setup.sh      # override chat model
 #   ./setup.sh --skip-prereqs               # skip system tool install (repeat runs)
+#   ./setup.sh --no-hardening               # skip server hardening (swap/cgroup/GPU)
 #
 # What it does:
 #   0. Auto-installs missing system prerequisites (Ubuntu/Debian): curl, git,
 #      python3, make, jq, uv, Docker Engine + Compose, NVIDIA driver + Toolkit
-#   1. Creates .env from .env.example if missing (secrets only)
-#   2. Creates config.yaml from config.example.yaml if missing
-#   3. Installs Python deps (uv sync) into project .venv
-#   4. Checks Docker is running
-#   5. Builds and starts all backend services
-#   6. Waits for health checks
-#   7. Pulls Ollama models (reads from config.yaml, env var overrides work)
-#   8. Verifies models + features respond
+#   1. Server hardening (idempotent): kernel swap accounting (GRUB), Docker
+#      daemon.json (cgroupfs + nvidia default runtime), GPU passthrough check.
+#      May require a reboot — re-run ./setup.sh after rebooting to continue.
+#   2. Creates .env from .env.example if missing (secrets only)
+#   3. Creates config.yaml from config.example.yaml if missing
+#   4. Installs Python deps (uv sync) into project .venv
+#   5. Checks Docker is running
+#   6. Builds and starts all backend services
+#   7. Waits for health checks
+#   8. Pulls Ollama models (reads from config.yaml, env var overrides work)
+#   9. Verifies models + features respond
 # ══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 cd "$(dirname "$0")"
 
 # ── CLI flags ────────────────────────────────────────────────────────────────
 SKIP_PREREQS=false
+NO_HARDENING=false
 for arg in "$@"; do
     case "$arg" in
         --skip-prereqs) SKIP_PREREQS=true ;;
+        --no-hardening) NO_HARDENING=true ;;
         *) echo "  ✗ Unknown argument: $arg" >&2; exit 1 ;;
     esac
 done
@@ -200,7 +206,7 @@ install_nvidia() {
 install_prereqs() {
     [ "$SKIP_PREREQS" = true ] && { info "skipping system prerequisites (--skip-prereqs)"; return; }
 
-    echo "[0/8] System prerequisites"
+    echo "[0/9] System prerequisites"
     need_sudo
 
     # Ubuntu/Debian only
@@ -228,6 +234,184 @@ install_prereqs() {
     fi
 }
 
+# ── Server hardening (Step 1) ────────────────────────────────────────────────
+# Idempotent, non-destructive server prep. Never crashes setup on a hardware/OS
+# quirk — non-critical steps warn and continue. Hard stops are reserved for a
+# required reboot (clean exit) and an invalid daemon.json.
+server_hardening() {
+    [ "$NO_HARDENING" = true ] && { info "skipping server hardening (--no-hardening)"; return; }
+
+    echo "[1/9] Server hardening"
+
+    # Ubuntu/Debian with GRUB only — otherwise skip gracefully.
+    if ! command -v apt-get &>/dev/null; then
+        info "not Ubuntu/Debian — skipping server hardening"
+        return
+    fi
+
+    fix_swap_kernel_params
+    write_daemon_json
+    verify_gpu_passthrough
+
+    ok "hardening complete"
+}
+
+# ── Swap / cgroup kernel fix (GRUB) ─────────────────────────────────────────
+# Adds memory+swap accounting to the kernel cmdline. Fixes Docker's
+# "no swap limit" warning. Requires a reboot to take effect.
+fix_swap_kernel_params() {
+    if grep -q 'swapaccount=1' /proc/cmdline 2>/dev/null; then
+        ok "swap accounting (active)"
+        return
+    fi
+
+    if [ ! -f /etc/default/grub ] || ! command -v update-grub &>/dev/null; then
+        echo "  → swap accounting not enabled. To enable manually:" >&2
+        echo "    sudo sed -i 's/^GRUB_CMDLINE_LINUX=\"\"/GRUB_CMDLINE_LINUX=\"cgroup_enable=memory swapaccount=1\"/' /etc/default/grub" >&2
+        echo "    sudo update-grub && sudo reboot" >&2
+        echo "    (continuing — this only silences Docker's swap warning)" >&2
+        return
+    fi
+
+    info "enabling kernel swap accounting (GRUB)"
+    local grub_file="/etc/default/grub"
+
+    # Use python3 (guaranteed prereq) for a robust, idempotent edit — safer
+    # than sed string surgery against arbitrary existing GRUB values.
+    if ! python3 - "$grub_file" <<'EOF'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+params = {"cgroup_enable=memory", "swapaccount=1"}
+existing = set()
+m = re.search(r'^GRUB_CMDLINE_LINUX="(.*)"\s*$', text, re.M)
+if m:
+    existing = set(m.group(1).split())
+missing = params - existing
+if not missing:
+    print("already configured")
+    sys.exit(0)
+
+to_add = " ".join(sorted(missing))
+if m:
+    new_val = (m.group(1) + " " + to_add).strip()
+    text = text.replace(m.group(0), f'GRUB_CMDLINE_LINUX="{new_val}"')
+else:
+    text += '\nGRUB_CMDLINE_LINUX="%s"\n' % to_add
+
+path.write_text(text)
+print("updated")
+EOF
+    then
+        echo "  ✗ failed to edit /etc/default/grub — edit manually and add:" >&2
+        echo '    GRUB_CMDLINE_LINUX="cgroup_enable=memory swapaccount=1"' >&2
+        return
+    fi
+
+    if sudo update-grub; then
+        ok "GRUB updated (swap accounting)"
+    else
+        echo "  ✗ update-grub failed — run 'sudo update-grub' manually." >&2
+        return
+    fi
+
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║  Reboot required — swap accounting is active only after      ║"
+    echo "║  reboot. Re-run ./setup.sh after rebooting to continue.      ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+    exit 0
+}
+
+# ── Docker daemon.json ──────────────────────────────────────────────────────
+# Merge-safe write of /etc/docker/daemon.json:
+#   - cgroupfs cgroup driver (NVIDIA mitigation for GPU loss on daemon-reload)
+#   - nvidia as the default runtime
+# Preserves existing keys. Validates JSON before writing; backs up original.
+write_daemon_json() {
+    local daemon="/etc/docker/daemon.json"
+    local target
+    target='{"exec-opts":["native.cgroupdriver=cgroupfs"],"default-runtime":"nvidia","runtimes":{"nvidia":{"path":"nvidia-container-runtime","runtimeArgs":[]}}}'
+
+    # Read existing config (or empty object).
+    local existing="{}"
+    if [ -f "$daemon" ]; then
+        existing=$(cat "$daemon")
+    fi
+
+    # Merge using jq if available, else python3.
+    local merged=""
+    if command -v jq &>/dev/null; then
+        merged=$(printf '%s' "$existing" | jq -c ". * $target" 2>/dev/null) || merged=""
+    elif command -v python3 &>/dev/null; then
+        merged=$(python3 -c "
+import json, sys
+existing = json.loads(sys.argv[1]) if sys.argv[1].strip() else {}
+target = json.loads(sys.argv[2])
+existing.update(target)
+print(json.dumps(existing))
+" "$existing" "$target" 2>/dev/null) || merged=""
+    fi
+
+    if [ -z "$merged" ]; then
+        echo "  ✗ failed to merge daemon.json (invalid existing config?)" >&2
+        echo "    Fix /etc/docker/daemon.json manually, then re-run." >&2
+        return
+    fi
+
+    # If nothing to change, skip write + restart (idempotent).
+    if [ "$merged" = "$existing" ]; then
+        ok "daemon.json (already configured)"
+        return
+    fi
+
+    # Validate JSON before writing.
+    if ! printf '%s' "$merged" | python3 -m json.tool >/dev/null 2>&1; then
+        echo "  ✗ merged daemon.json is invalid JSON — aborting write." >&2
+        echo "    No changes were made to /etc/docker/daemon.json." >&2
+        exit 1
+    fi
+
+    # Backup original, write merged, restart docker.
+    if [ -f "$daemon" ]; then
+        sudo cp "$daemon" "$daemon.bak" 2>/dev/null || true
+    fi
+    printf '%s\n' "$merged" | sudo tee "$daemon" >/dev/null
+    ok "daemon.json written (cgroupfs + nvidia default runtime)"
+
+    if sudo systemctl restart docker; then
+        ok "docker daemon restarted"
+    else
+        echo "  → docker restart failed — run 'sudo systemctl restart docker' manually." >&2
+    fi
+}
+
+# ── GPU passthrough verification ────────────────────────────────────────────
+# Confirms containers can actually see the GPU. Non-blocking on failure.
+verify_gpu_passthrough() {
+    if ! lspci 2>/dev/null | grep -qi nvidia && [ ! -e /dev/nvidiactl ]; then
+        info "no NVIDIA GPU detected — skipping GPU passthrough check"
+        return
+    fi
+
+    info "verifying GPU passthrough (docker run --gpus all nvidia-smi)"
+    if timeout 180 docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi >/dev/null 2>&1; then
+        ok "GPU passthrough verified"
+    else
+        echo "  → GPU passthrough check failed (image pull or GPU access)." >&2
+        echo "    Fallback checks:" >&2
+        docker info 2>/dev/null | grep -q "nvidia" \
+            && echo "    ✓ docker info shows nvidia runtime" \
+            || echo "    ✗ nvidia runtime not found in docker info — run: sudo nvidia-ctk runtime configure --runtime=docker" >&2
+        echo "    (continuing — GPU is for acceleration, not required for correctness)" >&2
+    fi
+}
+
 # ── Banner ──────────────────────────────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════╗"
@@ -243,7 +427,10 @@ echo ""
 # ── 0. System prerequisites ──────────────────────────────────────────────────
 install_prereqs
 
-# ── 0. Create config files if missing ──────────────────────────────────────────
+# ── 1. Server hardening ─────────────────────────────────────────────────────
+server_hardening
+
+# ── 2. Create config files if missing ─────────────────────────────────────────
 if [ ! -f .env ]; then
     cp .env.example .env
     info "created .env from .env.example"
@@ -255,8 +442,8 @@ if [ ! -f config.yaml ]; then
     fi
 fi
 
-# ── 1. Python environment ──────────────────────────────────────────────────
-echo "[1/8] Python environment"
+# ── 3. Python environment ──────────────────────────────────────────────────
+echo "[3/9] Python environment"
 # Use uv to install the pinned Python version (from .python-version) —
 # independent of whatever the system apt python3 happens to be.
 if command -v uv &>/dev/null; then
@@ -274,18 +461,18 @@ else
     info "uv not found — run 'uv sync --extra local' manually later"
 fi
 
-# ── 2. Docker ───────────────────────────────────────────────────────────────
-echo "[2/8] Docker"
+# ── 4. Docker ───────────────────────────────────────────────────────────────
+echo "[4/9] Docker"
 docker info >/dev/null 2>&1 || fail "Docker not running"
 ok "running"
 
-# ── 3. Start services ───────────────────────────────────────────────────────
-echo "[3/8] Services"
+# ── 5. Start services ───────────────────────────────────────────────────────
+echo "[5/9] Services"
 docker compose up -d --build --remove-orphans
 ok "started"
 
-# ── 4. Health checks ────────────────────────────────────────────────────────
-echo "[4/8] Health checks"
+# ── 6. Health checks ────────────────────────────────────────────────────────
+echo "[6/9] Health checks"
 
 check_http() {
     local name="$1" url="$2"
@@ -308,8 +495,8 @@ check_http "ollama"      "http://localhost:11434/api/tags"
 check_http "docling"     "http://localhost:5001/health"
 check_http "ml-services" "http://localhost:5002/health"
 
-# ── 5. Pull models ──────────────────────────────────────────────────────────
-echo "[5/8] Models"
+# ── 7. Pull models ──────────────────────────────────────────────────────────
+echo "[7/9] Models"
 pull() {
     local m="$1"
     if docker compose exec -T ollama ollama list 2>/dev/null | grep -q "$m"; then
@@ -323,8 +510,8 @@ pull "$EMBED"
 pull "$CHAT"
 ok "ready"
 
-# ── 6. Verify models loaded ─────────────────────────────────────────────────
-echo "[6/8] Verify models"
+# ── 8. Verify models loaded ─────────────────────────────────────────────────
+echo "[8/9] Verify models"
 curl -sf -X POST http://localhost:11434/api/embeddings \
     -H "Content-Type: application/json" \
     -d "{\"model\":\"${EMBED}\",\"prompt\":\"test\"}" >/dev/null \
@@ -334,8 +521,8 @@ curl -sf -X POST http://localhost:11434/api/chat \
     -d "{\"model\":\"${CHAT}\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":false}" >/dev/null \
     && ok "${CHAT}" || fail "${CHAT} not responding"
 
-# ── 7. Verify features ─────────────────────────────────────────────────────
-echo "[7/8] Features"
+# ── 9. Verify features ─────────────────────────────────────────────────────
+echo "[9/9] Features"
 # Hybrid chunker availability
 if uv run python -c " 
 from memex.engine.ingestion.splitter import is_hybrid_chunker_available

@@ -19,7 +19,9 @@ Thin MCP server for personal RAG. Models run in Docker; MCP only does HTTP orche
 uv run memex serve
 ```
 
-`setup.sh` handles the full setup: installs system prerequisites, creates `.env` and `config.yaml` from templates if missing, starts all Docker services (including Redis), pulls Ollama models, and verifies health checks.
+`setup.sh` handles the full setup: installs system prerequisites, runs server hardening (kernel swap accounting, Docker daemon config, GPU passthrough verification), creates `.env` and `config.yaml` from templates if missing, starts all Docker services (including Redis), pulls Ollama models, and verifies health checks.
+
+> **First run on a fresh server:** hardening may enable kernel swap accounting and require a reboot. If so, setup stops with a clear message — reboot and re-run `./setup.sh` to continue. Skip hardening with `./setup.sh --no-hardening`.
 
 ### Override models via env vars
 
