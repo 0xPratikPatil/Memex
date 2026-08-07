@@ -37,7 +37,7 @@ converter:
   docling_chart_extract: false
   docling_ocr: true
   docling_image_export: embedded
-  docling_pdf_backend: "pypdfium2"        # pypdfium2 (robust) | "default" | "" (auto)
+  docling_pdf_backend: "docling_parse"   # docling_parse (recommended) | pypdfium2 | "" (auto)
 
 chunking:
   strategy: hybrid
