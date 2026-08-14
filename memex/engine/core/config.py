@@ -123,6 +123,7 @@ HTTP_RETRY_BACKOFF: float = _cfg_float("http.retry_backoff", 0.5)
 INGEST_TIMEOUT_PARSE: float = _cfg_float("ingestion.timeout_parse", 120.0)
 INGEST_TIMEOUT_TOTAL: float = _cfg_float("ingestion.timeout_total", 300.0)
 MAX_CONCURRENT_PARSES: int = _cfg_int("ingestion.max_concurrent_parses", 3)
+MAX_CONCURRENT_SYNC: int = _cfg_int("ingestion.max_concurrent_sync", 8)
 
 # ── Qdrant client settings ────────────────────────────────────────────────────
 QDRANT_TIMEOUT: float = _cfg_float("qdrant.timeout", 10.0)

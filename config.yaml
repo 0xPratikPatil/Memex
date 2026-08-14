@@ -141,6 +141,7 @@ ingestion:
   timeout_parse: 120.0                     # max seconds per document parse
   timeout_total: 300.0                     # max seconds per document ingestion
   max_concurrent_parses: 3                 # parallel document conversions
+  max_concurrent_sync: 8                   # files processed in parallel during sync
 
 # ── Qdrant ────────────────────────────────────────────────────────────────────
 qdrant:

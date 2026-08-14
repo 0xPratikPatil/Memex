@@ -6,10 +6,12 @@ import asyncio
 import logging
 import os
 import sys
+from collections import OrderedDict
 from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.live import Live
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
@@ -19,6 +21,67 @@ from memex.engine.core.progress import FileProgress
 
 app = typer.Typer(help="Memex RAG — CLI commands")
 console = Console()
+
+# Stage display: (icon, color, label)
+_STAGE_STYLE: dict[str, tuple[str, str, str]] = {
+    "Converting": ("⚙ ", "cyan", "Converting"),
+    "Context": ("ctx", "blue", "Context"),
+    "Metadata": ("meta", "magenta", "Metadata"),
+    "Embedding": ("emb", "yellow", "Embedding"),
+    "Storing": ("···", "green", "Storing"),
+    "Deleting": ("del", "red", "Deleting"),
+    "Done": ("✓", "green", "Done"),
+    "Error": ("✗", "red", "Error"),
+}
+
+_MAX_VISIBLE_ROWS = 8
+
+
+def _stage_label(stage: str, error: str = "") -> str:
+    """Return a rich-styled stage label."""
+    icon, color, label = _STAGE_STYLE.get(stage, ("?", "dim", stage))
+    if stage == "Error" and error:
+        return f"[{color}]{icon} {error}[/{color}]"
+    return f"[{color}]{icon} {label}[/{color}]"
+
+
+def _build_sync_table(
+    active: OrderedDict[str, tuple[str, int, str]],
+    completed: int,
+    total: int,
+) -> Table:
+    """Build the Live progress table for sync."""
+    table = Table(
+        title="[bold]Sync Progress[/bold]",
+        show_header=True,
+        title_style="bold",
+        padding=(0, 1),
+        expand=True,
+    )
+    table.add_column("File", ratio=3, no_wrap=True)
+    table.add_column("Stage", ratio=2, justify="center")
+    table.add_column("Chunks", ratio=1, justify="right")
+
+    rows = list(active.items())
+    visible = rows[-_MAX_VISIBLE_ROWS:]
+
+    for path, (stage, chunks, error) in visible:
+        fname = os.path.basename(path)
+        table.add_row(
+            f"[bold]{fname}[/bold]",
+            _stage_label(stage, error),
+            str(chunks) if chunks > 0 else "",
+        )
+
+    hidden = len(rows) - len(visible)
+    if hidden > 0:
+        table.add_row(f"[dim]… and {hidden} more…[/dim]", "", "")
+
+    if total > 0:
+        pct = completed / total * 100
+        table.caption = f"[progress.percentage]{pct:>5.1f}%[/progress.percentage]  {completed}/{total} files"
+
+    return table
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -142,29 +205,33 @@ def sync(
 
     yaml_config = YamlConfig(config_path)
 
-    with Progress(*_progress_columns(), console=console) as progress:
-        task = progress.add_task("Syncing...", total=None)
+    active: OrderedDict[str, tuple[str, int, str]] = OrderedDict()
+    total_files = 0
+    completed_count = 0
 
-        def _on_progress(p: FileProgress) -> None:
-            filename = os.path.basename(p.path) if p.path else p.path
-            if p.stage == "Done" and p.chunks > 0:
-                label = f"[green]{filename}[/green] — Done ({p.chunks} chunks)"
-            elif p.stage == "Error":
-                label = f"[red]{filename} — {p.error}[/red]"
-            elif p.stage == "Done":
-                label = f"[dim]{filename} — Unchanged[/dim]"
+    def _on_progress(p: FileProgress) -> None:
+        nonlocal total_files, completed_count
+        if p.total > 0:
+            total_files = p.total
+        completed_count = p.current
+
+        if p.stage in ("Done", "Error"):
+            if p.stage == "Error":
+                active[p.path] = ("Error", 0, p.error)
             else:
-                label = f"[bold blue]{filename}[/bold blue] — {p.stage}"
+                active[p.path] = ("Done", p.chunks, "")
+        else:
+            existing = active.get(p.path)
+            chunks = existing[1] if existing else 0
+            active[p.path] = (p.stage, chunks, "")
 
-            if p.total > 0 and progress.tasks[task].total != p.total:
-                progress.update(task, total=p.total)
-            progress.update(task, completed=p.current, description=label)
+    with Live(_build_sync_table(active, 0, 0), console=console, refresh_per_second=8) as live:
 
         async def _run() -> SyncStats:
             return await rag_sync(yaml_config, source_name=source_name, dry_run=dry_run, progress_cb=_on_progress)  # type: ignore[return-value]
 
         stats = asyncio.run(_run())
-        progress.update(task, completed=stats.added + stats.changed + stats.unchanged + stats.deleted)
+        live.update(_build_sync_table(active, completed_count, total_files))
 
     prefix = "would " if dry_run else ""
     table = Table(title="Sync Complete", show_header=False, title_style="bold")

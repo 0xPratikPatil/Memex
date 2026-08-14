@@ -749,6 +749,176 @@ class RAGEngine:
         logger.info("Ingested %d chunks for '%s'", len(points), source_identifier)
         return len(points)
 
+    def ingest_prechunked(
+        self,
+        chunks: list[dict[str, Any]],
+        markdown: str,
+        source_identifier: str,
+        metadata: dict[str, Any] | None = None,
+        content_hash: str = "",
+        progress_cb: Callable[[str, int], None] | None = None,
+    ) -> int:
+        """Ingest pre-chunked data, skipping the create_chunks() call.
+
+        Used when chunking was done externally (e.g., by HybridChunker in a
+        single Docling API call). Skips the double Docling call problem.
+
+        Embeddings are stored to Qdrant IMMEDIATELY at the end of this call —
+        no batching across files. Each file's vectors are persisted as soon as
+        all stages complete for that file.
+        """
+
+        def _progress(msg: str, pct: int) -> None:
+            if progress_cb:
+                progress_cb(msg, pct)
+            logger.info("ingest [%d%%] %s", pct, msg)
+
+        if not chunks:
+            raise ValueError("No chunks to ingest.")
+
+        raw_chunks = [c for c in chunks if len(c.get("content", "").strip()) >= config.MIN_CHUNK_LEN]
+        if not raw_chunks:
+            raise ValueError("No chunks above MIN_CHUNK_LEN after filtering.")
+
+        from memex.engine.ingestion.hashing import dedup_chunks
+
+        raw_chunks = dedup_chunks(raw_chunks)
+        if not raw_chunks:
+            raise ValueError("No chunks after deduplication.")
+
+        # ── Contextual retrieval ──────────────────────────────────────────
+        if config.ENABLE_CONTEXTUAL_RETRIEVAL:
+            ctx_gen = ContextGenerator(self._llm)
+            document_summary = ""
+            if config.CONTEXT_STRATEGY == "summary":
+                _progress("Generating document summary...", 71)
+                try:
+                    document_summary = ctx_gen.generate_document_summary(markdown)
+                except Exception:
+                    logger.warning("Document summary generation failed, falling back to header strategy", exc_info=True)
+            _progress("Adding context to chunks...", 73)
+            raw_chunks = ctx_gen.enrich_chunks(raw_chunks, document_summary=document_summary)
+
+        # ── Metadata extraction ──────────────────────────────────────────
+        if config.ENABLE_METADATA_EXTRACTION:
+            metadata_extractor = MetadataExtractor(self._llm)
+            _progress("Extracting metadata...", 74)
+            batch_meta = metadata_extractor.extract_batch(
+                chunks=raw_chunks,
+                document_text=markdown,
+                source_identifier=source_identifier,
+            )
+            for chunk, meta in zip(raw_chunks, batch_meta, strict=True):
+                chunk["metadata"] = meta
+
+        _progress(f"Generating embeddings ({len(raw_chunks)} chunks)...", 75)
+        chunk_texts = [c["content"] for c in raw_chunks]
+        raw_texts = [strip_context_prefix(c["content"]) for c in raw_chunks]
+
+        import concurrent.futures
+
+        contextual_vecs: list[list[float]] | None = None
+        max_workers = 3 if config.ENABLE_CONTEXTUAL_RETRIEVAL else 2
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            dense_future = pool.submit(self._dense_embed_batch, raw_texts)
+            sparse_future = pool.submit(self._sparse_embed, chunk_texts)
+            if config.ENABLE_CONTEXTUAL_RETRIEVAL:
+                contextual_future = pool.submit(self._dense_embed_batch, chunk_texts)
+            else:
+                contextual_future = None
+
+            dense_vecs = dense_future.result()
+            sparse_vecs = sparse_future.result()
+            if contextual_future is not None:
+                contextual_vecs = contextual_future.result()
+
+        _progress("Storing in Qdrant...", 90)
+        now = datetime.now(UTC).isoformat()
+        base_meta = metadata or {}
+
+        file_mtime: float | None = None
+        file_size: int | None = None
+        if os.path.isfile(source_identifier):
+            try:
+                st = os.stat(source_identifier)
+                file_mtime = st.st_mtime
+                file_size = st.st_size
+            except OSError:
+                pass
+
+        points: list[PointStruct] = []
+        for idx, (chunk, dense_vec, sparse_dict) in enumerate(zip(raw_chunks, dense_vecs, sparse_vecs, strict=True)):
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{source_identifier}_{idx}"))
+            point_meta = {
+                "source": source_identifier,
+                "chunk_index": idx,
+                "total_chunks": len(raw_chunks),
+                "content": chunk["content"],
+                "section_header": chunk.get("section_header", ""),
+                "context_prefix": chunk.get("context_prefix", ""),
+                "ingested_at": now,
+                "content_hash": content_hash,
+                **(chunk.get("metadata", {})),
+                **base_meta,
+            }
+            if file_mtime is not None:
+                point_meta["file_mtime"] = file_mtime
+            if file_size is not None:
+                point_meta["file_size"] = file_size
+
+            if not config.ENABLE_METADATA_EXTRACTION:
+                point_meta.setdefault("doc_type", "")
+                point_meta.setdefault("topics", [])
+                point_meta.setdefault("language", "")
+                point_meta.setdefault("keywords", [])
+                point_meta.setdefault("entities", {})
+
+            vectors: dict[str, Any] = {
+                "dense": dense_vec,
+                "sparse": SparseVector(
+                    indices=[int(k) for k in sparse_dict],
+                    values=list(sparse_dict.values()),
+                ),
+            }
+            if contextual_vecs is not None:
+                vectors["contextual_dense"] = contextual_vecs[idx]
+
+            points.append(
+                PointStruct(
+                    id=point_id,
+                    vector=vectors,
+                    payload=point_meta,
+                )
+            )
+
+        qdrant = self._get_qdrant()
+        try:
+            for i in range(0, len(points), config.EMBED_BATCH_SIZE):
+                qdrant.upsert(
+                    collection_name=config.COLLECTION_NAME,
+                    points=points[i : i + config.EMBED_BATCH_SIZE],
+                )
+        except Exception:
+            logger.error(
+                "Write failed for '%s', rolling back by content_hash=%s",
+                source_identifier,
+                content_hash,
+            )
+            try:
+                qdrant.delete(
+                    collection_name=config.COLLECTION_NAME,
+                    points_selector=Filter(
+                        must=[FieldCondition(key="content_hash", match=MatchValue(value=content_hash))],
+                    ),
+                )
+                logger.info("Rolled back chunks for content_hash=%s", content_hash)
+            except Exception as rollback_exc:
+                logger.error("Rollback also failed: %s", rollback_exc)
+            raise
+
+        logger.info("Ingested %d chunks for '%s' — embeddings persisted", len(points), source_identifier)
+        return len(points)
+
     def hybrid_search(
         self,
         query: str,

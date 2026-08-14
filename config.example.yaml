@@ -101,6 +101,7 @@ ingestion:
   timeout_parse: 120.0
   timeout_total: 300.0
   max_concurrent_parses: 3
+  max_concurrent_sync: 8
 
 qdrant:
   timeout: 10.0

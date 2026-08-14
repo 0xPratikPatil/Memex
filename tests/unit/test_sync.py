@@ -131,7 +131,11 @@ class TestIngestFile:
         mock_result.markdown = "# Converted"
         mock_result.processing_time = 1.0
 
-        with patch("memex.engine.ingestion.loader.parse_file", return_value=mock_result):
+        with (
+            patch("memex.engine.ingestion.loader.parse_file", return_value=mock_result),
+            patch("memex.engine.sources.sync.config") as mock_config,
+        ):
+            mock_config.CHUNK_STRATEGY = "recursive"
             count = _ingest_file(mock_engine, str(test_file), str(test_file), "my-source")
 
         assert count == 5
@@ -153,8 +157,10 @@ class TestIngestFile:
 
         with (
             patch("memex.engine.ingestion.loader.parse_file", return_value=mock_result),
+            patch("memex.engine.sources.sync.config") as mock_config,
             pytest.raises(RuntimeError, match="Docling conversion failed"),
         ):
+            mock_config.CHUNK_STRATEGY = "recursive"
             _ingest_file(mock_engine, str(test_file), str(test_file), "my-source")
 
 
@@ -214,6 +220,7 @@ class TestSync:
             patch("memex.engine.sources.sync.config") as mock_config,
         ):
             mock_config.COLLECTION_NAME = "memex"
+            mock_config.MAX_CONCURRENT_SYNC = 8
             stats = await sync(mock_yaml_config)
 
         assert stats.added == 1
@@ -260,6 +267,7 @@ class TestSync:
             patch("memex.engine.sources.sync.config") as mock_config,
         ):
             mock_config.COLLECTION_NAME = "memex"
+            mock_config.MAX_CONCURRENT_SYNC = 8
             stats = await sync(mock_yaml_config)
 
         assert stats.changed == 1
@@ -292,6 +300,7 @@ class TestSync:
             patch("memex.engine.sources.sync.config") as mock_config,
         ):
             mock_config.COLLECTION_NAME = "memex"
+            mock_config.MAX_CONCURRENT_SYNC = 8
             stats = await sync(mock_yaml_config)
 
         assert stats.unchanged == 1
@@ -322,6 +331,7 @@ class TestSync:
             patch("memex.engine.sources.sync.config") as mock_config,
         ):
             mock_config.COLLECTION_NAME = "memex"
+            mock_config.MAX_CONCURRENT_SYNC = 8
             stats = await sync(mock_yaml_config)
 
         assert stats.deleted == 1
@@ -349,6 +359,7 @@ class TestSync:
             patch("memex.engine.sources.sync.config") as mock_config,
         ):
             mock_config.COLLECTION_NAME = "memex"
+            mock_config.MAX_CONCURRENT_SYNC = 8
             stats = await sync(mock_yaml_config, dry_run=True)
 
         assert stats.added == 1
@@ -389,6 +400,7 @@ class TestSync:
             patch("memex.engine.sources.sync.config") as mock_config,
         ):
             mock_config.COLLECTION_NAME = "memex"
+            mock_config.MAX_CONCURRENT_SYNC = 8
             stats = await sync(mock_yaml_config)
 
         assert len(stats.errors) == 1
@@ -418,6 +430,7 @@ class TestSync:
             patch("memex.engine.sources.sync.config") as mock_config,
         ):
             mock_config.COLLECTION_NAME = "memex"
+            mock_config.MAX_CONCURRENT_SYNC = 8
             stats = await sync(mock_yaml_config, source_name="docs")
 
         # Only "docs" source should have been processed
