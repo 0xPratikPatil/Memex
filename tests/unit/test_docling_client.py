@@ -1,4 +1,4 @@
-"""Unit tests for docling_client module."""
+"""Unit tests for the legacy Docling path of the loader module."""
 
 from __future__ import annotations
 
@@ -10,6 +10,15 @@ from unittest.mock import patch
 import pytest
 
 from memex.engine.ingestion.loader import ConversionResult, _build_options, parse_local_file
+
+
+@pytest.fixture(autouse=True)
+def _force_docling_engine() -> None:
+    """These tests exercise the legacy Docling conversion path — force the
+    engine flag so the marker branch is not taken."""
+    with patch("memex.engine.ingestion.loader.config.CONVERTER_ENGINE", "docling"):
+        yield
+
 
 # ── parse_local_file tests ──────────────────────────────────────────────────
 

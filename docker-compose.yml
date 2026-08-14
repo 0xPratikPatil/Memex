@@ -125,33 +125,48 @@ services:
       - "com.memex.description=LLM inference for embeddings (qwen3-embedding) and chat (qwen2.5)"
 
   # ══════════════════════════════════════════════════════════════════════════════
-  # Docling Serve — Document parsing & conversion (PDF, DOCX, HTML, etc.)
+  # Marker — Document parsing & conversion (PDF → Markdown, Surya OCR + layout)
+  # Replaces Docling: faster (2.9-7.4 pg/s vs 2.1) and higher quality (76 vs 50
+  # on olmocr-bench) on GPU. Models pre-cached at build time.
   # ══════════════════════════════════════════════════════════════════════════════
-  docling:
-    image: ghcr.io/docling-project/docling-serve-cu130:v1.30.0
-    container_name: memex-docling
+  marker:
+    build:
+      context: .
+      dockerfile: marker.Dockerfile
+      target: runtime
+    image: memex-marker:latest
+    container_name: memex-marker
     init: true
     ports:
-      - "127.0.0.1:${DOCLING_PORT:-5001}:5001"
+      - "127.0.0.1:${MARKER_PORT:-5001}:5001"
     tmpfs:
-      - /tmp:exec,size=128M
+      # Surya downloads models via temp dirs under /tmp — needs room for a
+      # 1.35GB model.safetensors. 4G covers the largest single model.
+      - /tmp:exec,size=4G
     environment:
-      DOCLING_SERVE_HOST: "0.0.0.0"
-      DOCLING_SERVE_PORT: "5001"
+      # 8GB GPU is shared with Ollama + desktop (Brave) — not enough to hold
+      # GPU-only conversion. The 5 models (~3.4GB on disk) load into the
+      # per-job subprocess on CUDA and are freed when it exits. The job
+      # architecture isolates any crash/OOM from the server.
+      TORCH_DEVICE: "cuda"
+      # Prevent CUDA fragmentation OOMs during long conversions.
+      PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
       NVIDIA_VISIBLE_DEVICES: all
-      # ── Conversion performance tuning ─────────────────────────────────
-      # DOCLING_SERVE_MAX_SYNC_WAIT must exceed the total time for the
-      # largest document (conversion + queue wait), otherwise docling
-      # aborts the sync request with a 504 while work is still in progress.
-      DOCLING_SERVE_MAX_SYNC_WAIT: "${DOCLING_SERVE_MAX_SYNC_WAIT:-600}"
-      # Per-document processing timeout (conversion only, excludes queue wait).
-      DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT: "${DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT:-600}"
-      # Match OMP/MKL threads to the CPU limit (4) — over-threading thrashes.
+      # Surya caches models under $HOME/.cache — keep HOME=/app so the
+      # pre-cached build models are found (no runtime re-download).
+      HOME: "/app"
+      # Match OMP threads to the CPU limit (4) — over-threading thrashes.
       OMP_NUM_THREADS: "4"
-      MKL_NUM_THREADS: "4"
-      # LocalOrchestrator worker pool: how many documents convert in parallel.
-      # Keep this low enough that per-worker OMP threads don't oversubscribe.
-      DOCLING_SERVE_ENG_LOC_NUM_WORKERS: "${DOCLING_SERVE_ENG_LOC_NUM_WORKERS:-2}"
+      # Hard per-job timeout — a runaway conversion is killed, not hung.
+      JOB_TIMEOUT: "${JOB_TIMEOUT:-600}"
+      # One subprocess at a time (each loads ~5-6GB of models + GPU VRAM).
+      MAX_CONCURRENT_JOBS: "1"
+    # Host uses systemd-resolved stub (127.0.0.53) which is unreachable inside
+    # the container network namespace — point at a real resolver so marker can
+    # download its models from models.datalab.to.
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     networks:
       - backend
     healthcheck:
@@ -159,15 +174,18 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 120s
     deploy:
       resources:
         limits:
-          cpus: "4.0"
-          memory: 6G
+          cpus: "8.0"
+          # Server is thin (~100MB); the per-job subprocess loads ~5.4GB of
+          # models + working set for large PDFs. 16G fits conversions of
+          # 100MB+ books on cloud instances (32-64G RAM typical).
+          memory: "${MARKER_MEM_LIMIT:-16G}"
         reservations:
-          cpus: "0.5"
-          memory: 2G
+          cpus: "1.0"
+          memory: 4G
           devices:
             - driver: nvidia
               count: all
@@ -182,8 +200,8 @@ services:
         max-size: "10m"
         max-file: "3"
     labels:
-      - "com.memex.service=docling"
-      - "com.memex.description=Document parsing and hybrid chunking (Docling HybridChunker)"
+      - "com.memex.service=marker"
+      - "com.memex.description=Document parsing and conversion (Marker + Surya OCR)"
 
   # ── Redis — persistent caching layer ──
   redis:

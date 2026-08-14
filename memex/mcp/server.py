@@ -150,11 +150,13 @@ def _shutdown() -> None:
     global _engine
     with contextlib.suppress(Exception):
         from memex.engine.ingestion import loader as docling_client
+        from memex.engine.ingestion.marker_client import close as close_marker
 
         if _engine is not None:
             _engine.close()
             _engine = None
         docling_client.close()
+        close_marker()
 
 
 atexit.register(_shutdown)
@@ -911,10 +913,11 @@ async def rag_service_status() -> str:
 
     import httpx
 
+    converter_name = "marker" if config.CONVERTER_ENGINE == "marker" else "docling"
     services = {
         "qdrant": config.QDRANT_URL,
         "ollama": config.OLLAMA_EMBED_URL,
-        "docling": config.DOCLING_URL,
+        converter_name: config.DOCLING_URL if config.CONVERTER_ENGINE == "docling" else f"{config.MARKER_URL}/health",
     }
 
     statuses: dict[str, dict[str, Any]] = {}

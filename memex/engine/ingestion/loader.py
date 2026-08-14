@@ -40,7 +40,7 @@ _client_lock = threading.Lock()
 # ingest) from overwhelming the single Docling instance — excess requests
 # queue here instead of piling up inside the server and timing out.
 # Must stay <= DOCLING_SERVE_ENG_LOC_NUM_WORKERS in docker-compose.yml.
-_docling_semaphore = threading.BoundedSemaphore(max(1, config.DOCLING_MAX_CONCURRENT))
+_docling_semaphore = threading.BoundedSemaphore(max(1, config.CONVERTER_MAX_CONCURRENT))
 
 
 # ── Structured result ────────────────────────────────────────────────────────
@@ -183,14 +183,27 @@ def _build_options() -> dict[str, Any]:
 # ── Public API ───────────────────────────────────────────────────────────────
 
 
+def _marker_result_to_conversion(result, url_or_path: str) -> ConversionResult:
+    """Convert a MarkerResult into the shared ConversionResult shape."""
+    return ConversionResult(
+        markdown=result.markdown,
+        json_content=result.metadata,
+        html_content="",
+        text_content="",
+        status="success",
+        processing_time=result.processing_time,
+        errors=[],
+    )
+
+
 def parse_url(url: str) -> ConversionResult:
-    """Fetch a URL via Docling and return structured conversion result."""
+    """Fetch a URL via the configured converter and return structured result."""
     from memex.engine.utils.cache import cache_parse_result, get_cached_parse_result
 
     file_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
     cached = get_cached_parse_result(file_hash)
     if cached is not None:
-        logger.info("Docling cache hit for URL: %s", url)
+        logger.info("Converter cache hit for URL: %s", url)
         return ConversionResult(
             markdown=cached["markdown"],
             json_content=cached.get("json_content", {}),
@@ -200,6 +213,46 @@ def parse_url(url: str) -> ConversionResult:
             processing_time=cached.get("processing_time", 0.0),
             errors=cached.get("errors", []),
         )
+
+    if config.CONVERTER_ENGINE == "marker":
+        # Marker's /marker/upload accepts file uploads only — fetch the URL
+        # first, then convert the bytes.
+        try:
+            resp = httpx.get(url, timeout=config.HTTP_TIMEOUT, follow_redirects=True)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ConversionError(
+                url,
+                f"URL fetch error {exc.response.status_code}: {exc.response.text[:200]}",
+                hint="The URL is unreachable or returned an error status.",
+                cause=exc,
+            ) from exc
+        except httpx.TransportError as exc:
+            raise ServiceUnavailableError(
+                "URL",
+                f"cannot reach {url}: {exc}",
+                hint="Check the URL is reachable from this host.",
+                cause=exc,
+            ) from exc
+
+        filename = url.split("/")[-1].split("?")[0] or "document"
+        from memex.engine.ingestion.marker_client import convert_markdown
+
+        result = convert_markdown(resp.content, filename)
+        converted = _marker_result_to_conversion(result, url)
+        cache_parse_result(
+            file_hash,
+            {
+                "markdown": converted.markdown,
+                "json_content": converted.json_content,
+                "html_content": converted.html_content,
+                "text_content": converted.text_content,
+                "status": converted.status,
+                "processing_time": converted.processing_time,
+                "errors": converted.errors,
+            },
+        )
+        return converted
 
     payload = {
         "options": _build_options(),
@@ -223,24 +276,24 @@ def parse_url(url: str) -> ConversionResult:
             cause=exc,
         ) from exc
 
-    result = _parse_response(data)
+    converted_result = _parse_response(data)
     cache_parse_result(
         file_hash,
         {
-            "markdown": result.markdown,
-            "json_content": result.json_content,
-            "html_content": result.html_content,
-            "text_content": result.text_content,
-            "status": result.status,
-            "processing_time": result.processing_time,
-            "errors": result.errors,
+            "markdown": converted_result.markdown,
+            "json_content": converted_result.json_content,
+            "html_content": converted_result.html_content,
+            "text_content": converted_result.text_content,
+            "status": converted_result.status,
+            "processing_time": converted_result.processing_time,
+            "errors": converted_result.errors,
         },
     )
-    return result
+    return converted_result
 
 
 def parse_local_file(file_path: str) -> ConversionResult:
-    """Read a local file directly and convert via Docling.
+    """Read a local file directly and convert via the configured converter.
 
     Args:
         file_path: Absolute path to the file (e.g., /mnt/docs/report.pdf)
@@ -253,7 +306,7 @@ def parse_local_file(file_path: str) -> ConversionResult:
     file_hash = hashlib.sha256(file_path.encode()).hexdigest()[:16]
     cached = get_cached_parse_result(file_hash)
     if cached is not None:
-        logger.info("Docling cache hit for local file: %s", file_path)
+        logger.info("Converter cache hit for local file: %s", file_path)
         return ConversionResult(
             markdown=cached["markdown"],
             json_content=cached.get("json_content", {}),
@@ -273,6 +326,26 @@ def parse_local_file(file_path: str) -> ConversionResult:
             f"File too large ({len(file_bytes) / 1024 / 1024:.0f}MB > 200MB). Use chunking module for large files."
         )
     filename = p.name
+
+    if config.CONVERTER_ENGINE == "marker":
+        from memex.engine.ingestion.marker_client import convert_markdown
+
+        result = convert_markdown(file_bytes, filename)
+        converted = _marker_result_to_conversion(result, file_path)
+        cache_parse_result(
+            file_hash,
+            {
+                "markdown": converted.markdown,
+                "json_content": converted.json_content,
+                "html_content": converted.html_content,
+                "text_content": converted.text_content,
+                "status": converted.status,
+                "processing_time": converted.processing_time,
+                "errors": converted.errors,
+            },
+        )
+        return converted
+
     b64 = base64.b64encode(file_bytes).decode("ascii")
 
     payload = {
@@ -305,20 +378,20 @@ def parse_local_file(file_path: str) -> ConversionResult:
             cause=exc,
         ) from exc
 
-    result = _parse_response(data)
+    converted_result = _parse_response(data)
     cache_parse_result(
         file_hash,
         {
-            "markdown": result.markdown,
-            "json_content": result.json_content,
-            "html_content": result.html_content,
-            "text_content": result.text_content,
-            "status": result.status,
-            "processing_time": result.processing_time,
-            "errors": result.errors,
+            "markdown": converted_result.markdown,
+            "json_content": converted_result.json_content,
+            "html_content": converted_result.html_content,
+            "text_content": converted_result.text_content,
+            "status": converted_result.status,
+            "processing_time": converted_result.processing_time,
+            "errors": converted_result.errors,
         },
     )
-    return result
+    return converted_result
 
 
 def parse_file(file_path_or_url: str) -> ConversionResult:

@@ -25,6 +25,8 @@ class TestCreateChunksTextOnly:
 
 
 class TestCreateChunksHybridStrategy:
+    """Hybrid (Docling) chunking only applies with converter.engine=docling."""
+
     def test_uses_hybrid_chunker_when_available(self) -> None:
         mock_chunks = [
             {
@@ -42,6 +44,7 @@ class TestCreateChunksHybridStrategy:
         ]
         with (
             patch("memex.engine.core.pipeline.config.CHUNK_STRATEGY", "hybrid"),
+            patch("memex.engine.core.pipeline.config.CONVERTER_ENGINE", "docling"),
             patch("memex.engine.core.pipeline.config.MIN_CHUNK_LEN", 5),
             patch("memex.engine.ingestion.splitter.chunk_file", return_value={"chunks": mock_chunks, "markdown": ""}),
         ):
@@ -50,9 +53,20 @@ class TestCreateChunksHybridStrategy:
             assert chunks[0]["content"] == mock_chunks[0]["content"]
             assert chunks[1]["section_header"] == "Header 2"
 
+    def test_uses_recursive_when_marker_engine(self) -> None:
+        """With the default marker engine, hybrid strategy falls back to recursive."""
+        with (
+            patch("memex.engine.core.pipeline.config.CHUNK_STRATEGY", "hybrid"),
+            patch("memex.engine.core.pipeline.config.CONVERTER_ENGINE", "marker"),
+            patch("memex.engine.core.pipeline.config.MIN_CHUNK_LEN", 5),
+        ):
+            chunks = create_chunks(text=_LONG_TEXT, source_identifier="/test/file.pdf")
+            assert len(chunks) > 0
+
     def test_falls_back_to_recursive_on_hybrid_failure(self) -> None:
         with (
             patch("memex.engine.core.pipeline.config.CHUNK_STRATEGY", "hybrid"),
+            patch("memex.engine.core.pipeline.config.CONVERTER_ENGINE", "docling"),
             patch("memex.engine.core.pipeline.config.MIN_CHUNK_LEN", 5),
             patch(
                 "memex.engine.ingestion.splitter.chunk_file",
@@ -66,6 +80,7 @@ class TestCreateChunksHybridStrategy:
         short_text = "## Header\n\nSome text content that is long enough\n\nMore text"
         with (
             patch("memex.engine.core.pipeline.config.CHUNK_STRATEGY", "hybrid"),
+            patch("memex.engine.core.pipeline.config.CONVERTER_ENGINE", "docling"),
             patch("memex.engine.core.pipeline.config.MIN_CHUNK_LEN", 5),
             patch(
                 "memex.engine.ingestion.splitter.chunk_file",

@@ -20,7 +20,7 @@ memex/
     │   ├── logging_setup.py     # Colored/structured logging (Rich handler, JSON mode)
     │   └── yaml_config.py       # YamlConfig with dot-notation + ${VAR} substitution
     ├── ingestion/
-    │   ├── loader.py            # parse_file / parse_url → Docling conversion
+    │   ├── loader.py            # parse_file / parse_url → Marker conversion (docling legacy path)
     │   ├── context.py            # Context prefix generation (contextual retrieval)
     │   ├── embedding.py          # EmbeddingService: batch embed via Ollama/OpenAI/HF
     │   ├── hashing.py            # SHA256 content-hash dedup
@@ -77,9 +77,9 @@ All features are controlled via `config.yaml`. The master toggle for each group 
 - **Search Cache** (`caching.enabled`, `caching.ttl_search`=3600): In-memory LRU cache with Redis persistent layer caches full result sets for repeated queries.
 
 ### Ingestion
-- **Docling HybridChunker** (`chunking.strategy=hybrid`): Tokenizer-aware, structure-preserving chunking on DoclingDocument. Repeats table headers across boundaries.
+- **Marker conversion** (`converter.engine=marker`): marker-pdf + Surya OCR in Docker — faster (2.9-7.4 pg/s) and higher quality (76 vs 50 olmocr-bench) than Docling. Recursive chunking is the default.
 - **Multi-format Embedding**: Table chunks → HTML, code chunks → fenced markdown, images → `[Image: caption]`.
-- **Docling Enrichment**: Picture classification (`converter.docling_picture_classify`=true), code/formula/chart extraction (opt-in, needs serve-side models).
+- **Legacy Docling path** (`converter.engine=docling`): kept for rollback only.
 - **Content-Hash Dedup** (`ingestion/hashing.py`): SHA256-based dedup prevents re-indexing identical content. Partial ingest recovery on crash.
 - **Embedding Cache** (`caching.enabled`, `caching.ttl_embedding`=86400): In-memory LRU caches dense vectors (Redis persistent layer).
 
@@ -138,7 +138,9 @@ All configuration lives in `config.yaml`. Copy `config.example.yaml` to `config.
 | `chunking.overlap` | `128` | Token overlap |
 | `chunking.min_length` | `30` | Minimum chunk length |
 | `chunking.tokenizer` | `Qwen/Qwen3-Embedding-0.6B` | HF tokenizer for chunk sizing |
-| `converter.docling_url` | `http://localhost:5001/v1/convert/source` | Docling Serve |
+| `converter.engine` | `marker` | marker (recommended) / docling (legacy) |
+| `converter.marker_url` | `http://localhost:5001` | Marker service |
+| `converter.marker_mode` | `fast` | fast (default) / balanced (GPU) |
 | `converter.docling_timeout` | `300.0` | Conversion timeout (seconds) |
 | `converter.docling_picture_classify` | `true` | Image classification |
 | `converter.docling_enrich_code` | `false` | Code extraction (needs serve-side model) |
@@ -185,8 +187,9 @@ MCP Server (host process, uv run memex)
   ├── HTTP ──► Docker: Ollama (:11434)
   │               embedding (qwen3-embedding:0.6b) + chat (qwen2.5:1.5b)
   │
-  ├── HTTP ──► Docker: Docling Serve (:5001)
-  │               GPU document conversion + HybridChunker
+  ├── HTTP ──► Docker: Marker (:5001)
+  │               GPU document conversion (job-based: thin server +
+  │               per-job subprocess, crash-proof, no timeouts)
   │
   ├── HTTP ──► Docker: Qdrant (:6333)
   │               vector DB (1024d HNSW index)
@@ -211,10 +214,10 @@ MCP Server (host process, uv run memex)
 - **Logging**: `json-file` driver with `max-size: 10m` and `max-file: 3` on every service.
 - **Security**: `no-new-privileges:true` on every service, no privileged containers.
 - **Restart policy**: `unless-stopped` for all persistent services.
-- **stop_grace_period**: 30s (qdrant, ml-services), 60s (ollama/docling).
+- **stop_grace_period**: 30s (qdrant, ml-services), 60s (ollama/marker).
 - **Single network**: All services share the `backend` bridge network (MCP server runs on host).
 - **Tmpfs for /tmp**: Every service has tmpfs mount — keeps temp writes off the container filesystem.
-- **Container names**: `memex-qdrant`, `memex-ollama`, `memex-docling`, `memex-ml`.
+- **Container names**: `memex-qdrant`, `memex-ollama`, `memex-marker`, `memex-ml`.
 - **Service labels**: Each service has `com.memex.service` and `com.memex.description` labels.
 - **Override file**: `compose.override.yaml` is auto-loaded with tighter dev health checks.
 - **Ollama runs in Docker only** — never install Ollama on the host.
@@ -359,7 +362,7 @@ pytest tests/integration/ -v  # integration tests (needs Docker services running
 ### Useful Docker commands
 ```bash
 docker compose logs -f ollama           # tail Ollama logs
-docker compose logs -f docling          # tail Docling logs
+docker compose logs -f marker          # tail Marker logs
 docker compose restart ollama           # restart Ollama container
 docker compose down && docker compose up -d  # full restart
 docker volume ls                        # check volumes exist

@@ -47,9 +47,15 @@ llm:
   # base_url: "https://api.openai.com/v1"  # for openai/openrouter
   api_key: ${OPENAI_API_KEY}               # for cloud providers
 
-# ── Document Conversion (Docling Serve) ───────────────────────────────────────
+# ── Document Conversion (Marker) ──────────────────────────────────────────────
 converter:
-  engine: docling                          # docling (only option)
+  engine: marker                           # marker (recommended) | docling (legacy)
+  marker_url: "http://localhost:5001"
+  marker_mode: balanced                    # balanced (GPU, highest quality, default) | fast (bulk, 2.5x faster)
+  marker_force_ocr: false                  # force OCR on all pages (scanned-only corpora)
+  marker_timeout: 300.0                    # seconds per conversion
+  max_concurrent: 2                        # cap parallel conversions — keep <= GPU capacity
+  # ── Legacy Docling settings (only used when engine: docling) ──────────
   docling_url: "http://localhost:5001/v1/convert/source"
   docling_api_key: ${DOCLING_API_KEY}
   docling_timeout: 300.0                   # seconds
@@ -69,9 +75,7 @@ converter:
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
 chunking:
-  strategy: hybrid                         # hybrid | recursive | fixed
-  # strategy: recursive                    #   paragraph/sentence-aware
-  # strategy: fixed                        #   fixed-size character splits
+  strategy: recursive                      # recursive (recommended with marker) | fixed | hybrid (docling only)
   size: 1024                               # target tokens per chunk
   overlap: 128                             # token overlap between chunks
   min_length: 30                           # skip chunks shorter than this

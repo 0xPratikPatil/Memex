@@ -81,6 +81,16 @@ ML_SERVICES_URL: str = _cfg_str("sparse.url", f"http://localhost:{ML_SERVICES_PO
 QDRANT_URL: str = _cfg_str("vectorstore.url", f"http://localhost:{QDRANT_PORT}")
 REDIS_URL: str = _cfg_str("caching.redis_url", f"redis://localhost:{REDIS_PORT}/0")
 
+# ── Converter engine (marker | docling legacy) ─────────────────────────────────
+CONVERTER_ENGINE: str = _cfg_str("converter.engine", "marker")
+MARKER_URL: str = _cfg_str("converter.marker_url", f"http://localhost:{DOCLING_PORT}")
+MARKER_MODE: str = _cfg_str("converter.marker_mode", "balanced")  # balanced | fast
+MARKER_FORCE_OCR: bool = _cfg_bool("converter.marker_force_ocr", False)
+MARKER_TIMEOUT: float = _cfg_float("converter.marker_timeout", 300.0)
+# Cap concurrent in-flight conversions to Marker. Must stay low enough that
+# the GPU service is not overwhelmed (2 is safe for a single GPU server).
+CONVERTER_MAX_CONCURRENT: int = _cfg_int("converter.max_concurrent", 2)
+
 # ── API Keys ──────────────────────────────────────────────────────────────────
 DOCLING_API_KEY: str = _cfg_str("converter.docling_api_key", "")
 
@@ -168,15 +178,10 @@ DOCLING_CHART_EXTRACT: bool = _cfg_bool("converter.docling_chart_extract", False
 DOCLING_IMAGE_EXPORT: str = _cfg_str("converter.docling_image_export", "embedded")
 DOCLING_PDF_BACKEND: str = _cfg_str("converter.docling_pdf_backend", "")
 
-# ── Docling conversion performance ───────────────────────────────────────────
-# OCR + TableFormer are the two most expensive Docling stages (up to 75% of
-# conversion time). Allow per-deployment tuning rather than always paying the cost.
+# ── Docling conversion performance (legacy — only used when engine=docling) ──
 DOCLING_TABLE_MODE: str = _cfg_str("converter.docling_table_mode", "accurate")  # accurate | fast
 DOCLING_TABLE_STRUCTURE: bool = _cfg_bool("converter.docling_table_structure", True)
 DOCLING_NUM_WORKERS: int = _cfg_int("converter.docling_num_workers", 0)  # 0 = server default
-# Cap concurrent in-flight conversions to Docling. Must not exceed
-# DOCLING_SERVE_ENG_LOC_NUM_WORKERS, otherwise requests queue behind workers
-# and hit the sync-wait timeout. This is the real fix for the 504 spam.
 DOCLING_MAX_CONCURRENT: int = _cfg_int("converter.docling_max_concurrent", 2)
 
 # ── Query Expansion ──────────────────────────────────────────────────────────

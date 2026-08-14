@@ -23,8 +23,10 @@ from memex.engine.core import config
 from memex.engine.core.errors import (
     ChunkingError,
     ConversionTimeoutError,
+    IngestionError,
     ServiceUnavailableError,
 )
+from memex.engine.core.progress import PipelineStage
 
 logger = logging.getLogger("chunking")
 
@@ -35,7 +37,7 @@ _chunking_client_lock = threading.Lock()
 # Global cap on concurrent Docling chunking calls — shared with the convert
 # path in loader.py. Keeps in-flight conversions within the server's worker
 # pool so requests don't queue and trip DOCLING_SERVE_MAX_SYNC_WAIT.
-_chunking_semaphore = threading.BoundedSemaphore(max(1, config.DOCLING_MAX_CONCURRENT))
+_chunking_semaphore = threading.BoundedSemaphore(max(1, config.CONVERTER_MAX_CONCURRENT))
 
 
 def _stop_transport_retry(retry_state) -> bool:
@@ -255,8 +257,25 @@ def chunk_local_file(file_path: str, include_doc: bool = False) -> dict[str, Any
 
 
 def chunk_file(file_path_or_url: str, include_doc: bool = False) -> dict[str, Any]:
-    """Unified entry point: detect URL vs local path and route accordingly."""
+    """Unified entry point: detect URL vs local path and route accordingly.
+
+    When ``converter.engine`` is ``marker``, Marker converts the document but
+    does not chunk — we return the markdown with no chunks so the caller runs
+    the local recursive/fixed chunker (the RAG default).
+    """
     from urllib.parse import urlparse
+
+    if config.CONVERTER_ENGINE == "marker":
+        from memex.engine.ingestion.loader import parse_file
+
+        parse_result = parse_file(file_path_or_url)
+        if not parse_result.ok:
+            raise IngestionError(
+                file_path_or_url,
+                f"conversion failed: {parse_result.status} -- {parse_result.errors}",
+                stage=PipelineStage.CONVERTING,
+            )
+        return {"chunks": [], "markdown": parse_result.markdown}
 
     parsed = urlparse(file_path_or_url)
     if parsed.scheme in ("http", "https"):

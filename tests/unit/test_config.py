@@ -18,9 +18,17 @@ class TestChunkingDefaults:
         reload(config)
         assert config.CHUNK_OVERLAP == 128
 
-    def test_chunk_strategy_default_hybrid(self):
+    def test_chunk_strategy_default_recursive(self):
         reload(config)
-        assert config.CHUNK_STRATEGY == "hybrid"
+        assert config.CHUNK_STRATEGY == "recursive"
+
+    def test_converter_engine_default_marker(self):
+        reload(config)
+        assert config.CONVERTER_ENGINE == "marker"
+
+    def test_marker_mode_default_balanced(self):
+        reload(config)
+        assert config.MARKER_MODE == "balanced"
 
     def test_chunk_merge_peers_default_true(self):
         reload(config)

@@ -25,10 +25,10 @@ services:
       interval: 10s
       start_period: 20s
 
-  docling:
+  marker:
     healthcheck:
       interval: 15s
-      start_period: 20s
+      start_period: 60s
   ml-services:
     healthcheck:
       interval: 15s

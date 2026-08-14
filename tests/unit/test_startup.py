@@ -57,7 +57,7 @@ class TestCheckServices:
         assert isinstance(results, dict)
         assert "qdrant" in results
         assert "ollama" in results
-        assert "docling" in results
+        assert "marker" in results
 
     def test_uses_service_checker(self):
         mock_checker = MagicMock()

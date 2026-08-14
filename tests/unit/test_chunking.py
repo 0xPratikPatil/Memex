@@ -280,3 +280,44 @@ class TestTransportRetry:
             with pytest.raises(httpx.RemoteProtocolError):
                 splitter._post_chunking_transport({})
             assert attempts["n"] == 3
+
+
+class TestChunkFileMarkerEngine:
+    """With converter.engine=marker, chunk_file returns markdown + no chunks."""
+
+    def test_returns_markdown_with_no_chunks(self, tmp_path) -> None:
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"PDF content")
+
+        mock_parse = MagicMock()
+        mock_parse.ok = True
+        mock_parse.markdown = "# Converted by marker"
+
+        with (
+            patch("memex.engine.ingestion.splitter.config.CONVERTER_ENGINE", "marker"),
+            patch("memex.engine.ingestion.loader.parse_file", return_value=mock_parse),
+        ):
+            from memex.engine.ingestion.splitter import chunk_file
+
+            result = chunk_file(str(test_file))
+            assert result["chunks"] == []
+            assert result["markdown"] == "# Converted by marker"
+
+    def test_raises_ingestion_error_on_failure(self, tmp_path) -> None:
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"PDF content")
+
+        mock_parse = MagicMock()
+        mock_parse.ok = False
+        mock_parse.status = "failure"
+        mock_parse.errors = ["conversion error"]
+
+        with (
+            patch("memex.engine.ingestion.splitter.config.CONVERTER_ENGINE", "marker"),
+            patch("memex.engine.ingestion.loader.parse_file", return_value=mock_parse),
+        ):
+            from memex.engine.core.errors import IngestionError
+            from memex.engine.ingestion.splitter import chunk_file
+
+            with pytest.raises(IngestionError):
+                chunk_file(str(test_file))

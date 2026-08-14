@@ -28,7 +28,13 @@ llm:
   timeout: 300.0                        # per-call timeout for LLM chat (context gen, metadata, answers)
 
 converter:
-  engine: docling
+  engine: marker                          # marker (recommended) | docling (legacy)
+  marker_url: "http://localhost:5001"
+  marker_mode: balanced                   # balanced (GPU, highest quality, default) | fast (bulk, 2.5x faster)
+  marker_force_ocr: false                 # force OCR on all pages (scanned-only corpora)
+  marker_timeout: 300.0                   # seconds per conversion
+  max_concurrent: 2                       # cap parallel conversions — keep <= GPU capacity
+  # ── Legacy Docling settings (only used when engine: docling) ──────────
   docling_url: "http://localhost:5001/v1/convert/source"
   docling_api_key: ${DOCLING_API_KEY}
   docling_timeout: 300.0
@@ -49,7 +55,7 @@ converter:
   docling_pdf_backend: "docling_parse"   # docling_parse (recommended) | pypdfium2 | "" (auto)
 
 chunking:
-  strategy: hybrid
+  strategy: recursive                  # recursive (recommended with marker) | fixed | hybrid (docling only)
   size: 1024
   overlap: 128
   min_length: 30

@@ -85,7 +85,7 @@ CHAT=$(_read_config_model "llm.model" "CHAT_MODEL" "qwen2.5:1.5b")
 RERANK=$(_read_config_model "reranker.model" "RERANK_MODEL" "Qwen/Qwen3-Reranker-0.6B")
 SPARSE=$(_read_config_model "sparse.model" "SPARSE_MODEL" "Qdrant/bm25")
 
-BOOT_SERVICES=(qdrant ollama docling ml-services)
+BOOT_SERVICES=(qdrant ollama marker ml-services)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 ok()   { echo "  ✓ $1"; }
@@ -246,7 +246,7 @@ install_prereqs() {
     if lspci 2>/dev/null | grep -qi nvidia || ls /dev/nvidiactl &>/dev/null; then
         install_nvidia
     else
-        info "no NVIDIA GPU detected — ollama/docling will need CPU config or manual GPU setup"
+        info "no NVIDIA GPU detected — ollama/marker will need CPU config or manual GPU setup"
     fi
 }
 
@@ -508,7 +508,7 @@ done
 
 check_http "qdrant"      "http://localhost:6333/"
 check_http "ollama"      "http://localhost:11434/api/tags"
-check_http "docling"     "http://localhost:5001/health"
+check_http "marker"      "http://localhost:5001/health"
 check_http "ml-services" "http://localhost:5002/health"
 
 # ── 7. Pull models ──────────────────────────────────────────────────────────
@@ -540,14 +540,14 @@ curl -sf -X POST http://localhost:11434/api/chat \
 # ── 9. Verify features ─────────────────────────────────────────────────────
 echo "[9/9] Features"
 # Hybrid chunker availability
-if uv run python -c " 
-from memex.engine.ingestion.splitter import is_hybrid_chunker_available
-ok = is_hybrid_chunker_available()
-assert ok, 'HybridChunker not available — check docling install'
+if uv run python -c "
+from memex.engine.ingestion.marker_client import is_marker_available
+ok = is_marker_available()
+assert ok, 'Marker not available — check marker service'
 " 2>&1; then
-    echo "  ✓ hybrid chunker"
+    echo "  ✓ marker converter"
 else
-    echo "  ✗ hybrid chunker (non-fatal) — run: uv sync"
+    echo "  ✗ marker converter (non-fatal) — run: docker compose up -d marker"
 fi
 
 # ── Done ────────────────────────────────────────────────────────────────────

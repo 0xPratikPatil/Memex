@@ -266,7 +266,8 @@ def create_chunks(
     """
     strategy = config.CHUNK_STRATEGY.lower()
 
-    if strategy == "hybrid" and source_identifier:
+    if strategy == "hybrid" and source_identifier and config.CONVERTER_ENGINE != "marker":
+        # Docling-era structure-aware chunking — only used with engine=docling.
         try:
             from memex.engine.ingestion.splitter import chunk_file
 
@@ -1262,21 +1263,33 @@ class RAGEngine:
     def get_chunker_status(self) -> dict[str, Any]:
         """Return chunker configuration and availability."""
         try:
-            from memex.engine.ingestion.splitter import is_hybrid_chunker_available
+            if config.CONVERTER_ENGINE == "marker":
+                from memex.engine.ingestion.marker_client import is_marker_available
 
-            hybrid_available = is_hybrid_chunker_available()
+                hybrid_available = False
+                converter_available = is_marker_available()
+                active_chunker = config.CHUNK_STRATEGY.title()
+            else:
+                from memex.engine.ingestion.splitter import is_hybrid_chunker_available
+
+                hybrid_available = is_hybrid_chunker_available()
+                converter_available = hybrid_available
+                active_chunker = (
+                    "Docling HybridChunker"
+                    if (config.CHUNK_STRATEGY == "hybrid" and hybrid_available)
+                    else config.CHUNK_STRATEGY.title()
+                )
         except Exception:
             hybrid_available = False
-        active_chunker = (
-            "Docling HybridChunker"
-            if (config.CHUNK_STRATEGY == "hybrid" and hybrid_available)
-            else config.CHUNK_STRATEGY.title()
-        )
+            converter_available = False
+            active_chunker = config.CHUNK_STRATEGY.title()
         result = {
             "strategy": config.CHUNK_STRATEGY,
             "chunk_size": config.CHUNK_SIZE,
             "hybrid_available": hybrid_available,
             "active_chunker": active_chunker,
+            "converter": config.CONVERTER_ENGINE,
+            "converter_available": converter_available,
             "merge_peers": config.CHUNK_MERGE_PEERS,
         }
         if active_chunker != "Docling HybridChunker":
