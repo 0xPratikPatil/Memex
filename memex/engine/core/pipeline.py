@@ -613,31 +613,44 @@ class RAGEngine:
             raise ValueError("No valid text chunks after deduplication.")
 
         # ── Contextual retrieval ──────────────────────────────────────────
+        from memex.engine.utils.gpu_lock import gpu_lock
+
         ctx_gen: ContextGenerator | None = None
         document_summary = ""
         if config.ENABLE_CONTEXTUAL_RETRIEVAL:
-            ctx_gen = ContextGenerator(self._llm)
-            if config.CONTEXT_STRATEGY == "summary":
-                _progress("Generating document summary...", 71)
-                try:
-                    document_summary = ctx_gen.generate_document_summary(document_text or "")
-                except Exception:
-                    logger.warning("Document summary generation failed, falling back to header strategy", exc_info=True)
-            _progress("Adding context to chunks...", 73)
-            raw_chunks = ctx_gen.enrich_chunks(raw_chunks, document_summary=document_summary)
+            gpu_lock.acquire("llm")
+            try:
+                ctx_gen = ContextGenerator(self._llm)
+                if config.CONTEXT_STRATEGY == "summary":
+                    _progress("Generating document summary...", 71)
+                    try:
+                        document_summary = ctx_gen.generate_document_summary(document_text or "")
+                    except Exception:
+                        logger.warning(
+                            "Document summary generation failed, falling back to header strategy"
+                        )
+                        logger.debug("Document summary failure detail", exc_info=True)
+                _progress("Adding context to chunks...", 73)
+                raw_chunks = ctx_gen.enrich_chunks(raw_chunks, document_summary=document_summary)
+            finally:
+                gpu_lock.release("llm")
 
         # ── Metadata extraction ──────────────────────────────────────────
         metadata_extractor: MetadataExtractor | None = None
         if config.ENABLE_METADATA_EXTRACTION:
-            metadata_extractor = MetadataExtractor(self._llm)
-            _progress("Extracting metadata...", 74)
-            batch_meta = metadata_extractor.extract_batch(
-                chunks=raw_chunks,
-                document_text=document_text,
-                source_identifier=source_identifier,
-            )
-            for chunk, meta in zip(raw_chunks, batch_meta, strict=True):
-                chunk["metadata"] = meta
+            gpu_lock.acquire("llm")
+            try:
+                metadata_extractor = MetadataExtractor(self._llm)
+                _progress("Extracting metadata...", 74)
+                batch_meta = metadata_extractor.extract_batch(
+                    chunks=raw_chunks,
+                    document_text=document_text,
+                    source_identifier=source_identifier,
+                )
+                for chunk, meta in zip(raw_chunks, batch_meta, strict=True):
+                    chunk["metadata"] = meta
+            finally:
+                gpu_lock.release("llm")
 
         _progress(f"Generating embeddings ({len(raw_chunks)} chunks)...", 75)
         chunk_texts = [c["content"] for c in raw_chunks]

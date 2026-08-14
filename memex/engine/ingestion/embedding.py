@@ -89,11 +89,16 @@ class EmbeddingService:
     ) -> None:
         """Embed a sub-batch with fallback on failure."""
         from memex.engine.utils.cache import cache_embedding
+        from memex.engine.utils.gpu_lock import gpu_lock
 
         texts_to_embed = [t for _, t in batch]
 
         try:
-            vectors = self._post_batch(texts_to_embed, model)
+            gpu_lock.acquire("embed")
+            try:
+                vectors = self._post_batch(texts_to_embed, model)
+            finally:
+                gpu_lock.release("embed")
         except Exception as exc:
             fallback = config.EMBED_MODEL_FALLBACK
             if fallback and fallback != model:
@@ -103,7 +108,11 @@ class EmbeddingService:
                     exc,
                     fallback,
                 )
-                vectors = self._post_batch(texts_to_embed, fallback)
+                gpu_lock.acquire("embed")
+                try:
+                    vectors = self._post_batch(texts_to_embed, fallback)
+                finally:
+                    gpu_lock.release("embed")
                 model = fallback
             else:
                 raise

@@ -129,6 +129,9 @@ DOCLING_TIMEOUT: float = _cfg_float("converter.docling_timeout", 300.0)
 HTTP_MAX_RETRIES: int = _cfg_int("http.max_retries", 3)
 HTTP_RETRY_BACKOFF: float = _cfg_float("http.retry_backoff", 0.5)
 LLM_TIMEOUT: float = _cfg_float("llm.timeout", HTTP_TIMEOUT)
+# A single LLM read should not need the full total budget — 60s is plenty for
+# one response body. Prevents a transient stall from burning 180s.
+LLM_READ_TIMEOUT: float = _cfg_float("llm.read_timeout", 60.0)
 
 # Connection-level failures (server restart, dropped keep-alive) need a longer
 # retry window than HTTP error codes — a container restart takes 30-60s.
@@ -201,6 +204,17 @@ CONTEXT_STRATEGY: str = _cfg_str("contextual_retrieval.strategy", "summary")
 CONTEXT_MODEL: str = _cfg_str("contextual_retrieval.model", "")
 CONTEXT_PREFIX_MAX_TOKENS: int = _cfg_int("contextual_retrieval.max_tokens", 50)
 CONTEXT_BATCH_SIZE: int = _cfg_int("contextual_retrieval.batch_size", 10)
+# Cap sequential LLM batches per document — beyond this, remaining batches get
+# section-header fallback (prevents pathological docs from dozens of LLM calls).
+CONTEXT_MAX_BATCHES: int = _cfg_int("contextual_retrieval.max_batches", 8)
+
+# ── GPU coordination ──────────────────────────────────────────────────────────
+# Marker and Ollama share the GPU. When VRAM is tight, GpuLock enforces
+# mutual exclusion (unload Ollama before a marker job; Ollama reloads on
+# demand). On large GPUs the threshold is never crossed → zero overhead.
+GPU_ENABLED: bool = _cfg_bool("gpu.enabled", True)
+GPU_VRAM_THRESHOLD_MB: int = _cfg_int("gpu.vram_threshold_mb", 6000)
+GPU_MAX_WAIT_S: float = _cfg_float("gpu.max_wait_s", 120.0)
 
 # ── Embedding batch size ──────────────────────────────────────────────────────
 EMBED_BATCH_SIZE: int = max(1, _cfg_int("embedding.batch_size", 64))

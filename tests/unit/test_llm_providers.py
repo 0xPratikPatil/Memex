@@ -65,6 +65,42 @@ class TestOllamaLLM:
         assert payload["stream"] is False
 
     @pytest.mark.asyncio
+    async def test_chat_sends_num_predict(self) -> None:
+        """Should forward num_predict into the Ollama options."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"message": {"content": "ok"}}
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post.return_value = mock_response
+        mock_client.is_closed = False
+
+        with patch.object(OllamaLLM, "_get_client", return_value=mock_client):
+            llm = OllamaLLM(base_url="http://localhost:11434", model="test-model")
+            await llm.chat("Hello", num_predict=200)
+
+        payload = mock_client.post.call_args[1]["json"]
+        assert payload["options"]["num_predict"] == 200
+
+    @pytest.mark.asyncio
+    async def test_chat_omits_num_predict_when_none(self) -> None:
+        """Should not send num_predict when not provided."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"message": {"content": "ok"}}
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post.return_value = mock_response
+        mock_client.is_closed = False
+
+        with patch.object(OllamaLLM, "_get_client", return_value=mock_client):
+            llm = OllamaLLM(base_url="http://localhost:11434", model="test-model")
+            await llm.chat("Hello")
+
+        payload = mock_client.post.call_args[1]["json"]
+        assert "num_predict" not in payload["options"]
+
+    @pytest.mark.asyncio
     async def test_chat_uses_override_model(self) -> None:
         """Should use the model override when provided."""
         mock_response = MagicMock()
@@ -541,7 +577,7 @@ class TestFactories:
 
         # Test the base class chat_sync method
         class FakeLLM(LLMProvider):
-            async def chat(self, prompt: str, *, model: str | None = None) -> str:
+            async def chat(self, prompt: str, *, model: str | None = None, num_predict: int | None = None) -> str:
                 return f"echo: {prompt}"
 
         provider = FakeLLM()
@@ -593,3 +629,40 @@ class TestLLMProviderABC:
 
         with pytest.raises(TypeError):
             Incomplete()  # type: ignore[abstract]
+
+    def test_chat_sync_retries_transient_errors(self) -> None:
+        """chat_sync should retry transient failures (2 retries) then succeed."""
+        import httpx
+
+        class FlakyLLM(LLMProvider):
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def chat(self, prompt: str, *, model: str | None = None, num_predict: int | None = None) -> str:
+                self.calls += 1
+                if self.calls < 3:
+                    raise httpx.ReadTimeout("stalled")
+                return "recovered"
+
+        provider = FlakyLLM()
+        result, attempts = provider.chat_sync_with_attempts("hello")
+        assert result == "recovered"
+        assert attempts == 3  # 1 initial + 2 retries
+        assert provider.calls == 3
+
+    def test_chat_sync_raises_after_max_retries(self) -> None:
+        """chat_sync should raise after both retries are exhausted."""
+        import httpx
+
+        class AlwaysFailLLM(LLMProvider):
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def chat(self, prompt: str, *, model: str | None = None, num_predict: int | None = None) -> str:
+                self.calls += 1
+                raise httpx.ConnectError("down")
+
+        provider = AlwaysFailLLM()
+        with pytest.raises(httpx.ConnectError):
+            provider.chat_sync("hello")
+        assert provider.calls == 3

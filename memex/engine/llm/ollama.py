@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import httpx
 
@@ -36,27 +37,39 @@ class OllamaLLM(LLMProvider):
         # the current loop instead of reusing the dead one.
         loop = asyncio.get_running_loop()
         if self._client is None or self._client.is_closed or self._client_loop is not loop:
+            from memex.engine.core import config
+
             self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(self._timeout, connect=10.0),
+                # Phase-split timeouts: a single read must not burn the whole
+                # total budget (a transient stall fails fast and retries).
+                timeout=httpx.Timeout(
+                    connect=10.0,
+                    read=config.LLM_READ_TIMEOUT,
+                    write=30.0,
+                    pool=30.0,
+                ),
                 limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
             )
             self._client_loop = loop
         return self._client
 
-    async def chat(self, prompt: str, *, model: str | None = None) -> str:
+    async def chat(self, prompt: str, *, model: str | None = None, num_predict: int | None = None) -> str:
         """Post to ``/api/chat`` and return assistant content.
 
         Handles responses where the model outputs a ``thinking`` field
         instead of ``content`` (e.g. for reasoning models).
         """
         client = self._get_client()
+        options: dict[str, Any] = {"temperature": 0}
+        if num_predict is not None:
+            options["num_predict"] = num_predict
         resp = await client.post(
             f"{self._base_url}/api/chat",
             json={
                 "model": model or self._model,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
-                "options": {"temperature": 0},
+                "options": options,
             },
         )
         resp.raise_for_status()

@@ -22,15 +22,18 @@ class GroqLLM(LLMProvider):
             model=model,
         )
 
-    async def chat(self, prompt: str, *, model: str | None = None) -> str:
+    async def chat(self, prompt: str, *, model: str | None = None, num_predict: int | None = None) -> str:
         client = self._http._get_client()
+        body: dict = {
+            "model": model or self._http._model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+        }
+        if num_predict is not None:
+            body["max_tokens"] = num_predict
         resp = await client.post(
             "/chat/completions",
-            json={
-                "model": model or self._http._model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0,
-            },
+            json=body,
         )
         resp.raise_for_status()
         data = resp.json()

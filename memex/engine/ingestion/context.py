@@ -21,6 +21,9 @@ from memex.engine.llm.base import LLMProvider
 
 logger = logging.getLogger("contextual-retrieval")
 
+# Mirrors _LLM_MAX_ATTEMPTS in llm/base.py — used for concise warning counts.
+_LLM_MAX_ATTEMPTS = 3
+
 
 class ContextGenerator:
     """Generates contextual prefixes for document chunks."""
@@ -147,18 +150,38 @@ class ContextGenerator:
             batch = chunks[batch_start : batch_start + batch_size]
             all_batches.append((batch, batch_start))
 
+        # Cap sequential LLM batches — pathological docs must not trigger
+        # dozens of LLM calls. Beyond the cap, use header fallback.
+        llm_batches = all_batches[: config.CONTEXT_MAX_BATCHES]
+        if len(all_batches) > config.CONTEXT_MAX_BATCHES:
+            logger.warning(
+                "Context generation capped at %d LLM batches (%d total) — "
+                "remaining chunks use header fallback",
+                config.CONTEXT_MAX_BATCHES,
+                len(all_batches),
+            )
+
         # For summary strategy, process batches sequentially.
         # Ollama processes requests sequentially anyway, and using
         # ThreadPoolExecutor causes "Event loop is closed" errors
         # when asyncio.run() creates/destroys event loops in threads.
         if strategy == "summary":
             batch_results: dict[int, list[str]] = {}
-            for batch, batch_start in all_batches:
+            for batch, batch_start in llm_batches:
                 batch_results[batch_start] = self._batch_context_from_summary(batch, document_summary)
 
             enriched: list[dict[str, Any]] = []
             for batch, batch_start in all_batches:
-                contexts = batch_results[batch_start]
+                contexts = batch_results.get(batch_start)
+                if contexts is None:
+                    # Beyond the LLM batch cap — header fallback only.
+                    for chunk in batch:
+                        enriched.append(
+                            self._apply_chunk_context(
+                                chunk, self._context_from_header(chunk.get("section_header", ""))
+                            )
+                        )
+                    continue
                 for chunk, context in zip(batch, contexts, strict=True):
                     if not context:
                         context = self._fallback_context(chunk, document_summary)
@@ -168,6 +191,14 @@ class ContextGenerator:
         # Surrounding strategy
         enriched = []
         for batch, batch_start in all_batches:
+            if batch_start not in [b[1] for b in llm_batches]:
+                for chunk in batch:
+                    enriched.append(
+                        self._apply_chunk_context(
+                            chunk, self._context_from_header(chunk.get("section_header", ""))
+                        )
+                    )
+                continue
             contexts = self._batch_context_from_surrounding(chunks, batch_start, batch_size)
             for chunk, context in zip(batch, contexts, strict=True):
                 if not context:
@@ -212,10 +243,16 @@ class ContextGenerator:
             "numbered like: 1. prefix text\n2. prefix text\n..."
         )
         try:
-            response = self._chat(prompt)
+            response, attempts = self._chat_with_attempts(prompt)
         except Exception:
-            logger.warning("Batch context LLM call failed, returning empty contexts", exc_info=True)
+            logger.warning(
+                "LLM batch context failed after %d attempts — returning empty contexts",
+                _LLM_MAX_ATTEMPTS,
+            )
+            logger.debug("Batch context LLM call failure detail", exc_info=True)
             return [""] * len(batch)
+        if attempts > 1:
+            logger.debug("Batch context succeeded after %d attempts", attempts)
 
         lines = re.findall(r"(?:^|\n)\s*\d+[.)]\s*(.+)", response)
         if len(lines) < len(batch):
@@ -273,10 +310,16 @@ class ContextGenerator:
             "numbered like: 1. prefix text\n2. prefix text\n..."
         )
         try:
-            response = self._chat(prompt, num_predict=200 * len(batch))
+            response, attempts = self._chat_with_attempts(prompt, num_predict=200 * len(batch))
         except Exception:
-            logger.warning("Batch surrounding context LLM call failed, returning empty contexts", exc_info=True)
+            logger.warning(
+                "LLM batch context failed after %d attempts — returning empty contexts",
+                _LLM_MAX_ATTEMPTS,
+            )
+            logger.debug("Batch surrounding context LLM call failure detail", exc_info=True)
             return [""] * len(batch)
+        if attempts > 1:
+            logger.debug("Batch surrounding context succeeded after %d attempts", attempts)
         # Parse numbered lines
         lines = re.findall(r"(?:^|\n)\s*\d+[.)]\s*(.+)", response)
         while len(lines) < len(batch):
@@ -284,8 +327,17 @@ class ContextGenerator:
         return [f"[Context: {p.strip()}]" if p.strip() else "" for p in lines[: len(batch)]]
 
     def _chat(self, prompt: str, num_predict: int = 200) -> str:
+        """Chat, returning just the result (retry handled internally)."""
+        return self._chat_with_attempts(prompt, num_predict=num_predict)[0]
+
+    def _chat_with_attempts(self, prompt: str, num_predict: int = 200) -> tuple[str, int]:
+        """Chat with retry, returning (result, attempts_used).
+
+        attempts_used lets callers report how many tries a call took before
+        success or final failure — 1 = no retry, 3 = both retries exhausted.
+        """
         model = config.CONTEXT_MODEL or config.CHAT_MODEL
-        return self._llm.chat_sync(prompt, model=model)
+        return self._llm.chat_sync_with_attempts(prompt, model=model, num_predict=num_predict)
 
 
 def strip_context_prefix(content: str) -> str:

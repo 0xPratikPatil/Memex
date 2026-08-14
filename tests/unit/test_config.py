@@ -27,8 +27,12 @@ class TestChunkingDefaults:
         assert config.CONVERTER_ENGINE == "marker"
 
     def test_marker_mode_default_balanced(self):
+        # Isolate from on-disk config.yaml (setup.sh auto-detects and may set
+        # 'fast' on small GPUs) — verify the code default is 'balanced'.
+        with patch.dict(os.environ, {"MEMEX_CONFIG": "/nonexistent/empty-config.yaml"}):
+            reload(config)
+            assert config.MARKER_MODE == "balanced"
         reload(config)
-        assert config.MARKER_MODE == "balanced"
 
     def test_chunk_merge_peers_default_true(self):
         reload(config)

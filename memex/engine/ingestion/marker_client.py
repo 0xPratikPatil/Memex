@@ -43,6 +43,7 @@ from memex.engine.core.errors import (
     CorruptedDocumentError,
     ServiceUnavailableError,
 )
+from memex.engine.utils.gpu_lock import gpu_lock
 
 logger = logging.getLogger("marker-client")
 
@@ -240,8 +241,12 @@ def convert_markdown(file_bytes: bytes, filename: str) -> MarkerResult:
         CorruptedDocumentError: If output is empty.
         ServiceUnavailableError: If Marker is unreachable.
     """
-    job_id = _submit(file_bytes, filename, config.MARKER_MODE, config.MARKER_FORCE_OCR)
-    body = _poll(job_id, filename)
+    gpu_lock.acquire("marker")
+    try:
+        job_id = _submit(file_bytes, filename, config.MARKER_MODE, config.MARKER_FORCE_OCR)
+        body = _poll(job_id, filename)
+    finally:
+        gpu_lock.release("marker")
 
     if not body.get("success", False):
         err = body.get("error", "unknown conversion error")

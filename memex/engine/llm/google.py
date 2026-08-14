@@ -30,7 +30,7 @@ class GoogleLLM(LLMProvider):
         self._model = genai.GenerativeModel(model_name=model)
         self._model_name = model
 
-    async def chat(self, prompt: str, *, model: str | None = None) -> str:
+    async def chat(self, prompt: str, *, model: str | None = None, num_predict: int | None = None) -> str:
         import asyncio
 
         effective = model or self._model_name
@@ -41,5 +41,8 @@ class GoogleLLM(LLMProvider):
         else:
             mdl = self._model
 
-        response = await asyncio.to_thread(mdl.generate_content, prompt)
+        kwargs: dict = {}
+        if num_predict is not None:
+            kwargs["generation_config"] = {"max_output_tokens": num_predict}
+        response = await asyncio.to_thread(mdl.generate_content, prompt, **kwargs)
         return response.text

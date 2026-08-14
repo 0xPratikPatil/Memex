@@ -26,6 +26,7 @@ llm:
   base_url: "http://localhost:11434"
   api_key: ${OPENAI_API_KEY}
   timeout: 300.0                        # per-call timeout for LLM chat (context gen, metadata, answers)
+  read_timeout: 60.0                    # max wait for one response body
 
 converter:
   engine: marker                          # marker (recommended) | docling (legacy)
@@ -85,6 +86,12 @@ contextual_retrieval:
   model: ""
   max_tokens: 50
   batch_size: 10
+  max_batches: 8                      # cap LLM batches per doc; rest use header fallback
+
+gpu:
+  enabled: true                       # enforce marker/ollama VRAM exclusion on small GPUs
+  vram_threshold_mb: 6000             # above this used VRAM, enforce exclusion
+  max_wait_s: 120                     # max wait for VRAM to free before proceeding
 
 metadata:
   extraction_enabled: true

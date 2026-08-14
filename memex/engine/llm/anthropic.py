@@ -28,10 +28,10 @@ class AnthropicLLM(LLMProvider):
         self._client = _anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
 
-    async def chat(self, prompt: str, *, model: str | None = None) -> str:
+    async def chat(self, prompt: str, *, model: str | None = None, num_predict: int | None = None) -> str:
         message = await self._client.messages.create(
             model=model or self._model,
-            max_tokens=1024,
+            max_tokens=num_predict or 1024,
             temperature=0,
             messages=[{"role": "user", "content": prompt}],
         )

@@ -11,6 +11,14 @@ from memex.engine.core.errors import ConversionError, CorruptedDocumentError
 from memex.engine.ingestion.marker_client import convert_markdown, is_marker_available
 
 
+@pytest.fixture(autouse=True)
+def _mock_gpu_lock() -> MagicMock:
+    """Neutralize GpuLock in client tests (exercised in test_gpu_lock.py)."""
+    lock = MagicMock()
+    with patch("memex.engine.ingestion.marker_client.gpu_lock", lock):
+        yield lock
+
+
 def _success_body(markdown: str = "# Converted") -> dict:
     return {
         "format": "markdown",
@@ -74,6 +82,30 @@ class TestConvertMarkdown:
             data = captured["data"]
             assert data["mode"] == "fast"
             assert data["force_ocr"] == "false"
+
+    def test_acquires_gpu_lock(self, _mock_gpu_lock: MagicMock) -> None:
+        """convert_markdown acquires+releases the GpuLock around the job."""
+        def fake_post(url, files, data):
+            return _FakeResponse({"job_id": "abc", "status": "pending"})
+
+        def fake_get(url):
+            if url.endswith("/result"):
+                return _FakeResponse(_success_body())
+            return _FakeResponse({"job_id": "abc", "status": "done"})
+
+        fake_client = MagicMock()
+        fake_client.post.side_effect = fake_post
+        fake_client.get.side_effect = fake_get
+
+        with (
+            patch("memex.engine.ingestion.marker_client._get_client", return_value=fake_client),
+            patch("memex.engine.ingestion.marker_client.config.MARKER_MODE", "fast"),
+            patch("memex.engine.ingestion.marker_client.config.MARKER_FORCE_OCR", False),
+            patch("memex.engine.ingestion.marker_client.JOB_POLL_INTERVAL", 0),
+        ):
+            convert_markdown(b"pdf-bytes", "doc.pdf")
+            _mock_gpu_lock.acquire.assert_called_once_with("marker")
+            _mock_gpu_lock.release.assert_called_once_with("marker")
 
     def test_success_false_raises_conversion_error(self) -> None:
         def fake_post(url, files, data):

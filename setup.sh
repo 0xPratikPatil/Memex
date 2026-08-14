@@ -92,6 +92,55 @@ ok()   { echo "  ✓ $1"; }
 fail() { echo "  ✗ $1"; exit 1; }
 info() { echo "  → $1"; }
 
+# ── GPU detection (new-machine auto-config) ───────────────────────────────────
+# Detects GPU VRAM and sets marker mode / gpu coordination accordingly.
+# Writes config.yaml ONLY if it does not exist (never clobbers user config).
+detect_gpu() {
+    local vram_mb=""
+    local mode="fast"
+    local gpu_enabled="true"
+
+    if command -v nvidia-smi &>/dev/null && nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits &>/dev/null; then
+        vram_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1 | tr -d ' ')
+        info "GPU detected: ${vram_mb}MB VRAM"
+        if [ -n "$vram_mb" ] && [ "$vram_mb" -ge 16384 ] 2>/dev/null; then
+            mode="balanced"       # big GPU: high quality, no contention
+            gpu_enabled="false"
+            info "  → large GPU: marker_mode=balanced, gpu.enabled=false (concurrent)"
+        elif [ -n "$vram_mb" ] && [ "$vram_mb" -ge 8192 ] 2>/dev/null; then
+            mode="fast"           # small GPU: fast mode + mutual exclusion
+            gpu_enabled="true"
+            info "  → small GPU: marker_mode=fast, gpu.enabled=true (mutual exclusion)"
+        else
+            gpu_enabled="true"
+            info "  → very small GPU: marker_mode=fast, gpu.enabled=true"
+        fi
+    else
+        info "no NVIDIA GPU detected — marker will run on CPU (slower, but works)"
+        mode="fast"
+        gpu_enabled="false"
+    fi
+
+    # Auto-write config.yaml only when absent.
+    if [ ! -f config.yaml ]; then
+        if [ -f config.example.yaml ]; then
+            cp config.example.yaml config.yaml
+            info "created config.yaml from example"
+        fi
+    fi
+    if [ -f config.yaml ]; then
+        # Update marker_mode + gpu settings in place (idempotent).
+        if grep -q "marker_mode:" config.yaml; then
+            sed -i "s/^  marker_mode:.*/  marker_mode: $mode  # auto-detected by setup.sh/" config.yaml
+        fi
+        if grep -q "gpu:" config.yaml; then
+            sed -i "s/^  enabled: true.*# enforce marker.*/  enabled: $gpu_enabled  # auto-detected by setup.sh/" config.yaml
+            sed -i "s/^  enabled: false.*# enforce marker.*/  enabled: $gpu_enabled  # auto-detected by setup.sh/" config.yaml
+        fi
+        info "config.yaml: marker_mode=$mode gpu.enabled=$gpu_enabled"
+    fi
+}
+
 # ── Prerequisite helpers (Step 0) ───────────────────────────────────────────
 need_sudo() {
     if [ "$(id -u)" -eq 0 ]; then
@@ -458,6 +507,9 @@ if [ ! -f config.yaml ]; then
     fi
 fi
 
+# Detect GPU and auto-tune marker mode + GPU coordination for this machine.
+detect_gpu
+
 # ── 3. Python environment ──────────────────────────────────────────────────
 echo "[3/9] Python environment"
 # Use uv to install the pinned Python version (from .python-version) —
@@ -536,6 +588,21 @@ curl -sf -X POST http://localhost:11434/api/chat \
     -H "Content-Type: application/json" \
     -d "{\"model\":\"${CHAT}\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":false}" >/dev/null \
     && ok "${CHAT}" || fail "${CHAT} not responding"
+
+# Pre-flight: Ollama chat latency (catches GPU contention at setup time)
+echo "  → measuring Ollama chat latency (${CHAT})…"
+_CHAT_START=$(date +%s%N)
+curl -sf -X POST http://localhost:11434/api/chat \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"${CHAT}\",\"messages\":[{\"role\":\"user\",\"content\":\"say ok\"}],\"stream\":false}" >/dev/null \
+    || { echo "  ✗ chat latency check failed — GPU may be contended" >&2; }
+_CHAT_END=$(date +%s%N)
+_CHAT_MS=$(( (_CHAT_END - _CHAT_START) / 1000000 ))
+if [ "$_CHAT_MS" -lt 5000 ] 2>/dev/null; then
+    ok "Ollama chat responds in ${_CHAT_MS}ms"
+else
+    echo "  → Ollama chat took ${_CHAT_MS}ms — GPU may be busy or models cold (non-fatal)" >&2
+fi
 
 # ── 9. Verify features ─────────────────────────────────────────────────────
 echo "[9/9] Features"

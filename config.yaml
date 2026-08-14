@@ -46,12 +46,14 @@ llm:
   base_url: "http://localhost:11434"       # ollama API
   # base_url: "https://api.openai.com/v1"  # for openai/openrouter
   api_key: ${OPENAI_API_KEY}               # for cloud providers
+  timeout: 180.0                           # total per-LLM-call budget (seconds)
+  read_timeout: 60.0                       # max wait for one response body
 
 # ── Document Conversion (Marker) ──────────────────────────────────────────────
 converter:
   engine: marker                           # marker (recommended) | docling (legacy)
   marker_url: "http://localhost:5001"
-  marker_mode: balanced                    # balanced (GPU, highest quality, default) | fast (bulk, 2.5x faster)
+  marker_mode: fast  # auto-detected by setup.sh
   marker_force_ocr: false                  # force OCR on all pages (scanned-only corpora)
   marker_timeout: 300.0                    # seconds per conversion
   max_concurrent: 2                        # cap parallel conversions — keep <= GPU capacity
@@ -116,6 +118,13 @@ contextual_retrieval:
   model: ""                                # "" = use llm.model
   max_tokens: 50                           # max tokens in context prefix
   batch_size: 10                           # chunks per LLM call
+  max_batches: 8                           # cap LLM batches per doc; rest use header fallback
+
+# ── GPU Coordination ──────────────────────────────────────────────────────────
+gpu:
+  enabled: true  # auto-detected by setup.sh
+  vram_threshold_mb: 6000                  # above this used VRAM, enforce exclusion
+  max_wait_s: 120                          # max wait for VRAM to free before proceeding
 
 # ── Metadata Extraction ───────────────────────────────────────────────────────
 metadata:

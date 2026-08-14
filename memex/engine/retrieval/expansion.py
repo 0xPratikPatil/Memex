@@ -76,7 +76,8 @@ class QueryExpander:
                 result.rewritten = self._rewrite(query)
                 logger.debug("Rewritten query: %s", result.rewritten)
             except Exception:
-                logger.warning("Query rewrite failed, using original", exc_info=True)
+                logger.warning("Query rewrite failed, using original")
+                logger.debug("Query rewrite failure detail", exc_info=True)
 
         effective_query = result.rewritten or query
 
@@ -87,14 +88,16 @@ class QueryExpander:
                 result.hyde_vector = self._hyde_embed(effective_query)
                 logger.debug("HyDE vector computed (%d dims)", len(result.hyde_vector))
             except Exception:
-                logger.warning("HyDE failed, skipping", exc_info=True)
+                logger.warning("HyDE failed, skipping")
+                logger.debug("HyDE failure detail", exc_info=True)
 
         if config.ENABLE_MULTI_QUERY:
             try:
                 result.paraphrases = self._multi_query(effective_query)
                 logger.debug("Generated %d paraphrases", len(result.paraphrases))
             except Exception:
-                logger.warning("Multi-query failed, skipping", exc_info=True)
+                logger.warning("Multi-query failed, skipping")
+                logger.debug("Multi-query failure detail", exc_info=True)
 
         if config.ENABLE_CACHE:
             try:

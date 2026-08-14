@@ -14,11 +14,12 @@ from memex.engine.ingestion.context import ContextGenerator, strip_context_prefi
 def mock_llm() -> MagicMock:
     provider = MagicMock()
 
-    async def _chat(prompt: str, *, model=None):
+    async def _chat(prompt: str, *, model=None, num_predict=None):
         return "This section discusses financial metrics."
 
     provider.chat = _chat
     provider.chat_sync = lambda prompt, **kw: "This section discusses financial metrics."
+    provider.chat_sync_with_attempts = lambda prompt, **kw: ("This section discusses financial metrics.", 1)
     return provider
 
 
@@ -200,20 +201,61 @@ class TestStripContextPrefix:
 
 class TestErrorHandling:
     def test_chat_failure_propagates(self, mock_llm: MagicMock) -> None:
-        mock_llm.chat_sync = MagicMock(side_effect=Exception("connection refused"))
+        mock_llm.chat_sync_with_attempts = MagicMock(side_effect=Exception("connection refused"))
         gen = ContextGenerator(mock_llm)
         with pytest.raises(Exception):  # noqa: B017
             gen.generate_document_summary("test")
 
     def test_enrich_chunks_with_chat_failure(self, mock_llm: MagicMock) -> None:
         """When using summary/surrounding strategy and chat fails, context is empty."""
-        mock_llm.chat_sync = MagicMock(side_effect=Exception("timeout"))
+        mock_llm.chat_sync_with_attempts = MagicMock(side_effect=Exception("timeout"))
         with patch.multiple(config, CONTEXT_STRATEGY="summary"):
             gen = ContextGenerator(mock_llm)
             chunks = [{"content": "Test.", "section_header": ""}]
             enriched = gen.enrich_chunks(chunks)
             # Should not raise, context prefix should be empty or contain error marker
             assert len(enriched) == 1
+
+    def test_retries_then_degrades(self, mock_llm: MagicMock, caplog) -> None:
+        """A failing LLM call degrades with a single concise warning — no
+        traceback storm. (Retry count itself is tested in test_llm_providers
+        against the real base-class retry wrapper.)"""
+        import logging
+
+        mock_llm.chat_sync_with_attempts = MagicMock(side_effect=Exception("stalled"))
+        with patch.multiple(config, CONTEXT_STRATEGY="summary"):
+            with caplog.at_level(logging.WARNING, logger="contextual-retrieval"):
+                gen = ContextGenerator(mock_llm)
+                chunks = [{"content": "Test.", "section_header": ""}]
+                enriched = gen.enrich_chunks(chunks, document_summary="A test doc.")
+            assert len(enriched) == 1
+            warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+            assert len(warnings) == 1
+            assert "attempts" in warnings[0].getMessage()
+
+    def test_max_batches_cap(self, mock_llm: MagicMock) -> None:
+        """Beyond max_batches, remaining batches use header fallback, not LLM."""
+        calls = {"n": 0}
+
+        def _counting(prompt, **kw):
+            nonlocal calls
+            calls["n"] += 1
+            return ("1. prefix", 1)
+
+        mock_llm.chat_sync_with_attempts = _counting
+        with patch.multiple(
+            config,
+            CONTEXT_STRATEGY="summary",
+            CONTEXT_BATCH_SIZE=1,
+            CONTEXT_MAX_BATCHES=2,
+        ):
+            gen = ContextGenerator(mock_llm)
+            chunks = [{"content": f"Chunk {i} content here."} for i in range(5)]
+            enriched = gen.enrich_chunks(chunks, document_summary="A test doc.")
+            assert len(enriched) == 5
+            assert calls["n"] == 2  # only the first 2 batches hit the LLM
+            # Chunks beyond the cap get header fallback (empty header → no prefix)
+            assert enriched[4]["context_prefix"] == ""
 
 
 # ── Single-batch summary strategy ─────────────────────────────────────────────
