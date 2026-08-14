@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
-import sys
 from collections import OrderedDict
 from pathlib import Path
 
@@ -24,6 +22,10 @@ console = Console()
 
 # Stage display: (icon, color, label)
 _STAGE_STYLE: dict[str, tuple[str, str, str]] = {
+    "Scanning": ("·", "dim", "Scanning"),
+    "Reconciling": ("·", "dim", "Reconciling"),
+    "Hashing": ("#", "blue", "Hashing"),
+    "Parsing": ("p", "cyan", "Parsing"),
     "Converting": ("⚙ ", "cyan", "Converting"),
     "Context": ("ctx", "blue", "Context"),
     "Metadata": ("meta", "magenta", "Metadata"),
@@ -31,6 +33,7 @@ _STAGE_STYLE: dict[str, tuple[str, str, str]] = {
     "Storing": ("···", "green", "Storing"),
     "Deleting": ("del", "red", "Deleting"),
     "Done": ("✓", "green", "Done"),
+    "Skipped": ("↷", "cyan", "Skipped"),
     "Error": ("✗", "red", "Error"),
 }
 
@@ -86,12 +89,9 @@ def _build_compact_status(
 
 
 def _setup_logging(verbose: bool) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(message)s",
-        stream=sys.stderr,
-    )
+    from memex.engine.core.logging_setup import setup_logging
+
+    setup_logging(verbose=verbose)
 
 
 def _progress_columns() -> list:
@@ -132,6 +132,11 @@ def ingest(
     else:
         files = [target]
 
+    # Normalize to absolute real paths so dedup against stored chunks works
+    # regardless of how the CLI was invoked (./docs vs /abs/path/docs).
+    files = [Path(os.path.realpath(f)) for f in files]
+    files = sorted(files)
+
     if not files:
         console.print("[yellow]No files found to ingest.[/yellow]")
         raise typer.Exit(code=1)
@@ -144,23 +149,56 @@ def ingest(
     total_chunks = 0
     errors: list[str] = []
 
+    from memex.engine.ingestion.status import FileStatusStore
+
+    engine._get_qdrant()
+    status_store = FileStatusStore(engine._get_qdrant())
+
     with Progress(*_progress_columns(), console=console) as progress:
         task = progress.add_task("Ingesting...", total=total)
 
         for file_path in files:
-            progress.update(task, description=f"[bold blue]{file_path.name}[/bold blue] — Parsing")
+            src = str(file_path)
+            status_store.mark_pending(src, source_name=source_name or target.name)
+            progress.update(task, description=f"[bold blue]{file_path.name}[/bold blue] — Checking")
             try:
-                result = parse_file(str(file_path))
+                # Pre-check 1: local file unchanged since last ingest (mtime+size)
+                can_skip, chunk_count = engine.check_unmodified_local(src)
+                if can_skip:
+                    status_store.mark_skipped(src, reason="unchanged")
+                    progress.update(
+                        task,
+                        advance=1,
+                        description=f"[cyan]{file_path.name}[/cyan] — Already ingested ({chunk_count} chunks)",
+                    )
+                    continue
+
+                progress.update(task, description=f"[bold blue]{file_path.name}[/bold blue] — Parsing")
+                result = parse_file(src)
                 if not result.ok:
-                    errors.append(f"{file_path}: {result.status} — {result.errors}")
+                    err = f"{file_path}: {result.status} — {result.errors}"
+                    errors.append(err)
+                    status_store.mark_failed(src, str(result.errors))
                     progress.update(task, advance=1, description=f"[red]{file_path.name} — Error[/red]")
                     continue
 
-                progress.update(task, description=f"[bold blue]{file_path.name}[/bold blue] — Ingesting")
+                # Pre-check 2: same content hash already ingested
+                progress.update(task, description=f"[bold blue]{file_path.name}[/bold blue] — Checking hash")
                 content_hash = engine.compute_file_hash(result.markdown.encode())
+                already, existing_chunks = engine.is_already_ingested(src, content_hash)
+                if already:
+                    status_store.mark_skipped(src, reason="dedup")
+                    progress.update(
+                        task,
+                        advance=1,
+                        description=f"[cyan]{file_path.name}[/cyan] — Already ingested ({existing_chunks} chunks)",
+                    )
+                    continue
+
+                progress.update(task, description=f"[bold blue]{file_path.name}[/bold blue] — Ingesting")
                 chunks = engine.ingest_text(
                     result.markdown,
-                    source_identifier=str(file_path),
+                    source_identifier=src,
                     metadata={
                         "content_type": file_path.suffix.lstrip("."),
                         "content_hash": content_hash,
@@ -170,10 +208,12 @@ def ingest(
                 )
                 ingested += 1
                 total_chunks += chunks
+                status_store.mark_done(src, chunks=chunks)
                 desc = f"[green]{file_path.name}[/green] — Done ({chunks} chunks)"
                 progress.update(task, advance=1, description=desc)
             except Exception as exc:
                 errors.append(f"{file_path}: {exc}")
+                status_store.mark_failed(src, str(exc), exc=exc)
                 progress.update(task, advance=1, description=f"[red]{file_path.name} — Error[/red]")
 
     table = Table(title="Ingest Complete", show_header=False, title_style="bold")
@@ -216,15 +256,19 @@ def sync(
             total_files = p.total
         completed_count = p.current
 
-        if p.stage in ("Done", "Error"):
+        if p.stage in ("Done", "Error", "Skipped"):
             if p.stage == "Error":
                 active[p.path] = ("Error", 0, p.error)
             else:
-                active[p.path] = ("Done", p.chunks, "")
+                active[p.path] = (p.stage, p.chunks, "")
         else:
             existing = active.get(p.path)
             chunks = existing[1] if existing else 0
             active[p.path] = (p.stage, chunks, "")
+
+        # Refresh the live display on every progress event. Without this the
+        # Live view renders a static string and shows nothing during sync.
+        live.update(_build_compact_status(active, completed_count, total_files))
 
     with Live(_build_compact_status(active, 0, 0), console=console, refresh_per_second=8) as live:
 
@@ -369,11 +413,16 @@ def serve(
 @app.command()
 def status(
     config_path: str = typer.Option("config.yaml", "--config", "-c", help="Path to config.yaml"),
+    status_filter: str | None = typer.Option(
+        None,
+        "--status",
+        help="Filter by status (pending/processing/done/skipped/failed/retry)",
+    ),
+    limit: int = typer.Option(50, "--limit", "-n", help="Max records to show"),
 ) -> None:
     """Show processing status for all files."""
-    from memex.engine.core import config
     from memex.engine.core.yaml_config import YamlConfig
-    from memex.engine.sources.status_tracker import StatusTracker
+    from memex.engine.ingestion.status import FileStatusStore
 
     YamlConfig(config_path)
 
@@ -381,9 +430,9 @@ def status(
 
     engine = RAGEngine()
     qdrant = engine._get_qdrant()
-    tracker = StatusTracker(qdrant, config.COLLECTION_NAME)
+    store = FileStatusStore(qdrant)
 
-    summary = tracker.get_status_summary()
+    summary = store.get_summary()
 
     table = Table(title="File Processing Status", show_header=False, title_style="bold")
     table.add_column("Status", style="bold")
@@ -391,10 +440,70 @@ def status(
     table.add_row("Pending", str(summary.get("pending", 0)))
     table.add_row("Processing", str(summary.get("processing", 0)))
     table.add_row("Done", f"[green]{summary.get('done', 0)}[/green]")
+    table.add_row("Skipped", f"[cyan]{summary.get('skipped', 0)}[/cyan]")
     table.add_row("Retrying", f"[yellow]{summary.get('retry', 0)}[/yellow]")
     table.add_row("Failed", f"[red]{summary.get('failed', 0)}[/red]" if summary.get("failed") else "0")
 
     console.print(Panel(table))
+
+    records = store.list_records(status_filter=status_filter, limit=limit)
+    if not records:
+        console.print("[dim]No per-file records to show.[/dim]")
+        return
+
+    detail = Table(title="Per-File Status", title_style="bold")
+    detail.add_column("File")
+    detail.add_column("Status")
+    detail.add_column("Stage")
+    detail.add_column("Chunks", justify="right")
+    detail.add_column("Error")
+    for r in records:
+        fname = os.path.basename(r.get("source", "")) or r.get("source", "")
+        st = r.get("status", "")
+        stage = r.get("stage", "")
+        err = r.get("error", "") or ""
+        if st == "done":
+            st_disp = f"[green]{st}[/green]"
+        elif st == "failed":
+            st_disp = f"[red]{st}[/red]"
+        elif st == "retry":
+            st_disp = f"[yellow]{st}[/yellow]"
+        else:
+            st_disp = st
+        detail.add_row(fname, st_disp, stage, str(r.get("chunks", "")), err[:80])
+    console.print(detail)
+
+
+@app.command()
+def retry(
+    config_path: str = typer.Option("config.yaml", "--config", "-c", help="Path to config.yaml"),
+    source_filter: str | None = typer.Option(
+        None,
+        "--source-filter",
+        "-s",
+        help="Only retry files whose source contains this substring",
+    ),
+) -> None:
+    """Retry failed files immediately (bypasses backoff)."""
+    _setup_logging(False)
+
+    from memex.engine.core.yaml_config import YamlConfig
+    from memex.engine.ingestion.status import FileStatusStore
+
+    YamlConfig(config_path)
+
+    from memex.engine.core.pipeline import RAGEngine
+    from memex.engine.sources.retry_queue import RetryQueue
+
+    engine = RAGEngine()
+    store = FileStatusStore(engine._get_qdrant())
+    queue = RetryQueue(status_store=store)
+
+    count = queue.reset_failed(status_filter=source_filter)
+    if count:
+        console.print(f"[green]Reset {count} failed file(s) to processing.[/green]")
+    else:
+        console.print("[dim]No failed files to retry.[/dim]")
 
 
 @app.callback(invoke_without_command=True)

@@ -118,6 +118,16 @@ HTTP_TIMEOUT: float = _cfg_float("http.timeout", 60.0)
 DOCLING_TIMEOUT: float = _cfg_float("converter.docling_timeout", 300.0)
 HTTP_MAX_RETRIES: int = _cfg_int("http.max_retries", 3)
 HTTP_RETRY_BACKOFF: float = _cfg_float("http.retry_backoff", 0.5)
+LLM_TIMEOUT: float = _cfg_float("llm.timeout", HTTP_TIMEOUT)
+
+# Connection-level failures (server restart, dropped keep-alive) need a longer
+# retry window than HTTP error codes — a container restart takes 30-60s.
+HTTP_TRANSPORT_MAX_RETRIES: int = _cfg_int("http.transport_max_retries", 5)
+HTTP_TRANSPORT_RETRY_BACKOFF: float = _cfg_float("http.transport_retry_backoff", 2.0)
+
+# ── Docling Serve settings ────────────────────────────────────────────────────
+DOCLING_SERVE_MAX_SYNC_WAIT: int = _cfg_int("converter.docling_serve_max_sync_wait", 120)
+DOCLING_SKIP_ON_TIMEOUT: bool = _cfg_bool("converter.docling_skip_on_timeout", False)
 
 # ── Docling async settings ────────────────────────────────────────────────────
 DOCLING_POLL_INTERVAL: float = _cfg_float("converter.docling_poll_interval", 5.0)
@@ -157,6 +167,17 @@ DOCLING_PICTURE_CLASSIFY: bool = _cfg_bool("converter.docling_picture_classify",
 DOCLING_CHART_EXTRACT: bool = _cfg_bool("converter.docling_chart_extract", False)
 DOCLING_IMAGE_EXPORT: str = _cfg_str("converter.docling_image_export", "embedded")
 DOCLING_PDF_BACKEND: str = _cfg_str("converter.docling_pdf_backend", "")
+
+# ── Docling conversion performance ───────────────────────────────────────────
+# OCR + TableFormer are the two most expensive Docling stages (up to 75% of
+# conversion time). Allow per-deployment tuning rather than always paying the cost.
+DOCLING_TABLE_MODE: str = _cfg_str("converter.docling_table_mode", "accurate")  # accurate | fast
+DOCLING_TABLE_STRUCTURE: bool = _cfg_bool("converter.docling_table_structure", True)
+DOCLING_NUM_WORKERS: int = _cfg_int("converter.docling_num_workers", 0)  # 0 = server default
+# Cap concurrent in-flight conversions to Docling. Must not exceed
+# DOCLING_SERVE_ENG_LOC_NUM_WORKERS, otherwise requests queue behind workers
+# and hit the sync-wait timeout. This is the real fix for the 504 spam.
+DOCLING_MAX_CONCURRENT: int = _cfg_int("converter.docling_max_concurrent", 2)
 
 # ── Query Expansion ──────────────────────────────────────────────────────────
 ENABLE_QUERY_EXPANSION: bool = _cfg_bool("query_expansion.enabled", True)

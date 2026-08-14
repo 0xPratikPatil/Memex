@@ -25,12 +25,15 @@ llm:
   model: qwen2.5:1.5b
   base_url: "http://localhost:11434"
   api_key: ${OPENAI_API_KEY}
+  timeout: 300.0                        # per-call timeout for LLM chat (context gen, metadata, answers)
 
 converter:
   engine: docling
   docling_url: "http://localhost:5001/v1/convert/source"
   docling_api_key: ${DOCLING_API_KEY}
   docling_timeout: 300.0
+  docling_serve_max_sync_wait: 120   # Docling server max wait before 504
+  docling_skip_on_timeout: false     # skip files that timeout instead of failing
   docling_poll_interval: 5.0
   docling_max_retries: 4
   docling_retry_backoff: [60.0, 300.0, 1800.0, 7200.0]
@@ -38,7 +41,10 @@ converter:
   docling_enrich_code: false
   docling_enrich_formula: false
   docling_chart_extract: false
-  docling_ocr: true
+  docling_ocr: true                    # false = ~60% faster, only if no scanned PDFs
+  docling_table_structure: true        # false = ~16-24% faster, only if no tables matter
+  docling_table_mode: accurate         # accurate | fast (fast = ~16% faster, fewer table cells)
+  docling_max_concurrent: 2            # cap parallel conversions — keep <= docling ENG_LOC_NUM_WORKERS
   docling_image_export: embedded
   docling_pdf_backend: "docling_parse"   # docling_parse (recommended) | pypdfium2 | "" (auto)
 
@@ -99,6 +105,8 @@ http:
   timeout: 180.0
   max_retries: 3
   retry_backoff: 0.5
+  transport_max_retries: 5              # connection-level failures (server restart)
+  transport_retry_backoff: 2.0          # exponential backoff base for transport retries
 
 ingestion:
   timeout_parse: 120.0

@@ -43,6 +43,8 @@ from qdrant_client.models import (
 )
 
 from memex.engine.core import config
+from memex.engine.core.errors import ConfigError
+from memex.engine.core.progress import PipelineStage
 from memex.engine.ingestion.context import ContextGenerator, strip_context_prefix
 from memex.engine.ingestion.embedding import EmbeddingService
 from memex.engine.llm.base import EmbedProvider, LLMProvider
@@ -325,7 +327,11 @@ class RAGEngine:
 
     def _get_ml_services(self) -> httpx.Client:
         if not hasattr(config, "ML_SERVICES_URL"):
-            raise RuntimeError("ML Services URL not configured — use local provider instead")
+            raise ConfigError(
+                "ML Services URL not configured",
+                hint="Set sparse.url in config.yaml or use the local provider "
+                "(sparse.provider=local, reranker.provider=local).",
+            )
         if self._ml_services is None or self._ml_services.is_closed:
             self._ml_services = httpx.Client(
                 base_url=config.ML_SERVICES_URL,
@@ -596,6 +602,7 @@ class RAGEngine:
             if progress_cb:
                 progress_cb(msg, pct)
             logger.info("ingest [%d%%] %s", pct, msg)
+            self._record_stage(source_identifier, pct)
 
         # Remove exact duplicate chunks within the document
         from memex.engine.ingestion.hashing import dedup_chunks
@@ -810,6 +817,31 @@ class RAGEngine:
             progress_cb=progress_cb,
             document_text=markdown,
         )
+
+    def _record_stage(self, source_identifier: str, pct: int) -> None:
+        """Record the pipeline stage for a source in the file status store.
+
+        Maps the ingest progress percentage to a PipelineStage and writes it
+        as a ``processing`` self-loop. Failures here are non-fatal — status
+        tracking must never break ingestion.
+        """
+        if pct <= 72:
+            stage = PipelineStage.CONVERTING
+        elif pct <= 74:
+            stage = PipelineStage.CONTEXT
+        elif pct <= 76:
+            stage = PipelineStage.METADATA
+        elif pct <= 89:
+            stage = PipelineStage.EMBEDDING
+        else:
+            stage = PipelineStage.STORING
+        try:
+            from memex.engine.ingestion.status import FileStatusStore
+
+            store = FileStatusStore(self._get_qdrant())
+            store.update_stage(source_identifier, stage)
+        except Exception:
+            logger.debug("Status stage recording skipped for %s", source_identifier, exc_info=True)
 
     def _build_search_filter(
         self,

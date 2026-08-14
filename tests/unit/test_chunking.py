@@ -219,3 +219,64 @@ class TestIsHybridChunkerAvailable:
         ):
             result = is_hybrid_chunker_available()
             assert result is False
+
+
+class TestTransportRetry:
+    """Layered retry: transport failures (server restart) retry with a longer
+    window; transient HTTP statuses retry with the fast window."""
+
+    def test_transport_error_retries_until_success(self) -> None:
+        """A dropped connection (RemoteProtocolError) should retry and recover."""
+        import httpx
+
+        from memex.engine.ingestion import splitter
+
+        attempts = {"n": 0}
+
+        def fake_post(url, **kwargs):
+            attempts["n"] += 1
+            if attempts["n"] <= 2:
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response")
+            return httpx.Response(200, json={"chunks": [], "documents": []})
+
+        fake_client = MagicMock()
+        fake_client.post.side_effect = fake_post
+
+        with (
+            patch("memex.engine.ingestion.splitter._get_chunking_client", return_value=fake_client),
+            patch("memex.engine.ingestion.splitter._chunking_semaphore", MagicMock()),
+            patch("memex.engine.ingestion.splitter.config.DOCLING_API_KEY", ""),
+            patch("memex.engine.ingestion.splitter.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
+            patch("memex.engine.ingestion.splitter.config.HTTP_TRANSPORT_MAX_RETRIES", 5),
+            patch("memex.engine.ingestion.splitter.config.HTTP_TRANSPORT_RETRY_BACKOFF", 0.05),
+        ):
+            resp = splitter._post_chunking_transport({})
+            assert attempts["n"] == 3
+            assert resp.status_code == 200
+
+    def test_transport_error_raises_after_max_retries(self) -> None:
+        """If the server never comes back, the transport retry raises."""
+        import httpx
+
+        from memex.engine.ingestion import splitter
+
+        attempts = {"n": 0}
+
+        def fake_post(url, **kwargs):
+            attempts["n"] += 1
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response")
+
+        fake_client = MagicMock()
+        fake_client.post.side_effect = fake_post
+
+        with (
+            patch("memex.engine.ingestion.splitter._get_chunking_client", return_value=fake_client),
+            patch("memex.engine.ingestion.splitter._chunking_semaphore", MagicMock()),
+            patch("memex.engine.ingestion.splitter.config.DOCLING_API_KEY", ""),
+            patch("memex.engine.ingestion.splitter.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
+            patch("memex.engine.ingestion.splitter.config.HTTP_TRANSPORT_MAX_RETRIES", 3),
+            patch("memex.engine.ingestion.splitter.config.HTTP_TRANSPORT_RETRY_BACKOFF", 0.05),
+        ):
+            with pytest.raises(httpx.RemoteProtocolError):
+                splitter._post_chunking_transport({})
+            assert attempts["n"] == 3

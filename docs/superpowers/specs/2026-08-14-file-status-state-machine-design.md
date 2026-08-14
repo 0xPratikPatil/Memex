@@ -1,7 +1,7 @@
 # File Status State Machine + Retry Orchestration
 
 **Date**: 2026-08-14
-**Status**: Draft
+**Status**: Implemented
 **Supersedes**: Status/retry portions of `2026-08-14-production-reliability-design.md`
 
 ## Problem Statement

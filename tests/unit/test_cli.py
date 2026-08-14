@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from memex.cli import app
@@ -27,6 +28,18 @@ class TestVersionFlag:
 
 
 class TestIngestCommand:
+    @pytest.fixture(autouse=True)
+    def _mock_status_store(self) -> MagicMock:
+        """Replace FileStatusStore with a no-op mock for CLI ingest tests."""
+        store = MagicMock()
+        with patch("memex.engine.ingestion.status.FileStatusStore", return_value=store) as mock_cls:
+            yield mock_cls
+
+    def _configure_engine(self, mock_engine: MagicMock) -> None:
+        """Configure dedup pre-checks to report 'not already ingested'."""
+        mock_engine.check_unmodified_local.return_value = (False, 0)
+        mock_engine.is_already_ingested.return_value = (False, 0)
+
     def test_ingest_missing_path_shows_error(self) -> None:
         result = runner.invoke(app, ["ingest", "/nonexistent/path"])
         assert result.exit_code == 1
@@ -52,6 +65,7 @@ class TestIngestCommand:
         mock_engine.compute_file_hash.return_value = "hash1"
         mock_engine.ingest_text.return_value = 3
         mock_engine_cls.return_value = mock_engine
+        self._configure_engine(mock_engine)
 
         result = runner.invoke(app, ["ingest", str(test_file)])
         assert result.exit_code == 0
@@ -75,6 +89,7 @@ class TestIngestCommand:
         mock_engine.compute_file_hash.return_value = "hash"
         mock_engine.ingest_text.return_value = 1
         mock_engine_cls.return_value = mock_engine
+        self._configure_engine(mock_engine)
 
         result = runner.invoke(app, ["ingest", str(tmp_path), "--recursive"])
         assert result.exit_code == 0
@@ -96,6 +111,7 @@ class TestIngestCommand:
         mock_engine.compute_file_hash.return_value = "hash1"
         mock_engine.ingest_text.return_value = 2
         mock_engine_cls.return_value = mock_engine
+        self._configure_engine(mock_engine)
 
         result = runner.invoke(app, ["ingest", str(test_file), "-s", "my-source"])
         assert result.exit_code == 0
@@ -117,6 +133,7 @@ class TestIngestCommand:
         mock_engine.compute_file_hash.return_value = "hash1"
         mock_engine.ingest_text.return_value = 1
         mock_engine_cls.return_value = mock_engine
+        self._configure_engine(mock_engine)
 
         result = runner.invoke(app, ["ingest", str(test_file), "--verbose"])
         assert result.exit_code == 0
@@ -155,9 +172,57 @@ class TestIngestCommand:
         mock_engine.compute_file_hash.return_value = "hash1"
         mock_engine.ingest_text.return_value = 1
         mock_engine_cls.return_value = mock_engine
+        self._configure_engine(mock_engine)
 
         result = runner.invoke(app, ["ingest", str(test_file), "-c", "custom.yaml"])
         assert result.exit_code == 0
+
+
+class TestIngestDedup:
+    """CLI ingest should skip files already ingested."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_status_store(self) -> MagicMock:
+        """Replace FileStatusStore with a no-op mock for CLI ingest tests."""
+        store = MagicMock()
+        with patch("memex.engine.ingestion.status.FileStatusStore", return_value=store) as mock_cls:
+            yield mock_cls
+
+    @patch("memex.engine.core.pipeline.RAGEngine")
+    @patch("memex.engine.ingestion.loader.parse_file")
+    def test_skips_unchanged_local_file(self, mock_parse_file, mock_engine_cls, tmp_path) -> None:
+        test_file = tmp_path / "doc.md"
+        test_file.write_text("# Hello")
+
+        mock_engine = MagicMock()
+        mock_engine.check_unmodified_local.return_value = (True, 4)
+        mock_engine_cls.return_value = mock_engine
+
+        result = runner.invoke(app, ["ingest", str(test_file)])
+        assert result.exit_code == 0
+        mock_engine.ingest_text.assert_not_called()
+
+    @patch("memex.engine.core.pipeline.RAGEngine")
+    @patch("memex.engine.ingestion.loader.parse_file")
+    def test_skips_same_content_hash(self, mock_parse_file, mock_engine_cls, tmp_path) -> None:
+        test_file = tmp_path / "doc.md"
+        test_file.write_text("# Hello")
+
+        mock_result = MagicMock()
+        mock_result.ok = True
+        mock_result.markdown = "# Hello"
+        mock_parse_file.return_value = mock_result
+
+        mock_engine = MagicMock()
+        mock_engine.check_unmodified_local.return_value = (False, 0)
+        mock_engine.compute_file_hash.return_value = "hash1"
+        mock_engine.is_already_ingested.return_value = (True, 7)
+        mock_engine_cls.return_value = mock_engine
+
+        result = runner.invoke(app, ["ingest", str(test_file)])
+        assert result.exit_code == 0
+        assert "Already ingested" in result.output
+        mock_engine.ingest_text.assert_not_called()
 
 
 class TestSyncCommand:
@@ -365,20 +430,22 @@ class TestBuildCompactStatus:
 class TestStatusCommand:
     """memex status should show file processing status."""
 
-    @patch("memex.engine.sources.status_tracker.StatusTracker")
+    @patch("memex.engine.ingestion.status.FileStatusStore")
     @patch("memex.engine.core.pipeline.RAGEngine")
     @patch("memex.engine.core.yaml_config.YamlConfig")
-    def test_status_shows_summary(self, mock_config_cls, mock_engine_cls, mock_tracker_cls) -> None:
+    def test_status_shows_summary(self, mock_config_cls, mock_engine_cls, mock_store_cls) -> None:
         """Should display status summary table."""
-        mock_tracker = MagicMock()
-        mock_tracker.get_status_summary.return_value = {
+        mock_store = MagicMock()
+        mock_store.get_summary.return_value = {
             "pending": 2,
             "processing": 1,
             "done": 10,
+            "skipped": 0,
             "retry": 1,
             "failed": 0,
         }
-        mock_tracker_cls.return_value = mock_tracker
+        mock_store.list_records.return_value = []
+        mock_store_cls.return_value = mock_store
 
         mock_engine = MagicMock()
         mock_engine._get_qdrant.return_value = MagicMock()
@@ -389,20 +456,22 @@ class TestStatusCommand:
         assert "File Processing" in result.output
         assert "10" in result.output
 
-    @patch("memex.engine.sources.status_tracker.StatusTracker")
+    @patch("memex.engine.ingestion.status.FileStatusStore")
     @patch("memex.engine.core.pipeline.RAGEngine")
     @patch("memex.engine.core.yaml_config.YamlConfig")
-    def test_status_shows_failed_count(self, mock_config_cls, mock_engine_cls, mock_tracker_cls) -> None:
+    def test_status_shows_failed_count(self, mock_config_cls, mock_engine_cls, mock_store_cls) -> None:
         """Should show failed count in red."""
-        mock_tracker = MagicMock()
-        mock_tracker.get_status_summary.return_value = {
+        mock_store = MagicMock()
+        mock_store.get_summary.return_value = {
             "pending": 0,
             "processing": 0,
             "done": 5,
+            "skipped": 0,
             "retry": 0,
             "failed": 3,
         }
-        mock_tracker_cls.return_value = mock_tracker
+        mock_store.list_records.return_value = []
+        mock_store_cls.return_value = mock_store
 
         mock_engine = MagicMock()
         mock_engine._get_qdrant.return_value = MagicMock()

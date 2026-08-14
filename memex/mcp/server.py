@@ -19,6 +19,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import ToolAnnotations
 
 from memex.engine.core import config
+from memex.engine.core.logging_setup import setup_logging
 from memex.mcp.schemas import (
     AnswerOutput,
     CitationInfo,
@@ -48,10 +49,7 @@ from memex.mcp.schemas import (
     SyncStatsOutput,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(name)-16s  %(levelname)-5s  %(message)s",
-)
+setup_logging(verbose=config.EVAL_LOG_TIMING)
 logger = logging.getLogger("mcp-server")
 
 CHARACTER_LIMIT = config.CHARACTER_LIMIT
@@ -176,7 +174,35 @@ def _truncate(text: str) -> str:
 
 
 def _friendly_error(exc: Exception) -> str:
-    """Translate common backend exceptions into user-friendly messages."""
+    """Translate exceptions into user-friendly messages.
+
+    Dispatches on typed ``MemexError`` subclasses first (returning their
+    actionable ``hint``), then falls back to a best-effort string map, then
+    to the raw error.
+    """
+    from memex.engine.core.errors import (
+        ConfigError,
+        ConversionTimeoutError,
+        CorruptedDocumentError,
+        ServiceUnavailableError,
+    )
+
+    if isinstance(exc, ConversionTimeoutError):
+        return (
+            "Docling timed out on this document (it may be too large or the "
+            "server is overloaded). "
+            + (exc.hint or "Reduce converter.docling_max_concurrent or retry.")
+        )
+    if isinstance(exc, ServiceUnavailableError):
+        return (
+            f"{exc.service} is unreachable. "
+            + (exc.hint or "Check: docker compose ps")
+        )
+    if isinstance(exc, CorruptedDocumentError):
+        return f"The document could not be parsed into usable content: {exc}"
+    if isinstance(exc, ConfigError):
+        return f"Configuration error: {exc}"
+
     msg = str(exc).lower()
 
     if "cannot reach docling" in msg:
@@ -1406,17 +1432,18 @@ async def rag_eval_sweep(input: EvalSweepInput) -> str:
     title="Processing Status",
     description="""Show the current processing status of files in the RAG system.
 
-Displays file status including pending, processing, done, error states.
-Shows retry information for files with errors.
+Displays per-file status including pending, processing, done, skipped, failed,
+and retry states, with the current pipeline stage and error hint.
 
 Args:
-  - (none)
+  - status (string, optional): Filter by status (pending/processing/done/skipped/failed/retry).
+  - limit (number, optional): Max per-file records to return (default: 100).
 
 Returns:
-  - JSON object with file status summary and details.
+  - JSON object with aggregate summary and per-file detail.
 
 Use when: "What's happening with my files?", "Show processing status",
-"Which files are being processed?".""",
+"Which files are being processed?", "What failed?".""",
     annotations=ToolAnnotations(
         readOnlyHint=True,
         destructiveHint=False,
@@ -1424,28 +1451,74 @@ Use when: "What's happening with my files?", "Show processing status",
         openWorldHint=False,
     ),
 )
-async def rag_processing_status() -> str:
+async def rag_processing_status(
+    status: str | None = None,
+    limit: int = 100,
+) -> str:
     try:
-        from memex.engine.sources.status_tracker import StatusTracker
+        from memex.engine.ingestion.status import FileStatusStore
 
         engine = _get_engine()
         qdrant = engine._get_qdrant()
-        tracker = StatusTracker(qdrant_client=qdrant, collection=config.COLLECTION_NAME)
-        summary = tracker.get_status_summary()
-        
+        store = FileStatusStore(qdrant)
+        summary = store.get_summary()
+        records = store.list_records(status_filter=status, limit=limit)
+
         return json.dumps(
             {
+                "summary": summary,
                 "total": sum(summary.values()),
                 "pending": summary.get("pending", 0),
                 "processing": summary.get("processing", 0),
                 "done": summary.get("done", 0),
+                "skipped": summary.get("skipped", 0),
                 "failed": summary.get("failed", 0),
                 "retry": summary.get("retry", 0),
+                "files": records,
             },
             indent=2,
         )
     except Exception as exc:
         logger.exception("rag_processing_status failed")
+        return _friendly_error(exc)
+
+
+# ── rag_retry_failed ───────────────────────────────────────────────────────────
+
+
+@mcp.tool(
+    name="rag_retry_failed",
+    title="Retry Failed Files",
+    description="""Retry files that previously failed ingestion.
+
+Resets FAILED files to processing immediately (bypassing backoff).
+
+Args:
+  - source_filter (string, optional): Only retry files whose source contains this substring.
+
+Returns:
+  - JSON object with count of files reset.
+
+Use when: "Retry the failed files", "Re-ingest what failed".""",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
+async def rag_retry_failed(source_filter: str | None = None) -> str:
+    try:
+        from memex.engine.ingestion.status import FileStatusStore
+        from memex.engine.sources.retry_queue import RetryQueue
+
+        engine = _get_engine()
+        store = FileStatusStore(engine._get_qdrant())
+        queue = RetryQueue(status_store=store)
+        count = queue.reset_failed(status_filter=source_filter)
+        return json.dumps({"reset": count}, indent=2)
+    except Exception as exc:
+        logger.exception("rag_retry_failed failed")
         return _friendly_error(exc)
 
 

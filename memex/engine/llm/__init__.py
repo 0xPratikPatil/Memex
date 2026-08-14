@@ -49,7 +49,7 @@ def get_llm(config_obj: YamlConfig | None = None) -> LLMProvider:
         from memex.engine.llm.ollama import OllamaLLM
 
         url = base_url or "http://localhost:11434"
-        return OllamaLLM(base_url=url, model=model)
+        return OllamaLLM(base_url=url, model=model, timeout=cfg.LLM_TIMEOUT)
 
     if provider_name == "openai":
         from memex.engine.llm.openai import OpenAILLM
@@ -80,7 +80,7 @@ def get_llm(config_obj: YamlConfig | None = None) -> LLMProvider:
     logger.warning("Unknown llm.provider=%r, falling back to ollama (supported: %s)", provider_name, supported)
     from memex.engine.llm.ollama import OllamaLLM
 
-    return OllamaLLM(base_url=cfg.OLLAMA_EMBED_URL, model=model)
+    return OllamaLLM(base_url=cfg.OLLAMA_EMBED_URL, model=model, timeout=cfg.LLM_TIMEOUT)
 
 
 def get_embedder(config_obj: YamlConfig | None = None) -> EmbedProvider:

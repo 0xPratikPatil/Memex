@@ -24,11 +24,23 @@ from tenacity import (
 )
 
 from memex.engine.core import config
+from memex.engine.core.errors import (
+    ConversionError,
+    ConversionTimeoutError,
+    CorruptedDocumentError,
+    ServiceUnavailableError,
+)
 
 logger = logging.getLogger("docling-client")
 
 _client: httpx.Client | None = None
 _client_lock = threading.Lock()
+
+# Global cap on concurrent Docling conversions. Prevents callers (sync,
+# ingest) from overwhelming the single Docling instance — excess requests
+# queue here instead of piling up inside the server and timing out.
+# Must stay <= DOCLING_SERVE_ENG_LOC_NUM_WORKERS in docker-compose.yml.
+_docling_semaphore = threading.BoundedSemaphore(max(1, config.DOCLING_MAX_CONCURRENT))
 
 
 # ── Structured result ────────────────────────────────────────────────────────
@@ -72,20 +84,63 @@ def _get_client() -> httpx.Client:
     return _client
 
 
+_RETRYABLE_STATUSES = (429, 502, 503, 504)
+
+
+def _is_retryable(exc: Exception) -> bool:
+    return (
+        isinstance(exc, (httpx.TransportError, httpx.TimeoutException))
+        or (isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in _RETRYABLE_STATUSES)
+    )
+
+
+def _stop_transport_retry(retry_state) -> bool:
+    """Stop when the configurable transport-retry budget is exhausted (per-attempt)."""
+    return retry_state.attempt_number >= config.HTTP_TRANSPORT_MAX_RETRIES
+
+
+def _wait_transport_retry(retry_state) -> float:
+    """Exponential backoff, capped at 15s, base from config."""
+    delay = config.HTTP_TRANSPORT_RETRY_BACKOFF * (2 ** (retry_state.attempt_number - 1))
+    return min(delay, 15.0)
+
+
 @retry(
-    retry=retry_if_exception_type((httpx.TransportError, httpx.TimeoutException)),
-    stop=stop_after_attempt(config.HTTP_MAX_RETRIES),
-    wait=wait_exponential(multiplier=config.HTTP_RETRY_BACKOFF, max=10),
+    retry=retry_if_exception_type(httpx.TransportError),
+    # Connection-level failures (server restart, dropped keep-alive) get a
+    # longer window — a container restart takes 30-60s.
+    stop=_stop_transport_retry,
+    wait=_wait_transport_retry,
     reraise=True,
 )
-def _post(payload: dict) -> dict:
+def _post_transport(payload: dict) -> httpx.Response:
+    """POST to Docling, retrying connection-level failures."""
     client = _get_client()
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if config.DOCLING_API_KEY:
         headers["X-Api-Key"] = config.DOCLING_API_KEY
-    resp = client.post(config.DOCLING_URL, json=payload, headers=headers)
+    with _docling_semaphore:
+        return client.post(config.DOCLING_URL, json=payload, headers=headers)
+
+
+@retry(
+    retry=retry_if_exception_type(httpx.HTTPStatusError),
+    stop=stop_after_attempt(config.HTTP_MAX_RETRIES),
+    wait=wait_exponential(multiplier=config.HTTP_RETRY_BACKOFF, max=10),
+    reraise=True,
+)
+def _post_status(resp: httpx.Response) -> dict:
+    """Validate the conversion response, retrying transient HTTP statuses."""
+    if resp.status_code in _RETRYABLE_STATUSES:
+        resp.raise_for_status()
     resp.raise_for_status()
     return resp.json()
+
+
+def _post(payload: dict) -> dict:
+    """POST to the Docling conversion endpoint with layered retries."""
+    resp = _post_transport(payload)
+    return _post_status(resp)
 
 
 # ── Conversion options ───────────────────────────────────────────────────────
@@ -101,8 +156,8 @@ def build_docling_options(to_formats: list[str] | None = None) -> dict[str, Any]
         "from_formats": ["docx", "pptx", "html", "image", "pdf", "md", "csv", "xlsx"],
         "to_formats": to_formats or ["md", "json", "html", "text"],
         "do_ocr": config.ENABLE_OCR,
-        "table_mode": "accurate",
-        "do_table_structure": True,
+        "table_mode": config.DOCLING_TABLE_MODE,
+        "do_table_structure": config.DOCLING_TABLE_STRUCTURE,
         "image_export_mode": config.DOCLING_IMAGE_EXPORT,
     }
 
@@ -154,11 +209,19 @@ def parse_url(url: str) -> ConversionResult:
     try:
         data = _post(payload)
     except httpx.HTTPStatusError as exc:
-        raise RuntimeError(
-            f"Docling server returned HTTP {exc.response.status_code}: {exc.response.text[:500]}"
+        if exc.response.status_code == 504:
+            raise ConversionTimeoutError(url, timeout_s=config.DOCLING_TIMEOUT, cause=exc) from exc
+        raise ConversionError(
+            url,
+            f"Docling API error {exc.response.status_code}: {exc.response.text[:200]}",
+            cause=exc,
         ) from exc
     except httpx.TransportError as exc:
-        raise RuntimeError(f"Cannot reach Docling server at {config.DOCLING_URL}: {exc}") from exc
+        raise ServiceUnavailableError(
+            "Docling",
+            f"cannot reach {config.DOCLING_URL}: {exc}",
+            cause=exc,
+        ) from exc
 
     result = _parse_response(data)
     cache_parse_result(
@@ -226,11 +289,21 @@ def parse_local_file(file_path: str) -> ConversionResult:
     try:
         data = _post(payload)
     except httpx.HTTPStatusError as exc:
-        raise RuntimeError(
-            f"Docling server returned HTTP {exc.response.status_code}: {exc.response.text[:500]}"
+        if exc.response.status_code == 504:
+            raise ConversionTimeoutError(
+                file_path, timeout_s=config.DOCLING_TIMEOUT, cause=exc
+            ) from exc
+        raise ConversionError(
+            file_path,
+            f"Docling API error {exc.response.status_code}: {exc.response.text[:200]}",
+            cause=exc,
         ) from exc
     except httpx.TransportError as exc:
-        raise RuntimeError(f"Cannot reach Docling server at {config.DOCLING_URL}: {exc}") from exc
+        raise ServiceUnavailableError(
+            "Docling",
+            f"cannot reach {config.DOCLING_URL}: {exc}",
+            cause=exc,
+        ) from exc
 
     result = _parse_response(data)
     cache_parse_result(
@@ -278,7 +351,10 @@ def _parse_response(data: dict) -> ConversionResult:
         text_content = text_content.get("text", "") or text_content.get("content", "") or str(text_content)
 
     if not markdown_text and status != "failure":
-        raise ValueError(f"Docling converted the file but returned empty markdown. Status: {status}, errors: {errors}")
+        raise CorruptedDocumentError(
+            f"Docling converted {doc.get('file_name', 'document')} but returned empty markdown. "
+            f"Status: {status}, errors: {errors}"
+        )
 
     if status == "failure":
         # Errors may be list[str] or list[dict] — normalize to strings
@@ -289,7 +365,11 @@ def _parse_response(data: dict) -> ConversionResult:
             else:
                 error_parts.append(str(e))
         error_msg = "; ".join(error_parts) if error_parts else "Unknown error"
-        raise RuntimeError(f"Docling conversion failed: {error_msg}")
+        raise ConversionError(
+            doc.get("file_name", "document"),
+            error_msg,
+            hint="The document could not be parsed by Docling. Check it is a valid PDF/DOCX/HTML.",
+        )
 
     if status == "partial_success":
         logger.warning("Docling partial success with errors: %s", errors)

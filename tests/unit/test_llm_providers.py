@@ -12,6 +12,26 @@ from memex.engine.llm.ollama import OllamaEmbedder, OllamaLLM
 from memex.engine.llm.openai import OpenAIEmbedder, OpenAILLM
 from memex.engine.llm.openrouter import OpenRouterLLM
 
+# ── get_llm factory ──────────────────────────────────────────────────────────
+
+
+class TestGetLLM:
+    def test_ollama_uses_configured_timeout(self) -> None:
+        """get_llm should pass LLM_TIMEOUT to OllamaLLM (fixes ReadTimeout)."""
+        import memex.engine.core.config as cfg
+        from memex.engine.llm import get_llm
+
+        with (
+            patch.object(cfg, "LLM_PROVIDER", "ollama"),
+            patch.object(cfg, "LLM_BASE_URL", "http://x:11434"),
+            patch.object(cfg, "CHAT_MODEL", "qwen2.5:1.5b"),
+            patch.object(cfg, "LLM_TIMEOUT", 300.0),
+            patch("memex.engine.llm.ollama.OllamaLLM") as mock_llm_cls,
+        ):
+            get_llm()
+            kwargs = mock_llm_cls.call_args[1]
+            assert kwargs["timeout"] == 300.0
+
 # ── Ollama LLM ──────────────────────────────────────────────────────────────
 
 

@@ -20,11 +20,13 @@ from pathlib import Path
 
 from memex.engine.core import config
 from memex.engine.core.pipeline import RAGEngine
+from memex.engine.core.progress import PipelineStage
 from memex.engine.ingestion.hashing import (
     clear_source_chunks,
     compute_content_hash,
     is_already_ingested,
 )
+from memex.engine.ingestion.status import FileStatusStore
 
 logger = logging.getLogger("ingestion")
 
@@ -74,21 +76,30 @@ class IngestionOrchestrator:
         """
         from memex.engine.ingestion.loader import parse_file
 
+        status_store = FileStatusStore(self._engine._get_qdrant())
+        status_store.mark_pending(item)
+
         # Pre-check: skip if local file unchanged
         can_skip, chunk_count = self._engine.check_unmodified_local(item)
         if can_skip:
+            status_store.mark_skipped(item, reason="unchanged")
             return f"Skipped ({chunk_count} chunks, unchanged)"
 
         # Parse with timeout
         try:
             result = await self._parse_with_timeout(item, parse_file)
         except TimeoutError:
-            return f"Failed: parse timeout exceeded {config.INGEST_TIMEOUT_PARSE}s"
+            err = f"parse timeout exceeded {config.INGEST_TIMEOUT_PARSE}s"
+            status_store.mark_failed(item, err, stage=PipelineStage.CONVERTING)
+            return f"Failed: {err}"
         except Exception as exc:
+            status_store.mark_failed(item, str(exc), exc=exc)
             return f"Failed: {exc}"
 
         if not result.ok:  # type: ignore[union-attr]
-            return f"Failed: Docling status '{result.status}', errors: {result.errors}"  # type: ignore[union-attr]
+            err = f"Docling status '{result.status}', errors: {result.errors}"  # type: ignore[union-attr]
+            status_store.mark_failed(item, err, stage=PipelineStage.CONVERTING)
+            return f"Failed: {err}"
 
         content_hash = compute_content_hash(result.markdown.encode())  # type: ignore[union-attr]
 
@@ -96,6 +107,7 @@ class IngestionOrchestrator:
         qdrant = self._engine._get_qdrant()
         already, existing = await is_already_ingested(qdrant, config.COLLECTION_NAME, item, content_hash)
         if already:
+            status_store.mark_skipped(item, reason="dedup")
             return f"Skipped ({existing} chunks, unchanged)"
 
         # Check for partial prior ingest: if some chunks exist but content
@@ -118,9 +130,15 @@ class IngestionOrchestrator:
                 ),
                 timeout=config.INGEST_TIMEOUT_TOTAL,
             )
+            status_store.mark_done(item, chunks=count)
             return f"Success ({count} chunks, {result.processing_time:.1f}s conversion)"
         except TimeoutError:
-            return f"Failed: total timeout exceeded {config.INGEST_TIMEOUT_TOTAL}s"
+            err = f"total timeout exceeded {config.INGEST_TIMEOUT_TOTAL}s"
+            status_store.mark_failed(item, err, stage=PipelineStage.STORING)
+            return f"Failed: {err}"
+        except Exception as exc:
+            status_store.mark_failed(item, str(exc), exc=exc)
+            return f"Failed: {exc}"
 
     async def ingest_batch(self, items: list[str]) -> dict[str, str]:
         """Concurrently ingest multiple files with checkpointing.
@@ -179,6 +197,10 @@ class IngestionOrchestrator:
                         failed_map[item] = status
                 except Exception as exc:
                     failed_map[item] = str(exc)
+                    try:
+                        FileStatusStore(self._engine._get_qdrant()).mark_failed(item, str(exc), exc=exc)
+                    except Exception:
+                        logger.debug("Status mark failed for %s", item, exc_info=True)
 
         ingest_tasks = [_ingest_one(item) for item in pending]
         await asyncio.gather(*ingest_tasks, return_exceptions=True)
@@ -240,13 +262,18 @@ class IngestionOrchestrator:
         """Ingest an already-parsed ConversionResult with total timeout."""
         from memex.engine.ingestion.loader import ConversionResult
 
+        status_store = FileStatusStore(self._engine._get_qdrant())
+        status_store.mark_pending(item)
+
         if isinstance(result, str) and result == "skip":
             _exists, chunk_count, _, _ = self._engine.source_exists(item)
+            status_store.mark_skipped(item, reason="unchanged")
             return f"Skipped ({chunk_count} chunks, unchanged)"
 
         if not isinstance(result, ConversionResult) or not result.ok:
             err = getattr(result, "errors", []) if hasattr(result, "errors") else []
             status = getattr(result, "status", "unknown")
+            status_store.mark_failed(item, f"Docling status '{status}', errors: {err}", stage=PipelineStage.CONVERTING)
             return f"Failed: Docling status '{status}', errors: {err}"
 
         content_hash = compute_content_hash(result.markdown.encode())
@@ -255,6 +282,7 @@ class IngestionOrchestrator:
         qdrant = self._engine._get_qdrant()
         already, existing = await is_already_ingested(qdrant, config.COLLECTION_NAME, item, content_hash)
         if already:
+            status_store.mark_skipped(item, reason="dedup")
             return f"Skipped ({existing} chunks, unchanged)"
 
         # Clear stale/partial chunks before re-ingest
@@ -276,9 +304,15 @@ class IngestionOrchestrator:
                 ),
                 timeout=config.INGEST_TIMEOUT_TOTAL,
             )
+            status_store.mark_done(item, chunks=count)
             return f"Success ({count} chunks, {result.processing_time:.1f}s conversion)"
         except TimeoutError:
-            return f"Failed: total timeout exceeded {config.INGEST_TIMEOUT_TOTAL}s"
+            err = f"total timeout exceeded {config.INGEST_TIMEOUT_TOTAL}s"
+            status_store.mark_failed(item, err, stage=PipelineStage.STORING)
+            return f"Failed: {err}"
+        except Exception as exc:
+            status_store.mark_failed(item, str(exc), exc=exc)
+            return f"Failed: {exc}"
 
     # ── State file management ─────────────────────────────────────────────
 

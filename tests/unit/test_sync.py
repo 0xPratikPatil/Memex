@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from memex.engine.core.errors import IngestionError
 from memex.engine.sources.sync import SyncStats, _get_stored_hashes, _ingest_file, sync
 
 # ── SyncStats tests ─────────────────────────────────────────────────────────
@@ -158,7 +159,7 @@ class TestIngestFile:
         with (
             patch("memex.engine.ingestion.loader.parse_file", return_value=mock_result),
             patch("memex.engine.sources.sync.config") as mock_config,
-            pytest.raises(RuntimeError, match="Docling conversion failed"),
+            pytest.raises(IngestionError, match="conversion failed"),
         ):
             mock_config.CHUNK_STRATEGY = "recursive"
             _ingest_file(mock_engine, str(test_file), str(test_file), "my-source")
@@ -168,6 +169,18 @@ class TestIngestFile:
 
 
 class TestSync:
+    @pytest.fixture(autouse=True)
+    def _mock_status_store(self) -> MagicMock:
+        """Replace FileStatusStore with a no-op mock for sync reconciliation tests.
+
+        The store is exercised end-to-end in test_status.py; here we only test
+        the sync reconciliation logic against a stateless mock qdrant.
+        """
+        store = MagicMock()
+        store.get_due_retries.return_value = []
+        with patch("memex.engine.sources.sync.FileStatusStore", return_value=store) as mock_cls:
+            yield mock_cls
+
     @pytest.fixture
     def mock_yaml_config(self) -> MagicMock:
         cfg = MagicMock()

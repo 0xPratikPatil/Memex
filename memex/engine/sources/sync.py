@@ -13,10 +13,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from memex.engine.core import config
-from memex.engine.core.progress import FileProgress, ProgressCallback
+from memex.engine.core.errors import (
+    ConversionTimeoutError,
+    IngestionError,
+    MemexError,
+)
+from memex.engine.core.progress import FileProgress, PipelineStage, ProgressCallback
+from memex.engine.ingestion.status import FileStatusStore
 from memex.engine.sources import Source, SourceFile, get_source
 
 log = logging.getLogger(__name__)
+
+
+def _log_file_error(message: str, source: str, exc: BaseException, *, stage: str) -> None:
+    """Log a per-file error with structured extras for observability."""
+    extra = {"source": source, "stage": stage}
+    if isinstance(exc, MemexError) and exc.hint:
+        extra["hint"] = exc.hint
+    log.error(message, source, exc, extra=extra)
 
 
 # ── Thread-safe counter for concurrent progress tracking ──────────────────────
@@ -66,20 +80,36 @@ class SyncStats:
     deleted: int = 0
     unchanged: int = 0
     errors: list[str] = field(default_factory=list)
+    skipped: int = 0
 
     def summary(self) -> str:
         return (
             f"added={self.added} changed={self.changed} "
             f"deleted={self.deleted} unchanged={self.unchanged} "
-            f"errors={len(self.errors)}"
+            f"skipped={self.skipped} errors={len(self.errors)}"
         )
+
+
+@dataclass
+class _SkipResult:
+    """Sentinel result for skipped files (e.g., timeout with skip_on_timeout=True)."""
+
+    file_path: str
+
+    def __bool__(self) -> bool:
+        return False
 
 
 # ── Stored hash query ─────────────────────────────────────────────────────────
 
 
 def _get_stored_hashes(engine, source_name: str) -> dict[str, str]:
-    """Query Qdrant for all (source_path -> content_hash) pairs for a source."""
+    """Query Qdrant for all (source_path -> raw_file_hash) pairs for a source.
+
+    Prefers ``file_content_hash`` (raw file bytes) which is what reconciliation
+    compares against ``Source.get_content_hash()``. Falls back to the legacy
+    ``content_hash`` (markdown) for records ingested before the field existed.
+    """
     from qdrant_client.models import FieldCondition, Filter, MatchValue
 
     qdrant = engine._get_qdrant()
@@ -91,16 +121,16 @@ def _get_stored_hashes(engine, source_name: str) -> dict[str, str]:
             limit=500,
             offset=offset,
             scroll_filter=Filter(must=[FieldCondition(key="source_name", match=MatchValue(value=source_name))]),
-            with_payload=["source", "source_name", "content_hash"],
+            with_payload=["source", "source_name", "content_hash", "file_content_hash"],
             with_vectors=False,
         )
         points, next_offset = result
         for point in points:
             payload = point.payload or {}
             src = payload.get("source", "")
-            content_hash = payload.get("content_hash", "")
-            if src and content_hash and src not in stored:
-                stored[src] = content_hash
+            file_hash = payload.get("file_content_hash") or payload.get("content_hash", "")
+            if src and file_hash and src not in stored:
+                stored[src] = file_hash
         if next_offset is None:
             break
         offset = next_offset
@@ -118,7 +148,7 @@ def _ingest_file(
     progress_cb: ProgressCallback | None = None,
     file_idx: int = 0,
     total_files: int = 0,
-) -> int:
+) -> int | _SkipResult:
     """Convert and ingest a single file. Returns chunk count.
 
     Stages surfaced via progress_cb:
@@ -161,13 +191,31 @@ def _ingest_file(
             markdown = result.get("markdown", "")
             chunks = result.get("chunks", [])
         except Exception as exc:
-            log.warning("Hybrid chunking failed for %s, falling back to parse+chunk", file_path, exc_info=True)
+            if isinstance(exc, ConversionTimeoutError) and config.DOCLING_SKIP_ON_TIMEOUT:
+                log.warning("Skipping %s due to timeout (skip_on_timeout=True)", file_path)
+                return _SkipResult(file_path)
+            # Handled fallback path — log the concise reason, keep the full
+            # traceback at DEBUG only (a per-file fallback is normal operation,
+            # not an unhandled error to dump 500 lines for).
+            if isinstance(exc, MemexError):
+                log.warning(
+                    "Hybrid chunking failed for %s (%s: %s), falling back to parse+chunk",
+                    file_path,
+                    type(exc).__name__,
+                    exc,
+                )
+            else:
+                log.warning("Hybrid chunking failed for %s, falling back to parse+chunk", file_path)
+            log.debug("Hybrid chunking fallback detail for %s", file_path, exc_info=True)
             from memex.engine.ingestion.loader import parse_file
 
             parse_result = parse_file(file_path)
             if not parse_result.ok:
-                raise RuntimeError(
-                    f"Docling conversion failed for {file_path}: {parse_result.status} -- {parse_result.errors}"
+                raise IngestionError(
+                    file_path,
+                    f"conversion failed: {parse_result.status} -- {parse_result.errors}",
+                    stage=PipelineStage.CONVERTING,
+                    cause=exc,
                 ) from exc
             markdown = parse_result.markdown
             chunks = None
@@ -177,8 +225,10 @@ def _ingest_file(
 
             parse_result = parse_file(file_path)
             if not parse_result.ok:
-                raise RuntimeError(
-                    f"Docling conversion failed for {file_path}: {parse_result.status} -- {parse_result.errors}"
+                raise IngestionError(
+                    file_path,
+                    f"conversion returned no content: {parse_result.status} -- {parse_result.errors}",
+                    stage=PipelineStage.CONVERTING,
                 )
             markdown = parse_result.markdown
     else:
@@ -187,13 +237,31 @@ def _ingest_file(
         _emit_pipeline("Converting", "Converting (Docling)...", 70)
         parse_result = parse_file(file_path)
         if not parse_result.ok:
-            raise RuntimeError(
-                f"Docling conversion failed for {file_path}: {parse_result.status} -- {parse_result.errors}"
+            raise IngestionError(
+                file_path,
+                f"conversion failed: {parse_result.status} -- {parse_result.errors}",
+                stage=PipelineStage.CONVERTING,
             )
         markdown = parse_result.markdown
         chunks = None
 
     content_hash = engine.compute_file_hash(markdown.encode())
+
+    # Raw file bytes hash — the value reconciliation compares against
+    # get_content_hash(). content_hash (markdown) differs from the raw file
+    # hash, so storing only content_hash made every file look 'changed' on
+    # every sync run (full re-ingest each time).
+    import hashlib as _hashlib
+
+    file_content_hash = ""
+    try:
+        h = _hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for _chunk in iter(lambda: f.read(8192), b""):
+                h.update(_chunk)
+        file_content_hash = h.hexdigest()
+    except OSError:
+        log.warning("Could not hash raw file %s for reconciliation", file_path)
 
     def _pipeline_progress(msg: str, pct: int) -> None:
         """Forward pipeline progress to sync-level callback."""
@@ -227,6 +295,7 @@ def _ingest_file(
             metadata={
                 "content_type": file_path.rsplit(".", 1)[-1] if "." in file_path else "",
                 "content_hash": content_hash,
+                "file_content_hash": file_content_hash,
                 "source_name": source_name,
             },
             content_hash=content_hash,
@@ -239,6 +308,7 @@ def _ingest_file(
             metadata={
                 "content_type": file_path.rsplit(".", 1)[-1] if "." in file_path else "",
                 "content_hash": content_hash,
+                "file_content_hash": file_content_hash,
                 "source_name": source_name,
             },
             content_hash=content_hash,
@@ -270,7 +340,6 @@ async def sync(
     Each file's embeddings are stored to Qdrant immediately upon completion.
     """
     from memex.engine.core.pipeline import RAGEngine
-    from memex.engine.sources.status_tracker import StatusTracker
 
     stats = SyncStats()
     suppress_deletions = False
@@ -292,8 +361,8 @@ async def sync(
 
     engine = RAGEngine()
     engine._get_qdrant()  # ensure collection exists
-    
-    status_tracker = StatusTracker(qdrant_client=engine._qdrant, collection=config.COLLECTION_NAME)
+
+    status_store = FileStatusStore(qdrant_client=engine._get_qdrant())
 
     max_concurrent = config.MAX_CONCURRENT_SYNC
     semaphore = asyncio.Semaphore(max_concurrent)
@@ -363,6 +432,19 @@ async def sync(
         common_paths = current_paths & stored_paths
         deleted_paths = stored_paths - current_paths
 
+        # Fold in files scheduled for retry whose backoff window has passed.
+        # They re-enter reconciliation as pending → processing.
+        try:
+            due_retries = status_store.get_due_retries()
+            for rp in due_retries:
+                if rp in current_map and rp not in new_paths:
+                    log.info("Retrying '%s' (backoff elapsed)", rp)
+                    new_paths.add(rp)
+                    if rp in common_paths:
+                        common_paths.discard(rp)
+        except Exception as exc:
+            log.warning("Retry fold-in failed: %s", exc)
+
         total_files = len(new_paths) + len(common_paths) + len(deleted_paths)
 
         # ── Phase 3: Concurrent file processing ──────────────────────────
@@ -385,21 +467,30 @@ async def sync(
                     completed.increment()
                     return ("added", path)
                 try:
+                    status_store.mark_pending(path, source_name=_src_name)
                     _emit(path, "Converting", idx, total)
-                    status_tracker.update_status(path, "converting")
+                    status_store.update_stage(path, PipelineStage.CONVERTING)
                     local = await asyncio.to_thread(_source.download, sf, _download_dir)
-                    chunk_count = await asyncio.to_thread(
+                    result = await asyncio.to_thread(
                         _ingest_file, engine, sf.path, str(local), _src_name, progress_cb, idx, total
                     )
+                    if isinstance(result, _SkipResult):
+                        stats.skipped += 1
+                        _emit(path, "Skipped", idx, total)
+                        status_store.mark_skipped(path, reason="timeout")
+                        completed.increment()
+                        log.info("Skipped '%s' (timeout)", path)
+                        return ("skipped", path)
+                    chunk_count = result
                     _emit(path, "Done", idx, total, chunks=chunk_count)
-                    status_tracker.update_status(path, "done")
+                    status_store.mark_done(path, chunks=chunk_count)
                     completed.increment()
                     log.info("Added '%s' (%d chunks)", path, chunk_count)
                     return ("added", path)
                 except Exception as exc:
-                    log.error("Failed to ingest '%s': %s", path, exc)
+                    _log_file_error("Failed to ingest '%s': %s", path, exc, stage=PipelineStage.ERROR)
                     _emit(path, "Error", idx, total, error=str(exc))
-                    status_tracker.update_status(path, "error", error=str(exc))
+                    status_store.mark_failed(path, str(exc), exc=exc)
                     completed.increment()
                     return ("error", path, str(exc))
 
@@ -415,23 +506,31 @@ async def sync(
             async with semaphore:
                 try:
                     _emit(path, "Deleting", idx, total)
-                    status_tracker.update_status(path, "deleting")
+                    status_store.update_stage(path, PipelineStage.DELETING)
                     await asyncio.to_thread(engine.delete_by_source, path)
                     _emit(path, "Converting", idx, total)
-                    status_tracker.update_status(path, "converting")
+                    status_store.update_stage(path, PipelineStage.CONVERTING)
                     local = await asyncio.to_thread(_source.download, sf, _download_dir)
-                    chunk_count = await asyncio.to_thread(
+                    result = await asyncio.to_thread(
                         _ingest_file, engine, sf.path, str(local), _src_name, progress_cb, idx, total
                     )
+                    if isinstance(result, _SkipResult):
+                        stats.skipped += 1
+                        _emit(path, "Skipped", idx, total)
+                        status_store.mark_skipped(path, reason="timeout")
+                        completed.increment()
+                        log.info("Skipped '%s' (timeout)", path)
+                        return ("skipped", path)
+                    chunk_count = result
                     _emit(path, "Done", idx, total, chunks=chunk_count)
-                    status_tracker.update_status(path, "done")
+                    status_store.mark_done(path, chunks=chunk_count)
                     completed.increment()
                     log.info("Updated '%s' (%d chunks)", path, chunk_count)
                     return ("changed", path)
                 except Exception as exc:
-                    log.error("Failed to update '%s': %s", path, exc)
+                    _log_file_error("Failed to update '%s': %s", path, exc, stage=PipelineStage.ERROR)
                     _emit(path, "Error", idx, total, error=str(exc))
-                    status_tracker.update_status(path, "error", error=str(exc))
+                    status_store.mark_failed(path, str(exc), exc=exc)
                     completed.increment()
                     return ("error", path, str(exc))
 
@@ -452,17 +551,17 @@ async def sync(
                     return ("deleted", path)
                 try:
                     _emit(path, "Deleting", idx, total)
-                    status_tracker.update_status(path, "deleting")
+                    status_store.update_stage(path, PipelineStage.DELETING)
                     await asyncio.to_thread(engine.delete_by_source, path)
-                    status_tracker.update_status(path, "deleted")
+                    status_store.mark_deleted(path)
                     _emit(path, "Done", idx, total)
                     completed.increment()
                     log.info("Deleted '%s'", path)
                     return ("deleted", path)
                 except Exception as exc:
-                    log.error("Failed to delete '%s': %s", path, exc)
+                    _log_file_error("Failed to delete '%s': %s", path, exc, stage=PipelineStage.ERROR)
                     _emit(path, "Error", idx, total, error=str(exc))
-                    status_tracker.update_status(path, "error", error=str(exc))
+                    status_store.mark_failed(path, str(exc), exc=exc)
                     completed.increment()
                     return ("error", path, str(exc))
 
@@ -480,16 +579,18 @@ async def sync(
                 try:
                     current_hash = await asyncio.to_thread(_source.get_content_hash, sf)
                 except Exception as exc:
-                    log.error("Failed to hash '%s': %s", path, exc)
+                    _log_file_error("Failed to hash '%s': %s", path, exc, stage=PipelineStage.HASHING)
                     _emit(path, "Error", idx, total, error=str(exc))
-                    status_tracker.update_status(path, "error", error=str(exc))
+                    status_store.mark_failed(path, str(exc), exc=exc)
                     completed.increment()
                     return ("error", path, str(exc))
 
                 stored_hash = _stored_hashes.get(path, "")
                 if current_hash == stored_hash:
                     _emit(path, "Done", idx, total)
-                    status_tracker.update_status(path, "done")
+                    # Already ingested & unchanged — the file is done, no state
+                    # change. Marking 'skipped' here would be an illegal
+                    # transition from 'done' (and semantically wrong).
                     completed.increment()
                     return ("unchanged", path)
 
@@ -502,23 +603,31 @@ async def sync(
                 # Changed file
                 try:
                     _emit(path, "Deleting", idx, total)
-                    status_tracker.update_status(path, "deleting")
+                    status_store.update_stage(path, PipelineStage.DELETING)
                     await asyncio.to_thread(engine.delete_by_source, path)
                     _emit(path, "Converting", idx, total)
-                    status_tracker.update_status(path, "converting")
+                    status_store.update_stage(path, PipelineStage.CONVERTING)
                     local = await asyncio.to_thread(_source.download, sf, _download_dir)
-                    chunk_count = await asyncio.to_thread(
+                    result = await asyncio.to_thread(
                         _ingest_file, engine, sf.path, str(local), _src_name, progress_cb, idx, total
                     )
+                    if isinstance(result, _SkipResult):
+                        stats.skipped += 1
+                        _emit(path, "Skipped", idx, total)
+                        status_store.mark_skipped(path, reason="timeout")
+                        completed.increment()
+                        log.info("Skipped '%s' (timeout)", path)
+                        return ("skipped", path)
+                    chunk_count = result
                     _emit(path, "Done", idx, total, chunks=chunk_count)
-                    status_tracker.update_status(path, "done")
+                    status_store.mark_done(path, chunks=chunk_count)
                     completed.increment()
                     log.info("Updated '%s' (%d chunks)", path, chunk_count)
                     return ("changed", path)
                 except Exception as exc:
-                    log.error("Failed to update '%s': %s", path, exc)
+                    _log_file_error("Failed to update '%s': %s", path, exc, stage=PipelineStage.ERROR)
                     _emit(path, "Error", idx, total, error=str(exc))
-                    status_tracker.update_status(path, "error", error=str(exc))
+                    status_store.mark_failed(path, str(exc), exc=exc)
                     completed.increment()
                     return ("error", path, str(exc))
 
@@ -554,6 +663,8 @@ async def sync(
                         stats.deleted += 1
                     elif tag == "unchanged":
                         stats.unchanged += 1
+                    elif tag == "skipped":
+                        stats.skipped += 1
                     elif tag == "error":
                         stats.errors.append(r[2])  # type: ignore[index]
 

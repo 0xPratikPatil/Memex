@@ -15,7 +15,9 @@ memex/
     ├── core/
     │   ├── config.py            # All config keys as module-level constants
     │   ├── pipeline.py          # RAGEngine: embedding, hybrid search, MMR, rerank, ingest
-    │   ├── progress.py          # FileProgress dataclass + ProgressCallback type alias
+    │   ├── progress.py          # FileProgress dataclass + PipelineStage enum + ProgressCallback
+    │   ├── errors.py            # Typed exception hierarchy (MemexError subclasses)
+    │   ├── logging_setup.py     # Colored/structured logging (Rich handler, JSON mode)
     │   └── yaml_config.py       # YamlConfig with dot-notation + ${VAR} substitution
     ├── ingestion/
     │   ├── loader.py            # parse_file / parse_url → Docling conversion
@@ -23,7 +25,8 @@ memex/
     │   ├── embedding.py          # EmbeddingService: batch embed via Ollama/OpenAI/HF
     │   ├── hashing.py            # SHA256 content-hash dedup
     │   ├── ingestion.py          # IngestionOrchestrator for batch ingest
-    │   └── splitter.py           # Recursive/fixed chunking (fallback when HybridChunker unavailable)
+    │   ├── splitter.py           # Recursive/fixed chunking (fallback when HybridChunker unavailable)
+    │   └── status.py             # FileStatusStore: Qdrant-backed per-file status state machine
     ├── retrieval/
     │   ├── cosine.py             # Cosine similarity utilities
     │   ├── expansion.py          # QueryExpander: HyDE, Multi-Query, Query Rewrite
@@ -363,5 +366,39 @@ docker volume ls                        # check volumes exist
 ```
 
 ## Logging
+
+### Colored / structured logging
+
+All logging goes through `memex.engine.core.logging_setup.setup_logging()` (Rich handler
+with level colors, timestamps, and structured `key=value` extras on each record). Call
+`setup_logging()` once at process start (CLI and MCP server already do).
+
+- `MEMEX_LOG_JSON=1` → JSON-lines output for machine ingestion (Logstash/Datadog/OTel).
+- `MEMEX_LOG_PLAIN=1` → plain text (CI, non-TTY, piped output).
+- `--verbose` / `EVAL_LOG_TIMING` → DEBUG level.
+
+Structured extras are passed via `logger.info("msg", extra={"source": ..., "stage": ...})`
+and are rendered as `source=/tmp/a.pdf stage=Converting` (text) or JSON keys (json mode).
+The `hint` extra is reserved for actionable remediation text.
+
+### Typed errors
+
+Never raise bare `RuntimeError` for domain failures. Raise subclasses of `MemexError`
+from `memex.engine.core.errors`:
+
+- `ConfigError`, `ServiceUnavailableError`
+- `ConversionError`, `ConversionTimeoutError`, `CorruptedDocumentError`, `ChunkingError`
+- `EmbeddingError`, `StorageError`, `RetrievalError`, `AnswerError`
+- `IngestionError` (source + stage), `SourceError`, `SyncError`, `DuplicateDocumentError`
+
+Each carries `component` and optional `hint`. `error_context(exc)` extracts a structured
+dict for observability. `MemexError` extends `RuntimeError` for backward compatibility.
+
+### Pipeline stages
+
+Stage names are typed via the `PipelineStage` enum in `memex.engine.core.progress`
+(`Converting`, `Context`, `Metadata`, `Embedding`, `Storing`, `Deleting`, `Done`,
+`Skipped`, `Error`, ...). Sync workers emit `FileProgress` through `ProgressCallback`;
+per-file lifecycle ends only in a terminal stage (`Done`/`Skipped`/`Error`).
 
 Set `evaluation.log_timing` to `true` in config.yaml to see per-stage pipeline timing in logs (embed_query, dense_search, sparse_search, rerank, total_search).

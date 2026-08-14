@@ -20,12 +20,37 @@ from tenacity import (
 )
 
 from memex.engine.core import config
+from memex.engine.core.errors import (
+    ChunkingError,
+    ConversionTimeoutError,
+    ServiceUnavailableError,
+)
 
 logger = logging.getLogger("chunking")
 
 # Singleton httpx client for chunking API calls (reused across calls)
 _chunking_client: httpx.Client | None = None
 _chunking_client_lock = threading.Lock()
+
+# Global cap on concurrent Docling chunking calls — shared with the convert
+# path in loader.py. Keeps in-flight conversions within the server's worker
+# pool so requests don't queue and trip DOCLING_SERVE_MAX_SYNC_WAIT.
+_chunking_semaphore = threading.BoundedSemaphore(max(1, config.DOCLING_MAX_CONCURRENT))
+
+
+def _stop_transport_retry(retry_state) -> bool:
+    """Stop when the configurable transport-retry attempt budget is exhausted.
+
+    Read per attempt so config changes (and tests) take effect without
+    re-importing the module.
+    """
+    return retry_state.attempt_number >= config.HTTP_TRANSPORT_MAX_RETRIES
+
+
+def _wait_transport_retry(retry_state) -> float:
+    """Exponential backoff, capped at 15s, base from config."""
+    delay = config.HTTP_TRANSPORT_RETRY_BACKOFF * (2 ** (retry_state.attempt_number - 1))
+    return min(delay, 15.0)
 
 
 # ── Chunking API helpers ─────────────────────────────────────────────────────
@@ -52,22 +77,51 @@ def _get_chunking_client() -> httpx.Client:
     return _chunking_client
 
 
+def _is_retryable_status(exc: Exception) -> bool:
+    """Check if an HTTPStatusError is retryable (429, 502, 503, 504)."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in (429, 502, 503, 504)
+    return False
+
+
 @retry(
-    retry=retry_if_exception_type((httpx.TransportError, httpx.TimeoutException)),
-    stop=stop_after_attempt(config.HTTP_MAX_RETRIES),
-    wait=wait_exponential(multiplier=config.HTTP_RETRY_BACKOFF, max=10),
+    retry=retry_if_exception_type(httpx.TransportError),
+    # Transport errors (connection dropped, server restarting) get a longer
+    # window — a container restart takes 30-60s, so a 2s window always fails.
+    stop=_stop_transport_retry,
+    wait=_wait_transport_retry,
     reraise=True,
 )
-def _post_chunking(payload: dict) -> dict:
-    """POST to the Docling Serve chunking endpoint."""
+def _post_chunking_transport(payload: dict) -> httpx.Response:
+    """POST chunking payload, retrying connection-level failures."""
     url = _get_chunking_url()
     client = _get_chunking_client()
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if config.DOCLING_API_KEY:
         headers["X-Api-Key"] = config.DOCLING_API_KEY
-    resp = client.post(url, json=payload, headers=headers)
+    with _chunking_semaphore:
+        resp = client.post(url, json=payload, headers=headers)
+    return resp
+
+
+@retry(
+    retry=retry_if_exception_type(httpx.HTTPStatusError),
+    stop=stop_after_attempt(config.HTTP_MAX_RETRIES),
+    wait=wait_exponential(multiplier=config.HTTP_RETRY_BACKOFF, max=10),
+    reraise=True,
+)
+def _post_chunking_status(resp: httpx.Response) -> dict:
+    """Validate the chunking response, retrying transient HTTP statuses."""
+    if resp.status_code in (429, 502, 503, 504):
+        resp.raise_for_status()
     resp.raise_for_status()
     return resp.json()
+
+
+def _post_chunking(payload: dict) -> dict:
+    """POST to the Docling Serve chunking endpoint with layered retries."""
+    resp = _post_chunking_transport(payload)
+    return _post_chunking_status(resp)
 
 
 # ── Chunking options ─────────────────────────────────────────────────────────
@@ -109,11 +163,21 @@ def chunk_url(url: str, include_doc: bool = False) -> dict[str, Any]:
     try:
         data = _post_chunking(payload)
     except httpx.HTTPStatusError as exc:
-        raise RuntimeError(
-            f"Docling chunking API returned HTTP {exc.response.status_code}: {exc.response.text[:500]}"
+        if exc.response.status_code == 504:
+            raise ConversionTimeoutError(
+                url, timeout_s=config.DOCLING_SERVE_MAX_SYNC_WAIT, cause=exc
+            ) from exc
+        raise ChunkingError(
+            f"Docling chunking API error {exc.response.status_code} for {url}: "
+            f"{exc.response.text[:200]}",
+            cause=exc,
         ) from exc
     except httpx.TransportError as exc:
-        raise RuntimeError(f"Cannot reach Docling server at {config.DOCLING_URL}: {exc}") from exc
+        raise ServiceUnavailableError(
+            "Docling",
+            f"cannot reach {config.DOCLING_URL}: {exc}",
+            cause=exc,
+        ) from exc
 
     return _parse_chunk_response(data, include_doc=include_doc)
 
@@ -163,11 +227,29 @@ def chunk_local_file(file_path: str, include_doc: bool = False) -> dict[str, Any
     try:
         data = _post_chunking(payload)
     except httpx.HTTPStatusError as exc:
-        raise RuntimeError(
-            f"Docling chunking API returned HTTP {exc.response.status_code}: {exc.response.text[:500]}"
+        if exc.response.status_code == 504:
+            raise ConversionTimeoutError(
+                file_path,
+                timeout_s=config.DOCLING_SERVE_MAX_SYNC_WAIT,
+                hint=(
+                    "This document is too large/slow for the conversion window. "
+                    "Reduce converter.docling_max_concurrent, disable OCR "
+                    "(converter.docling_ocr=false) for digital files, or increase "
+                    "DOCLING_SERVE_MAX_SYNC_WAIT on the Docling server."
+                ),
+                cause=exc,
+            ) from exc
+        raise ChunkingError(
+            f"Docling chunking API error {exc.response.status_code} for {p.name}: "
+            f"{exc.response.text[:200]}",
+            cause=exc,
         ) from exc
     except httpx.TransportError as exc:
-        raise RuntimeError(f"Cannot reach Docling server at {config.DOCLING_URL}: {exc}") from exc
+        raise ServiceUnavailableError(
+            "Docling",
+            f"cannot reach {config.DOCLING_URL}: {exc}",
+            cause=exc,
+        ) from exc
 
     return _parse_chunk_response(data, include_doc=include_doc)
 

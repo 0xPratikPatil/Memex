@@ -139,6 +139,19 @@ services:
       DOCLING_SERVE_HOST: "0.0.0.0"
       DOCLING_SERVE_PORT: "5001"
       NVIDIA_VISIBLE_DEVICES: all
+      # ── Conversion performance tuning ─────────────────────────────────
+      # DOCLING_SERVE_MAX_SYNC_WAIT must exceed the total time for the
+      # largest document (conversion + queue wait), otherwise docling
+      # aborts the sync request with a 504 while work is still in progress.
+      DOCLING_SERVE_MAX_SYNC_WAIT: "${DOCLING_SERVE_MAX_SYNC_WAIT:-600}"
+      # Per-document processing timeout (conversion only, excludes queue wait).
+      DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT: "${DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT:-600}"
+      # Match OMP/MKL threads to the CPU limit (4) — over-threading thrashes.
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+      # LocalOrchestrator worker pool: how many documents convert in parallel.
+      # Keep this low enough that per-worker OMP threads don't oversubscribe.
+      DOCLING_SERVE_ENG_LOC_NUM_WORKERS: "${DOCLING_SERVE_ENG_LOC_NUM_WORKERS:-2}"
     networks:
       - backend
     healthcheck:
