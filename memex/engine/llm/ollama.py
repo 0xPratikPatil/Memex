@@ -113,29 +113,3 @@ class OllamaEmbedder(EmbedProvider):
             self._client = None
 
 
-# ── Backward-compatible synth helper ───────────────────────────────────────────
-
-
-def ollama_chat(
-    prompt: str,
-    *,
-    model: str | None = None,
-    num_predict: int = 200,
-    ollama_client=None,
-) -> str:
-    """Legacy sync helper — delegates to OllamaLLM.
-
-    Kept for backward compatibility with code that still imports
-    ``ollama_chat`` from this module.
-
-    .. deprecated::
-        Use ``OllamaLLM.chat_sync(prompt, model=model)`` instead.
-    """
-    import asyncio as _asyncio
-
-    from memex.engine.core import config as _cfg
-
-    base_url = _cfg.LLM_BASE_URL or _cfg.OLLAMA_EMBED_URL or "http://localhost:11434"
-    llm = OllamaLLM(base_url=base_url, model=model or _cfg.CHAT_MODEL)
-
-    return _asyncio.run(llm.chat(prompt, model=model))

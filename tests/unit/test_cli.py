@@ -284,3 +284,130 @@ class TestEvalCommand:
         result = runner.invoke(app, ["eval", str(golden), "--verbose"])
         assert result.exit_code == 1
         assert "No queries" in result.output
+
+
+# ── Compact display tests ────────────────────────────────────────────────────
+
+
+class TestBuildCompactStatus:
+    """_build_compact_status should produce compact single-line output."""
+
+    def test_shows_single_file(self) -> None:
+        """Should show one file with stage icon."""
+        from collections import OrderedDict
+
+        from memex.cli import _build_compact_status
+
+        active = OrderedDict([("/docs/report.pdf", ("Converting", 0, ""))])
+        result = _build_compact_status(active, completed=0, total=1)
+
+        assert "report.pdf" in result
+        assert "⚙" in result
+
+    def test_shows_multiple_files(self) -> None:
+        """Should show up to 4 files."""
+        from collections import OrderedDict
+
+        from memex.cli import _build_compact_status
+
+        active = OrderedDict([
+            ("/docs/a.pdf", ("Converting", 0, "")),
+            ("/docs/b.pdf", ("Embedding", 5, "")),
+            ("/docs/c.pdf", ("Done", 10, "")),
+            ("/docs/d.pdf", ("Error", 0, "timeout")),
+            ("/docs/e.pdf", ("Converting", 0, "")),
+        ])
+        result = _build_compact_status(active, completed=1, total=5)
+
+        # Shows last 4: b, c, d, e (a is hidden)
+        assert "b.pdf" in result
+        assert "e.pdf" in result
+        assert "and 1 more" in result
+
+    def test_shows_progress_percentage(self) -> None:
+        """Should show completion percentage."""
+        from collections import OrderedDict
+
+        from memex.cli import _build_compact_status
+
+        active = OrderedDict([("/docs/report.pdf", ("Converting", 0, ""))])
+        result = _build_compact_status(active, completed=3, total=10)
+
+        assert "30.0%" in result
+        assert "3/10" in result
+
+    def test_shows_error_message(self) -> None:
+        """Should show error message for Error stage."""
+        from collections import OrderedDict
+
+        from memex.cli import _build_compact_status
+
+        active = OrderedDict([("/docs/report.pdf", ("Error", 0, "504 timeout"))])
+        result = _build_compact_status(active, completed=0, total=1)
+
+        assert "504 timeout" in result
+
+    def test_shows_chunk_count(self) -> None:
+        """Should show chunk count when > 0."""
+        from collections import OrderedDict
+
+        from memex.cli import _build_compact_status
+
+        active = OrderedDict([("/docs/report.pdf", ("Done", 15, ""))])
+        result = _build_compact_status(active, completed=1, total=1)
+
+        assert "15" in result
+
+
+# ── Status command tests ─────────────────────────────────────────────────────
+
+
+class TestStatusCommand:
+    """memex status should show file processing status."""
+
+    @patch("memex.engine.sources.status_tracker.StatusTracker")
+    @patch("memex.engine.core.pipeline.RAGEngine")
+    @patch("memex.engine.core.yaml_config.YamlConfig")
+    def test_status_shows_summary(self, mock_config_cls, mock_engine_cls, mock_tracker_cls) -> None:
+        """Should display status summary table."""
+        mock_tracker = MagicMock()
+        mock_tracker.get_status_summary.return_value = {
+            "pending": 2,
+            "processing": 1,
+            "done": 10,
+            "retry": 1,
+            "failed": 0,
+        }
+        mock_tracker_cls.return_value = mock_tracker
+
+        mock_engine = MagicMock()
+        mock_engine._get_qdrant.return_value = MagicMock()
+        mock_engine_cls.return_value = mock_engine
+
+        result = runner.invoke(app, ["status"])
+        assert result.exit_code == 0
+        assert "File Processing" in result.output
+        assert "10" in result.output
+
+    @patch("memex.engine.sources.status_tracker.StatusTracker")
+    @patch("memex.engine.core.pipeline.RAGEngine")
+    @patch("memex.engine.core.yaml_config.YamlConfig")
+    def test_status_shows_failed_count(self, mock_config_cls, mock_engine_cls, mock_tracker_cls) -> None:
+        """Should show failed count in red."""
+        mock_tracker = MagicMock()
+        mock_tracker.get_status_summary.return_value = {
+            "pending": 0,
+            "processing": 0,
+            "done": 5,
+            "retry": 0,
+            "failed": 3,
+        }
+        mock_tracker_cls.return_value = mock_tracker
+
+        mock_engine = MagicMock()
+        mock_engine._get_qdrant.return_value = MagicMock()
+        mock_engine_cls.return_value = mock_engine
+
+        result = runner.invoke(app, ["status"])
+        assert result.exit_code == 0
+        assert "3" in result.output

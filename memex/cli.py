@@ -34,7 +34,7 @@ _STAGE_STYLE: dict[str, tuple[str, str, str]] = {
     "Error": ("✗", "red", "Error"),
 }
 
-_MAX_VISIBLE_ROWS = 8
+_MAX_VISIBLE_ROWS = 4
 
 
 def _stage_label(stage: str, error: str = "") -> str:
@@ -45,43 +45,44 @@ def _stage_label(stage: str, error: str = "") -> str:
     return f"[{color}]{icon} {label}[/{color}]"
 
 
-def _build_sync_table(
+def _build_compact_status(
     active: OrderedDict[str, tuple[str, int, str]],
     completed: int,
     total: int,
-) -> Table:
-    """Build the Live progress table for sync."""
-    table = Table(
-        title="[bold]Sync Progress[/bold]",
-        show_header=True,
-        title_style="bold",
-        padding=(0, 1),
-        expand=True,
-    )
-    table.add_column("File", ratio=3, no_wrap=True)
-    table.add_column("Stage", ratio=2, justify="center")
-    table.add_column("Chunks", ratio=1, justify="right")
+) -> str:
+    """Build compact single-line status for each active file.
 
+    Args:
+        active: Dict of {path: (stage, chunks, error)}.
+        completed: Number of completed files.
+        total: Total number of files.
+
+    Returns:
+        Multi-line string with one status line per visible file.
+    """
+    lines = []
     rows = list(active.items())
     visible = rows[-_MAX_VISIBLE_ROWS:]
 
     for path, (stage, chunks, error) in visible:
         fname = os.path.basename(path)
-        table.add_row(
-            f"[bold]{fname}[/bold]",
-            _stage_label(stage, error),
-            str(chunks) if chunks > 0 else "",
-        )
+        icon, color, _label = _STAGE_STYLE.get(stage, ("?", "dim", stage))
+        if stage == "Error":
+            lines.append(f"  [{color}]{icon} {fname}: {error}[/{color}]")
+        else:
+            chunk_str = f" ({chunks})" if chunks > 0 else ""
+            lines.append(f"  [{color}]{icon} {fname}{chunk_str}[/{color}]")
 
     hidden = len(rows) - len(visible)
     if hidden > 0:
-        table.add_row(f"[dim]… and {hidden} more…[/dim]", "", "")
+        lines.append(f"  [dim]... and {hidden} more[/dim]")
 
     if total > 0:
         pct = completed / total * 100
-        table.caption = f"[progress.percentage]{pct:>5.1f}%[/progress.percentage]  {completed}/{total} files"
+        lines.append(f"  [progress.percentage]{pct:.1f}%[/progress.percentage] {completed}/{total}")
 
-    return table
+    return "\n".join(lines)
+
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -225,13 +226,13 @@ def sync(
             chunks = existing[1] if existing else 0
             active[p.path] = (p.stage, chunks, "")
 
-    with Live(_build_sync_table(active, 0, 0), console=console, refresh_per_second=8) as live:
+    with Live(_build_compact_status(active, 0, 0), console=console, refresh_per_second=8) as live:
 
         async def _run() -> SyncStats:
             return await rag_sync(yaml_config, source_name=source_name, dry_run=dry_run, progress_cb=_on_progress)  # type: ignore[return-value]
 
         stats = asyncio.run(_run())
-        live.update(_build_sync_table(active, completed_count, total_files))
+        live.update(_build_compact_status(active, completed_count, total_files))
 
     prefix = "would " if dry_run else ""
     table = Table(title="Sync Complete", show_header=False, title_style="bold")
@@ -363,6 +364,37 @@ def serve(
     from memex.mcp.server import mcp
 
     mcp.run(transport="stdio")
+
+
+@app.command()
+def status(
+    config_path: str = typer.Option("config.yaml", "--config", "-c", help="Path to config.yaml"),
+) -> None:
+    """Show processing status for all files."""
+    from memex.engine.core import config
+    from memex.engine.core.yaml_config import YamlConfig
+    from memex.engine.sources.status_tracker import StatusTracker
+
+    YamlConfig(config_path)
+
+    from memex.engine.core.pipeline import RAGEngine
+
+    engine = RAGEngine()
+    qdrant = engine._get_qdrant()
+    tracker = StatusTracker(qdrant, config.COLLECTION_NAME)
+
+    summary = tracker.get_status_summary()
+
+    table = Table(title="File Processing Status", show_header=False, title_style="bold")
+    table.add_column("Status", style="bold")
+    table.add_column("Count", justify="right")
+    table.add_row("Pending", str(summary.get("pending", 0)))
+    table.add_row("Processing", str(summary.get("processing", 0)))
+    table.add_row("Done", f"[green]{summary.get('done', 0)}[/green]")
+    table.add_row("Retrying", f"[yellow]{summary.get('retry', 0)}[/yellow]")
+    table.add_row("Failed", f"[red]{summary.get('failed', 0)}[/red]" if summary.get("failed") else "0")
+
+    console.print(Panel(table))
 
 
 @app.callback(invoke_without_command=True)

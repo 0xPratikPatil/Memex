@@ -203,6 +203,21 @@ install_nvidia() {
     fi
 }
 
+install_git_lfs() {
+    if command -v git-lfs &>/dev/null; then
+        ok "git-lfs (present)"
+        return 0
+    fi
+    info "installing git-lfs"
+    if sudo apt-get install -y git-lfs &>/dev/null; then
+        git lfs install &>/dev/null || true
+        ok "git-lfs"
+    else
+        echo "  ✗ git-lfs install failed." >&2
+        echo "    Try manually: sudo apt-get install -y git-lfs && git lfs install" >&2
+    fi
+}
+
 install_prereqs() {
     [ "$SKIP_PREREQS" = true ] && { info "skipping system prerequisites (--skip-prereqs)"; return; }
 
@@ -224,6 +239,7 @@ install_prereqs() {
     done
 
     install_uv
+    install_git_lfs
     install_docker
 
     # GPU-aware: only attempt NVIDIA if a GPU is present

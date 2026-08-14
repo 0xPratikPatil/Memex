@@ -31,6 +31,9 @@ converter:
   docling_url: "http://localhost:5001/v1/convert/source"
   docling_api_key: ${DOCLING_API_KEY}
   docling_timeout: 300.0
+  docling_poll_interval: 5.0
+  docling_max_retries: 4
+  docling_retry_backoff: [60.0, 300.0, 1800.0, 7200.0]
   docling_picture_classify: true
   docling_enrich_code: false
   docling_enrich_formula: false
@@ -93,7 +96,7 @@ caching:
   eviction_policy: allkeys-lru
 
 http:
-  timeout: 60.0
+  timeout: 180.0
   max_retries: 3
   retry_backoff: 0.5
 
@@ -104,7 +107,7 @@ ingestion:
   max_concurrent_sync: 8
 
 qdrant:
-  timeout: 10.0
+  timeout: 30.0
   max_retries: 3
 
 mcp:

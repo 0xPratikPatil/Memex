@@ -53,6 +53,9 @@ converter:
   docling_url: "http://localhost:5001/v1/convert/source"
   docling_api_key: ${DOCLING_API_KEY}
   docling_timeout: 300.0                   # seconds
+  docling_poll_interval: 5.0               # seconds between status polls
+  docling_max_retries: 4                   # max retry attempts on failure
+  docling_retry_backoff: [60.0, 300.0, 1800.0, 7200.0]  # seconds between retries
   docling_picture_classify: true           # classify images in docs
   docling_enrich_code: false               # extract code blocks (needs serve-side model)
   docling_enrich_formula: false            # extract formulas (needs serve-side model)
@@ -132,7 +135,7 @@ caching:
 
 # ── HTTP Client ───────────────────────────────────────────────────────────────
 http:
-  timeout: 60.0                            # seconds per request
+  timeout: 180.0                            # seconds per request (increased for complex queries)
   max_retries: 3                           # retry on transient errors
   retry_backoff: 0.5                       # multiplier for exponential backoff
 
@@ -145,7 +148,7 @@ ingestion:
 
 # ── Qdrant ────────────────────────────────────────────────────────────────────
 qdrant:
-  timeout: 10.0                            # seconds per Qdrant call
+  timeout: 30.0                            # seconds per Qdrant call (increased for batch ops)
   max_retries: 3                           # retry on transient errors
 
 # ── MCP Server ────────────────────────────────────────────────────────────────

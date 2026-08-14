@@ -95,7 +95,7 @@ def _prewarm_models() -> None:
             engine = _get_engine()
 
             # Prewarm local reranker (CrossEncoder, GPU)
-            if config.ENABLE_RERANKER:
+            if config.ENABLE_RERANKING:
                 try:
                     engine._rerank("warmup", ["warmup"], top_k=1)
                     logger.info("Reranker loaded")
@@ -1395,6 +1395,57 @@ async def rag_eval_sweep(input: EvalSweepInput) -> str:
         return f"Error: Golden set not found — {exc}"
     except Exception as exc:
         logger.exception("rag_eval_sweep failed")
+        return _friendly_error(exc)
+
+
+# ── rag_processing_status ──────────────────────────────────────────────────────
+
+
+@mcp.tool(
+    name="rag_processing_status",
+    title="Processing Status",
+    description="""Show the current processing status of files in the RAG system.
+
+Displays file status including pending, processing, done, error states.
+Shows retry information for files with errors.
+
+Args:
+  - (none)
+
+Returns:
+  - JSON object with file status summary and details.
+
+Use when: "What's happening with my files?", "Show processing status",
+"Which files are being processed?".""",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
+async def rag_processing_status() -> str:
+    try:
+        from memex.engine.sources.status_tracker import StatusTracker
+
+        engine = _get_engine()
+        qdrant = engine._get_qdrant()
+        tracker = StatusTracker(qdrant_client=qdrant, collection=config.COLLECTION_NAME)
+        summary = tracker.get_status_summary()
+        
+        return json.dumps(
+            {
+                "total": sum(summary.values()),
+                "pending": summary.get("pending", 0),
+                "processing": summary.get("processing", 0),
+                "done": summary.get("done", 0),
+                "failed": summary.get("failed", 0),
+                "retry": summary.get("retry", 0),
+            },
+            indent=2,
+        )
+    except Exception as exc:
+        logger.exception("rag_processing_status failed")
         return _friendly_error(exc)
 
 

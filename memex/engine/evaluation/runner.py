@@ -1,8 +1,7 @@
 """Evaluation framework for the RAG pipeline.
 
 Provides custom metrics (Hit@K, MRR, NDCG, precision, recall, keyword coverage),
-optional RAGAS integration for faithfulness/relevancy/context metrics, evaluation
-dataset management, A/B comparison support, and performance benchmarking.
+evaluation dataset management, A/B comparison support, and performance benchmarking.
 
 All evaluation is opt-in and has zero overhead when disabled.
 """
@@ -19,25 +18,30 @@ from pathlib import Path
 from typing import Any
 
 from memex.engine.core import config
+from memex.engine.evaluation.metrics import (
+    hit_rate_at_k,
+    keyword_coverage,
+    precision_at_k,
+    recall_at_k,
+    reciprocal_rank,
+)
 
 logger = logging.getLogger("evaluation")
 
 
-# ── Custom metrics ───────────────────────────────────────────────────────────
+# ── Custom metrics (imported from metrics.py for backward compatibility) ───────
+# Canonical implementations live in metrics.py. These re-exports are kept
+# so existing code that imports from runner.py continues to work.
 
 
 def hit_at_k(retrieved_sources: list[str], expected_sources: list[str], k: int = 5) -> float:
     """1.0 if any expected source appears in top-K results, 0.0 otherwise."""
-    top_k = retrieved_sources[:k]
-    return 1.0 if any(s in top_k for s in expected_sources) else 0.0
+    return hit_rate_at_k(retrieved_sources, expected_sources, k)
 
 
 def mean_reciprocal_rank(retrieved_sources: list[str], expected_sources: list[str]) -> float:
     """Reciprocal rank of the first relevant result."""
-    for i, source in enumerate(retrieved_sources):
-        if source in expected_sources:
-            return 1.0 / (i + 1)
-    return 0.0
+    return reciprocal_rank(retrieved_sources, expected_sources)
 
 
 def ndcg_at_k(
@@ -55,29 +59,6 @@ def ndcg_at_k(
     ideal = sorted(relevance, reverse=True)
     ideal_dcg = dcg(ideal)
     return actual_dcg / ideal_dcg if ideal_dcg > 0 else 0.0
-
-
-def precision_at_k(retrieved_sources: list[str], expected_sources: list[str], k: int = 5) -> float:
-    """Fraction of top-K results that are relevant."""
-    top_k = retrieved_sources[:k]
-    relevant = sum(1 for s in top_k if s in expected_sources)
-    return relevant / k if k > 0 else 0.0
-
-
-def recall_at_k(retrieved_sources: list[str], expected_sources: list[str], k: int = 10) -> float:
-    """Fraction of expected sources found in top-K results."""
-    top_k = retrieved_sources[:k]
-    found = sum(1 for s in expected_sources if s in top_k)
-    return found / len(expected_sources) if expected_sources else 0.0
-
-
-def keyword_coverage(retrieved_content: str, expected_keywords: list[str]) -> float:
-    """Fraction of expected keywords found in retrieved content."""
-    if not expected_keywords:
-        return 1.0
-    content_lower = retrieved_content.lower()
-    found = sum(1 for kw in expected_keywords if kw.lower() in content_lower)
-    return found / len(expected_keywords)
 
 
 def compute_all_metrics(
@@ -102,64 +83,6 @@ def compute_all_metrics(
         metrics["keyword_coverage"] = keyword_coverage(content, expected_keywords)
 
     return metrics
-
-
-# ── RAGAS integration (optional) ────────────────────────────────────────────
-
-
-def evaluate_with_ragas(
-    queries: list[str],
-    contexts: list[list[str]],
-    answers: list[str],
-    ground_truths: list[list[str]],
-) -> dict[str, float]:
-    """Run RAGAS evaluation on a set of queries.
-
-    Returns an empty dict if RAGAS is not installed or evaluation fails.
-    """
-    if not config.EVAL_RUN_RAGAS:
-        return {}
-
-    try:
-        from datasets import Dataset
-        from ragas import evaluate
-        from ragas.metrics import (
-            answer_relevancy,
-            context_precision,
-            context_recall,
-            faithfulness,
-        )
-
-        data = {
-            "question": queries,
-            "contexts": contexts,
-            "answer": answers,
-            "ground_truth": ground_truths,
-        }
-        dataset = Dataset.from_dict(data)
-
-        result = evaluate(
-            dataset,
-            metrics=[
-                faithfulness,
-                answer_relevancy,
-                context_precision,
-                context_recall,
-            ],
-        )
-
-        return {
-            "faithfulness": float(result["faithfulness"]),
-            "answer_relevancy": float(result["answer_relevancy"]),
-            "context_precision": float(result["context_precision"]),
-            "context_recall": float(result["context_recall"]),
-        }
-    except ImportError:
-        logger.warning("RAGAS not installed. Install with: pip install ragas")
-        return {}
-    except Exception as exc:
-        logger.error("RAGAS evaluation failed: %s", exc)
-        return {}
 
 
 # ── Evaluation dataset ──────────────────────────────────────────────────────

@@ -119,6 +119,11 @@ DOCLING_TIMEOUT: float = _cfg_float("converter.docling_timeout", 300.0)
 HTTP_MAX_RETRIES: int = _cfg_int("http.max_retries", 3)
 HTTP_RETRY_BACKOFF: float = _cfg_float("http.retry_backoff", 0.5)
 
+# ── Docling async settings ────────────────────────────────────────────────────
+DOCLING_POLL_INTERVAL: float = _cfg_float("converter.docling_poll_interval", 5.0)
+DOCLING_MAX_RETRIES: int = _cfg_int("converter.docling_max_retries", 4)
+DOCLING_RETRY_BACKOFF: list[float] = _cfg("converter.docling_retry_backoff", [60.0, 300.0, 1800.0, 7200.0])
+
 # ── Ingestion pipeline settings ───────────────────────────────────────────────
 INGEST_TIMEOUT_PARSE: float = _cfg_float("ingestion.timeout_parse", 120.0)
 INGEST_TIMEOUT_TOTAL: float = _cfg_float("ingestion.timeout_total", 300.0)
@@ -126,7 +131,7 @@ MAX_CONCURRENT_PARSES: int = _cfg_int("ingestion.max_concurrent_parses", 3)
 MAX_CONCURRENT_SYNC: int = _cfg_int("ingestion.max_concurrent_sync", 8)
 
 # ── Qdrant client settings ────────────────────────────────────────────────────
-QDRANT_TIMEOUT: float = _cfg_float("qdrant.timeout", 10.0)
+QDRANT_TIMEOUT: float = _cfg_float("qdrant.timeout", 30.0)
 QDRANT_MAX_RETRIES: int = _cfg_int("qdrant.max_retries", 3)
 
 # ── Search settings ──────────────────────────────────────────────────────────
@@ -144,7 +149,6 @@ CHARACTER_LIMIT: int = _cfg_int("mcp.character_limit", 25000)
 # ── Feature toggles ──────────────────────────────────────────────────────────
 ENABLE_OCR: bool = _cfg_bool("converter.docling_ocr", True)
 ENABLE_RERANKING: bool = _cfg_bool("reranker.enabled", True)
-ENABLE_RERANKER: bool = _cfg_bool("reranker.enabled", True)
 
 # ── Docling enrichment ───────────────────────────────────────────────────────
 DOCLING_ENRICH_CODE: bool = _cfg_bool("converter.docling_enrich_code", False)
@@ -205,9 +209,6 @@ EVAL_LOG_TIMING: bool = _cfg_bool("evaluation.log_timing", False)
 # ── Answer Generation ─────────────────────────────────────────────────────────
 ENABLE_ANSWER: bool = _cfg_bool("answer.enabled", False)
 ANSWER_MAX_CONTEXT_CHARS: int = _cfg_int("answer.max_context_chars", 12000)
-
-# ── Auto Filter ───────────────────────────────────────────────────────────────
-AUTO_FILTER: bool = _cfg_bool("retriever.auto_filter", False)
 
 # ── Startup checks ────────────────────────────────────────────────────────────
 

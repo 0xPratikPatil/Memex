@@ -96,7 +96,7 @@ All features are controlled via `config.yaml`. The master toggle for each group 
 - **Pluggable Sources** (`sources` section in config.yaml): Local directories (`type: local`) + S3 buckets (`type: s3`).
 - **Sync Engine** (`rag_sync`): Reconciles collection against sources — adds new, replaces changed, removes deleted files. Safety: if any source fails to list, all deletions are suppressed for that run.
 
-## MCP Tools (13 available)
+## MCP Tools (14 available)
 
 | Tool | Use when |
 |------|----------|
@@ -113,6 +113,7 @@ All features are controlled via `config.yaml`. The master toggle for each group 
 | `rag_extract_filters` | Extract metadata filters from natural language |
 | `rag_eval` | Run golden-set evaluation |
 | `rag_eval_sweep` | Compare multiple retrieval configs side by side |
+| `rag_processing_status` | Show file processing status (pending, converting, done, error) |
 
 ## Key Config (config.yaml)
 

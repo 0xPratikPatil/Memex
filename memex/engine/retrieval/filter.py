@@ -378,24 +378,3 @@ async def extract_filters(
         explanation=explanation,
         confidence=round(confidence, 2),
     )
-
-
-async def auto_extract_filters(
-    query: str,
-    llm_call: Callable[[str], Awaitable[str]] | None = None,
-) -> dict:
-    """Auto-extract metadata filters from a query when auto_filter is enabled.
-
-    Discovers available fields, runs LLM extraction, and returns a normalized
-    filter dict suitable for search.
-    """
-    if llm_call is None:
-        return {}
-    try:
-        fields = _get_known_metadata_fields()
-        result = await extract_filters(query, fields, llm_call=llm_call)
-        if result.confidence > 0.3 and result.filters:
-            return _parse_filters(result.filters)
-    except Exception:
-        log.debug("Auto filter extraction failed for query: %s", query[:60], exc_info=True)
-    return {}

@@ -270,6 +270,7 @@ async def sync(
     Each file's embeddings are stored to Qdrant immediately upon completion.
     """
     from memex.engine.core.pipeline import RAGEngine
+    from memex.engine.sources.status_tracker import StatusTracker
 
     stats = SyncStats()
     suppress_deletions = False
@@ -291,6 +292,8 @@ async def sync(
 
     engine = RAGEngine()
     engine._get_qdrant()  # ensure collection exists
+    
+    status_tracker = StatusTracker(qdrant_client=engine._qdrant, collection=config.COLLECTION_NAME)
 
     max_concurrent = config.MAX_CONCURRENT_SYNC
     semaphore = asyncio.Semaphore(max_concurrent)
@@ -383,17 +386,20 @@ async def sync(
                     return ("added", path)
                 try:
                     _emit(path, "Converting", idx, total)
+                    status_tracker.update_status(path, "converting")
                     local = await asyncio.to_thread(_source.download, sf, _download_dir)
                     chunk_count = await asyncio.to_thread(
                         _ingest_file, engine, sf.path, str(local), _src_name, progress_cb, idx, total
                     )
                     _emit(path, "Done", idx, total, chunks=chunk_count)
+                    status_tracker.update_status(path, "done")
                     completed.increment()
                     log.info("Added '%s' (%d chunks)", path, chunk_count)
                     return ("added", path)
                 except Exception as exc:
                     log.error("Failed to ingest '%s': %s", path, exc)
                     _emit(path, "Error", idx, total, error=str(exc))
+                    status_tracker.update_status(path, "error", error=str(exc))
                     completed.increment()
                     return ("error", path, str(exc))
 
@@ -409,19 +415,23 @@ async def sync(
             async with semaphore:
                 try:
                     _emit(path, "Deleting", idx, total)
+                    status_tracker.update_status(path, "deleting")
                     await asyncio.to_thread(engine.delete_by_source, path)
                     _emit(path, "Converting", idx, total)
+                    status_tracker.update_status(path, "converting")
                     local = await asyncio.to_thread(_source.download, sf, _download_dir)
                     chunk_count = await asyncio.to_thread(
                         _ingest_file, engine, sf.path, str(local), _src_name, progress_cb, idx, total
                     )
                     _emit(path, "Done", idx, total, chunks=chunk_count)
+                    status_tracker.update_status(path, "done")
                     completed.increment()
                     log.info("Updated '%s' (%d chunks)", path, chunk_count)
                     return ("changed", path)
                 except Exception as exc:
                     log.error("Failed to update '%s': %s", path, exc)
                     _emit(path, "Error", idx, total, error=str(exc))
+                    status_tracker.update_status(path, "error", error=str(exc))
                     completed.increment()
                     return ("error", path, str(exc))
 
@@ -442,7 +452,9 @@ async def sync(
                     return ("deleted", path)
                 try:
                     _emit(path, "Deleting", idx, total)
+                    status_tracker.update_status(path, "deleting")
                     await asyncio.to_thread(engine.delete_by_source, path)
+                    status_tracker.update_status(path, "deleted")
                     _emit(path, "Done", idx, total)
                     completed.increment()
                     log.info("Deleted '%s'", path)
@@ -450,6 +462,7 @@ async def sync(
                 except Exception as exc:
                     log.error("Failed to delete '%s': %s", path, exc)
                     _emit(path, "Error", idx, total, error=str(exc))
+                    status_tracker.update_status(path, "error", error=str(exc))
                     completed.increment()
                     return ("error", path, str(exc))
 
@@ -469,12 +482,14 @@ async def sync(
                 except Exception as exc:
                     log.error("Failed to hash '%s': %s", path, exc)
                     _emit(path, "Error", idx, total, error=str(exc))
+                    status_tracker.update_status(path, "error", error=str(exc))
                     completed.increment()
                     return ("error", path, str(exc))
 
                 stored_hash = _stored_hashes.get(path, "")
                 if current_hash == stored_hash:
                     _emit(path, "Done", idx, total)
+                    status_tracker.update_status(path, "done")
                     completed.increment()
                     return ("unchanged", path)
 
@@ -487,19 +502,23 @@ async def sync(
                 # Changed file
                 try:
                     _emit(path, "Deleting", idx, total)
+                    status_tracker.update_status(path, "deleting")
                     await asyncio.to_thread(engine.delete_by_source, path)
                     _emit(path, "Converting", idx, total)
+                    status_tracker.update_status(path, "converting")
                     local = await asyncio.to_thread(_source.download, sf, _download_dir)
                     chunk_count = await asyncio.to_thread(
                         _ingest_file, engine, sf.path, str(local), _src_name, progress_cb, idx, total
                     )
                     _emit(path, "Done", idx, total, chunks=chunk_count)
+                    status_tracker.update_status(path, "done")
                     completed.increment()
                     log.info("Updated '%s' (%d chunks)", path, chunk_count)
                     return ("changed", path)
                 except Exception as exc:
                     log.error("Failed to update '%s': %s", path, exc)
                     _emit(path, "Error", idx, total, error=str(exc))
+                    status_tracker.update_status(path, "error", error=str(exc))
                     completed.increment()
                     return ("error", path, str(exc))
 
