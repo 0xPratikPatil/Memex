@@ -47,7 +47,7 @@ if [ -f .env ]; then
 fi
 
 # Unset vars that confuse uv (uv chokes on non-integer env vars like HTTP_TIMEOUT=60.0)
-unset HTTP_TIMEOUT DOCLING_TIMEOUT QDRANT_TIMEOUT 2>/dev/null || true
+unset HTTP_TIMEOUT QDRANT_TIMEOUT MARKER_TIMEOUT 2>/dev/null || true
 
 # ── Models (env var > config.yaml > default) ────────────────────────────────
 # config.yaml is single source of truth; env vars allow ad-hoc overrides.
@@ -606,7 +606,7 @@ fi
 
 # ── 9. Verify features ─────────────────────────────────────────────────────
 echo "[9/9] Features"
-# Hybrid chunker availability
+# Marker converter availability
 if uv run python -c "
 from memex.engine.ingestion.marker_client import is_marker_available
 ok = is_marker_available()

@@ -1,8 +1,8 @@
-"""Docling HybridChunker — via Docling Serve API.
+"""Chunking module — Docling HybridChunker (legacy) + local recursive/fixed.
 
-Uses the Docling Serve ``/v1/chunk/hybrid/source`` endpoint for
-structure-aware, tokenizer-aligned chunking. No local ``docling`` or
-``docling-core`` packages required — all heavy processing runs in Docker.
+The Docling Serve ``/v1/chunk/hybrid/source`` endpoint is only used when
+``converter.engine=docling`` (legacy rollback path). With the default
+``marker`` engine, chunking happens locally (recursive/fixed).
 """
 
 from __future__ import annotations
@@ -286,7 +286,7 @@ def chunk_file(file_path_or_url: str, include_doc: bool = False) -> dict[str, An
 def _parse_chunk_response(data: dict, include_doc: bool = False) -> dict[str, Any]:
     """Parse the Docling Serve chunk response into our chunk format.
 
-    Expects ``ChunkDocumentResponse`` per docs/docling-openapi.json:
+    Expects the Docling ``ChunkDocumentResponse`` shape:
       - chunks: list[ChunkedDocumentResultItem] (text: str, headings: list[str]|null)
       - documents: list[DocumentResultItem] (content.md_content: str|null)
       - processing_time: float

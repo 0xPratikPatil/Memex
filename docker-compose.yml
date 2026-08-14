@@ -134,6 +134,10 @@ services:
       context: .
       dockerfile: marker.Dockerfile
       target: runtime
+      # Model pre-cache downloads from models.datalab.to at build time — host
+      # networking so DNS works (host systemd-resolved stub 127.0.0.53 is
+      # unreachable inside the default build network).
+      network: host
     image: memex-marker:latest
     container_name: memex-marker
     init: true

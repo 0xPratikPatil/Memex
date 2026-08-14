@@ -31,7 +31,7 @@ from memex.engine.core.errors import (
     ServiceUnavailableError,
 )
 
-logger = logging.getLogger("docling-client")
+logger = logging.getLogger("converter-client")
 
 _client: httpx.Client | None = None
 _client_lock = threading.Lock()

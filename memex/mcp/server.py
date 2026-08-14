@@ -193,7 +193,7 @@ def _friendly_error(exc: Exception) -> str:
         return (
             "Docling timed out on this document (it may be too large or the "
             "server is overloaded). "
-            + (exc.hint or "Reduce converter.docling_max_concurrent or retry.")
+            + (exc.hint or "Reduce converter.max_concurrent or retry.")
         )
     if isinstance(exc, ServiceUnavailableError):
         return (
@@ -207,12 +207,15 @@ def _friendly_error(exc: Exception) -> str:
 
     msg = str(exc).lower()
 
-    if "cannot reach docling" in msg:
+    if "cannot reach docling" in msg or "cannot reach marker" in msg:
         if "timeout" in msg:
-            return "Docling service timed out (port 5001). It may be overloaded or handling a large document. Retry."
+            return (
+                "Document conversion service timed out (port 5001). It may be "
+                "overloaded or handling a large document. Retry."
+            )
         if "disconnected" in msg or "read" in msg:
-            return "Docling server disconnected (port 5001). It may be overloaded or restarting. Retry in a moment."
-        return "Docling service is unreachable (port 5001). Run: docker compose up -d docling"
+            return "Conversion server disconnected (port 5001). It may be overloaded or restarting. Retry in a moment."
+        return "Conversion service is unreachable (port 5001). Run: docker compose up -d marker"
     if "cannot reach ollama" in msg:
         return "Ollama service is unreachable (port 11434). Run: docker compose up -d ollama"
     if "cannot reach" in msg:

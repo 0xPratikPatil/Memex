@@ -82,7 +82,7 @@ def build_startup_banner() -> str:
     lines.append("  Services:")
 
     unhealthy: list[str] = []
-    for name in ("qdrant", "ollama", "docling"):
+    for name in ("qdrant", "ollama", "marker"):
         s = statuses.get(name)
         if s is None:
             unhealthy.append(name)
