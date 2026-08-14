@@ -5,21 +5,22 @@ exceeds capacity, which manifests as Ollama stalls (ReadTimeouts) and marker
 OOM kills. This lock enforces mutual exclusion when VRAM is tight:
 
     acquire(owner):
-      - if VRAM used < threshold → no-op (both services coexist, e.g. big GPU)
-      - else → unload Ollama models (keep_alive=0) and wait for VRAM to free,
-               bounded by gpu.max_wait_s; on timeout/failure log + proceed
-
+      - if VRAM used + owner's footprint < total - safety → no-op (coexist)
+      - else → if owner is "marker", evict Ollama models (keep_alive=0) and
+               wait for VRAM to free; if owner is an Ollama consumer ("llm"/
+               "embed"), wait for marker to release (bounded).
     release(owner):
-      - no-op — Ollama reloads models on demand (container keep_alive=24h)
+      - clears the exclusive owner so the other side can proceed.
 
 Best-effort by design: nvidia-smi or Ollama API failures log a warning and
-proceed. Coordination must never block ingestion.
+proceed. Coordination must never block ingestion indefinitely.
 """
 
 from __future__ import annotations
 
 import logging
 import subprocess
+import threading
 import time
 
 import httpx
@@ -27,6 +28,43 @@ import httpx
 from memex.engine.core import config
 
 logger = logging.getLogger("gpu-lock")
+
+# Safety margin: never try to fill the card to 100%.
+_SAFETY_MARGIN_MB = 512
+
+# Estimated VRAM footprint per owner (models resident during a job).
+# marker: 5 models (layout 1.4G + recognition 1.4G + table 0.2G +
+#         detection 0.07G + ocr_error 0.26G) ≈ 3.4GB, plus inference buffers.
+# llm/embed: Ollama chat + embed models (qwen2.5 1.6G + bge-m3 0.66G) ≈ 2.3GB.
+_OWNER_FOOTPRINT_MB = {
+    "marker": 4096,
+    "llm": 2560,
+    "embed": 2560,
+}
+
+
+def _total_vram_mb() -> int | None:
+    """Return total GPU memory in MB via nvidia-smi, or None on failure."""
+    try:
+        out = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if out.returncode != 0:
+            return None
+        val = out.stdout.strip().splitlines()
+        if not val:
+            return None
+        return int(val[0].strip())
+    except (subprocess.SubprocessError, ValueError, OSError):
+        return None
 
 
 def _vram_used_mb() -> int | None:
@@ -59,11 +97,11 @@ def _unload_ollama_models() -> None:
     Uses the official API: a generate call with keep_alive=0 unloads the model.
     """
     try:
-        resp = httpx.get(f"{config.OLLAMA_EMBED_URL.split('/api')[0]}/api/ps", timeout=5.0)
+        base = config.OLLAMA_EMBED_URL.split("/api")[0]
+        resp = httpx.get(f"{base}/api/ps", timeout=5.0)
         if resp.status_code != 200:
             return
         models = resp.json().get("models", [])
-        base = config.OLLAMA_EMBED_URL.split("/api")[0]
         for m in models:
             name = m.get("name", "")
             if not name:
@@ -80,56 +118,93 @@ def _unload_ollama_models() -> None:
 
 
 class GpuLock:
-    """Coordination lock for GPU-shared services."""
+    """Coordination lock for GPU-shared services.
+
+    Thread-safe: the lock protects the owner tracking so concurrent sync
+    workers do not race on acquire/release.
+    """
 
     def __init__(self) -> None:
         self._owner: str | None = None
+        self._lock = threading.Lock()
 
     def acquire(self, owner: str) -> None:
         """Acquire the GPU for *owner* if VRAM is tight.
 
-        No-op when gpu.enabled=false or VRAM is below the threshold.
+        No-op when gpu.enabled=false or the requester's footprint fits
+        alongside current usage.
         """
         if not config.GPU_ENABLED:
             return
-        if self._owner is not None and self._owner != owner:
-            logger.debug("GpuLock already held by %s — proceeding concurrently", self._owner)
-        self._owner = owner
 
-        used = _vram_used_mb()
-        if used is None:
+        footprint = _OWNER_FOOTPRINT_MB.get(owner, 2048)
+        total = _total_vram_mb()
+        if total is None:
             logger.debug("GpuLock: nvidia-smi unavailable — proceeding without exclusion")
             return
-        if used < config.GPU_VRAM_THRESHOLD_MB:
+
+        used = _vram_used_mb() or 0
+        # Will the requester's models fit alongside current usage?
+        if used + footprint + _SAFETY_MARGIN_MB <= total:
             logger.debug(
-                "GpuLock: VRAM %dMB < threshold %dMB — no exclusion needed",
+                "GpuLock(%s): used %dMB + footprint %dMB fits %dMB — no exclusion",
+                owner,
                 used,
-                config.GPU_VRAM_THRESHOLD_MB,
+                footprint,
+                total,
             )
             return
 
-        logger.info("GpuLock(%s): VRAM %dMB over threshold — unloading Ollama", owner, used)
-        _unload_ollama_models()
+        with self._lock:
+            # Another owner holds the GPU exclusively — wait for release.
+            if self._owner is not None and self._owner != owner:
+                logger.info(
+                    "GpuLock(%s): waiting for %s to release the GPU",
+                    owner,
+                    self._owner,
+                )
+                deadline = time.monotonic() + config.GPU_MAX_WAIT_S
+                while self._owner is not None and time.monotonic() < deadline:
+                    time.sleep(1.0)
+                if self._owner is not None:
+                    logger.warning(
+                        "GpuLock(%s): %s did not release within %.0fs — proceeding anyway",
+                        owner,
+                        self._owner,
+                        config.GPU_MAX_WAIT_S,
+                    )
+                else:
+                    logger.info("GpuLock(%s): GPU released by %s", owner, self._owner)
 
-        # Wait for VRAM to free (bounded).
-        deadline = time.monotonic() + config.GPU_MAX_WAIT_S
-        while time.monotonic() < deadline:
-            used = _vram_used_mb()
-            if used is not None and used < config.GPU_VRAM_THRESHOLD_MB:
-                logger.info("GpuLock(%s): VRAM freed (%dMB) — proceeding", owner, used)
-                return
-            time.sleep(2.0)
+        # We are the exclusive owner now (or the previous owner released).
+        self._owner = owner
 
-        logger.warning(
-            "GpuLock(%s): VRAM still over threshold after %.0fs — proceeding anyway",
-            owner,
-            config.GPU_MAX_WAIT_S,
-        )
+        # If we are marker, evict Ollama to free VRAM, then wait for it to drop.
+        if owner == "marker":
+            logger.info(
+                "GpuLock(marker): used %dMB + footprint %dMB > %dMB — unloading Ollama",
+                used,
+                footprint,
+                total,
+            )
+            _unload_ollama_models()
+            deadline = time.monotonic() + config.GPU_MAX_WAIT_S
+            while time.monotonic() < deadline:
+                freed = _vram_used_mb()
+                if freed is not None and freed + footprint + _SAFETY_MARGIN_MB <= total:
+                    logger.info("GpuLock(marker): VRAM freed (%dMB) — proceeding", freed)
+                    return
+                time.sleep(2.0)
+            logger.warning(
+                "GpuLock(marker): VRAM still tight after %.0fs — proceeding anyway",
+                config.GPU_MAX_WAIT_S,
+            )
 
     def release(self, owner: str) -> None:
-        """Release the GPU. No-op — Ollama reloads on demand."""
-        if self._owner == owner:
-            self._owner = None
+        """Release the GPU. Ollama reloads on demand."""
+        with self._lock:
+            if self._owner == owner:
+                self._owner = None
 
 
 # Module-level singleton shared by marker client, pipeline, and embedding.

@@ -53,6 +53,8 @@ llm:
 converter:
   engine: marker                           # marker (recommended) | docling (legacy)
   marker_url: "http://localhost:5001"
+  # fast = CPU layout + minimal VLM (fits 8GB GPUs for digital PDFs)
+  # balanced = full VLM (needs ≥16GB VRAM; required for scanned books)
   marker_mode: fast  # auto-detected by setup.sh
   marker_force_ocr: false                  # force OCR on all pages (scanned-only corpora)
   marker_timeout: 300.0                    # seconds per conversion
@@ -122,9 +124,9 @@ contextual_retrieval:
 
 # ── GPU Coordination ──────────────────────────────────────────────────────────
 gpu:
-  enabled: true  # auto-detected by setup.sh
-  vram_threshold_mb: 6000                  # above this used VRAM, enforce exclusion
+  enabled: true                            # enforce marker/ollama VRAM exclusion on small GPUs
   max_wait_s: 120                          # max wait for VRAM to free before proceeding
+
 
 # ── Metadata Extraction ───────────────────────────────────────────────────────
 metadata:

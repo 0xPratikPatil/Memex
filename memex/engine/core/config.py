@@ -210,10 +210,9 @@ CONTEXT_MAX_BATCHES: int = _cfg_int("contextual_retrieval.max_batches", 8)
 
 # ── GPU coordination ──────────────────────────────────────────────────────────
 # Marker and Ollama share the GPU. When VRAM is tight, GpuLock enforces
-# mutual exclusion (unload Ollama before a marker job; Ollama reloads on
-# demand). On large GPUs the threshold is never crossed → zero overhead.
+# mutual exclusion (evict Ollama before a marker job; Ollama reloads on
+# demand). On large GPUs the requester's footprint always fits → no-op.
 GPU_ENABLED: bool = _cfg_bool("gpu.enabled", True)
-GPU_VRAM_THRESHOLD_MB: int = _cfg_int("gpu.vram_threshold_mb", 6000)
 GPU_MAX_WAIT_S: float = _cfg_float("gpu.max_wait_s", 120.0)
 
 # ── Embedding batch size ──────────────────────────────────────────────────────
