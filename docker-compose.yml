@@ -209,6 +209,50 @@ services:
       - "com.memex.service=marker"
       - "com.memex.description=Document parsing and conversion (Marker + Surya OCR)"
 
+  # ══════════════════════════════════════════════════════════════════════════════
+  # MarkItDown — Lightweight document conversion (CPU-only, no GPU)
+  # Converts PDF, DOCX, PPTX, XLSX, HTML, EPUB, images, audio, CSV, JSON, ZIP
+  # to Markdown. Alternative to Marker for simple documents and Office files.
+  # ══════════════════════════════════════════════════════════════════════════════
+  markitdown:
+    build:
+      context: .
+      dockerfile: markitdown.Dockerfile
+    container_name: memex-markitdown
+    init: true
+    ports:
+      - "127.0.0.1:${MARKITDOWN_PORT:-5003}:5003"
+    tmpfs:
+      - /tmp:exec,size=64M
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:5003/health').raise_for_status()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    restart: unless-stopped
+    stop_grace_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - "com.memex.service=markitdown"
+      - "com.memex.description=Lightweight document conversion (CPU-only, multi-format)"
+
   # ── Redis — persistent caching layer ──
   redis:
     image: redis:7.4.10-alpine

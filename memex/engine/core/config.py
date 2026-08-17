@@ -91,6 +91,10 @@ MARKER_TIMEOUT: float = _cfg_float("converter.marker_timeout", 300.0)
 # the GPU service is not overwhelmed (2 is safe for a single GPU server).
 CONVERTER_MAX_CONCURRENT: int = _cfg_int("converter.max_concurrent", 2)
 
+# ── MarkItDown (CPU-only alternative to Marker) ───────────────────────────────
+MARKITDOWN_URL: str = _cfg_str("converter.markitdown_url", "http://localhost:5003")
+MARKITDOWN_TIMEOUT: float = _cfg_float("converter.markitdown_timeout", 30.0)
+
 # ── API Keys ──────────────────────────────────────────────────────────────────
 DOCLING_API_KEY: str = _cfg_str("converter.docling_api_key", "")
 

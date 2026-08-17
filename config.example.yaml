@@ -29,12 +29,15 @@ llm:
   read_timeout: 60.0                    # max wait for one response body
 
 converter:
-  engine: marker                          # marker (recommended) | docling (legacy)
+  engine: marker                          # marker (recommended) | markitdown (CPU-only, multi-format)
   marker_url: "http://localhost:5001"
   marker_mode: balanced                   # balanced (GPU, highest quality, default) | fast (bulk, 2.5x faster)
   marker_force_ocr: false                 # force OCR on all pages (scanned-only corpora)
   marker_timeout: 300.0                   # seconds per conversion
   max_concurrent: 2                       # cap parallel conversions — keep <= GPU capacity
+  # ── MarkItDown (CPU-only alternative — PDF, DOCX, PPTX, XLSX, HTML, EPUB, etc.) ──
+  markitdown_url: "http://localhost:5003"
+  markitdown_timeout: 30.0                # seconds per conversion
   # ── Legacy Docling settings (only used when engine: docling) ──────────
   docling_url: "http://localhost:5001/v1/convert/source"
   docling_api_key: ${DOCLING_API_KEY}

@@ -196,6 +196,19 @@ def _marker_result_to_conversion(result, url_or_path: str) -> ConversionResult:
     )
 
 
+def _markitdown_result_to_conversion(result, url_or_path: str) -> ConversionResult:
+    """Convert a MarkItDownResult into the shared ConversionResult shape."""
+    return ConversionResult(
+        markdown=result.markdown,
+        json_content=result.metadata,
+        html_content="",
+        text_content="",
+        status="success",
+        processing_time=result.processing_time,
+        errors=[],
+    )
+
+
 def parse_url(url: str) -> ConversionResult:
     """Fetch a URL via the configured converter and return structured result."""
     from memex.engine.utils.cache import cache_parse_result, get_cached_parse_result
@@ -240,6 +253,45 @@ def parse_url(url: str) -> ConversionResult:
 
         result = convert_markdown(resp.content, filename)
         converted = _marker_result_to_conversion(result, url)
+        cache_parse_result(
+            file_hash,
+            {
+                "markdown": converted.markdown,
+                "json_content": converted.json_content,
+                "html_content": converted.html_content,
+                "text_content": converted.text_content,
+                "status": converted.status,
+                "processing_time": converted.processing_time,
+                "errors": converted.errors,
+            },
+        )
+        return converted
+
+    if config.CONVERTER_ENGINE == "markitdown":
+        # MarkItDown can convert URLs directly via the server.
+        try:
+            resp = httpx.get(url, timeout=config.HTTP_TIMEOUT, follow_redirects=True)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ConversionError(
+                url,
+                f"URL fetch error {exc.response.status_code}: {exc.response.text[:200]}",
+                hint="The URL is unreachable or returned an error status.",
+                cause=exc,
+            ) from exc
+        except httpx.TransportError as exc:
+            raise ServiceUnavailableError(
+                "URL",
+                f"cannot reach {url}: {exc}",
+                hint="Check the URL is reachable from this host.",
+                cause=exc,
+            ) from exc
+
+        filename = url.split("/")[-1].split("?")[0] or "document"
+        from memex.engine.ingestion.markitdown_client import convert_markdown as md_convert
+
+        result = md_convert(resp.content, filename)
+        converted = _markitdown_result_to_conversion(result, url)
         cache_parse_result(
             file_hash,
             {
@@ -332,6 +384,25 @@ def parse_local_file(file_path: str) -> ConversionResult:
 
         result = convert_markdown(file_bytes, filename)
         converted = _marker_result_to_conversion(result, file_path)
+        cache_parse_result(
+            file_hash,
+            {
+                "markdown": converted.markdown,
+                "json_content": converted.json_content,
+                "html_content": converted.html_content,
+                "text_content": converted.text_content,
+                "status": converted.status,
+                "processing_time": converted.processing_time,
+                "errors": converted.errors,
+            },
+        )
+        return converted
+
+    if config.CONVERTER_ENGINE == "markitdown":
+        from memex.engine.ingestion.markitdown_client import convert_markdown as md_convert
+
+        result = md_convert(file_bytes, filename)
+        converted = _markitdown_result_to_conversion(result, file_path)
         cache_parse_result(
             file_hash,
             {
