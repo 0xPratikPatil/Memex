@@ -28,6 +28,8 @@ def main() -> int:
         from marker.models import create_model_dict
         from marker.output import text_from_rendered
 
+        from converter_helpers import build_converter_args
+
         config = {
             "output_format": args.format,
             "mode": args.mode,
@@ -36,36 +38,17 @@ def main() -> int:
         config_parser = ConfigParser(config)
 
         artifact_dict = create_model_dict()
-
-        # In fast mode, skip table_rec_model + TableProcessor to save ~500MB
-        # GPU VRAM.  TableProcessor requires table_rec_model; without it the
-        # PdfConverter init fails with "Cannot resolve dependency".  Fast mode
-        # handles tables via text extraction, not the table recognition model.
-        processor_list = config_parser.get_processors()
-        if args.mode == "fast" and "table_rec_model" in artifact_dict:
-            import gc
-
-            import torch
-            from marker.processors.table import TableProcessor
-
-            del artifact_dict["table_rec_model"]
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
-            # Build processor list excluding TableProcessor
-            default_procs = list(PdfConverter.default_processors)
-            processor_list = [
-                f"{p.__module__}.{p.__qualname__}"
-                for p in default_procs
-                if p is not TableProcessor
-            ]
+        artifact_dict, processor_list, renderer = build_converter_args(
+            mode=args.mode,
+            config_parser=config_parser,
+            artifact_dict=artifact_dict,
+        )
 
         converter = PdfConverter(
             config=config_parser.generate_config_dict(),
             artifact_dict=artifact_dict,
             processor_list=processor_list,
-            renderer=config_parser.get_renderer(),
+            renderer=renderer,
             llm_service=config_parser.get_llm_service(),
         )
 
@@ -77,7 +60,7 @@ def main() -> int:
             result = {
                 "format": args.format,
                 "output": text,
-                "images": {k: "" for k in images},  # image bytes omitted — markdown embeds refs
+                "images": {k: "" for k in images},
                 "metadata": getattr(rendered, "metadata", {}),
                 "success": True,
             }
