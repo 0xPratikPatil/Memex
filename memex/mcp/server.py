@@ -190,16 +190,11 @@ def _friendly_error(exc: Exception) -> str:
     )
 
     if isinstance(exc, ConversionTimeoutError):
-        return (
-            "Docling timed out on this document (it may be too large or the "
-            "server is overloaded). "
-            + (exc.hint or "Reduce converter.max_concurrent or retry.")
+        return "Docling timed out on this document (it may be too large or the server is overloaded). " + (
+            exc.hint or "Reduce converter.max_concurrent or retry."
         )
     if isinstance(exc, ServiceUnavailableError):
-        return (
-            f"{exc.service} is unreachable. "
-            + (exc.hint or "Check: docker compose ps")
-        )
+        return f"{exc.service} is unreachable. " + (exc.hint or "Check: docker compose ps")
     if isinstance(exc, CorruptedDocumentError):
         return f"The document could not be parsed into usable content: {exc}"
     if isinstance(exc, ConfigError):

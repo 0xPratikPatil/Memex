@@ -88,9 +88,8 @@ _RETRYABLE_STATUSES = (429, 502, 503, 504)
 
 
 def _is_retryable(exc: Exception) -> bool:
-    return (
-        isinstance(exc, (httpx.TransportError, httpx.TimeoutException))
-        or (isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in _RETRYABLE_STATUSES)
+    return isinstance(exc, (httpx.TransportError, httpx.TimeoutException)) or (
+        isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in _RETRYABLE_STATUSES
     )
 
 
@@ -290,8 +289,8 @@ def parse_url(url: str) -> ConversionResult:
         filename = url.split("/")[-1].split("?")[0] or "document"
         from memex.engine.ingestion.markitdown_client import convert_markdown as md_convert
 
-        result = md_convert(resp.content, filename)
-        converted = _markitdown_result_to_conversion(result, url)
+        md_result = md_convert(resp.content, filename)
+        converted = _markitdown_result_to_conversion(md_result, url)
         cache_parse_result(
             file_hash,
             {
@@ -401,8 +400,8 @@ def parse_local_file(file_path: str) -> ConversionResult:
     if config.CONVERTER_ENGINE == "markitdown":
         from memex.engine.ingestion.markitdown_client import convert_markdown as md_convert
 
-        result = md_convert(file_bytes, filename)
-        converted = _markitdown_result_to_conversion(result, file_path)
+        md_result = md_convert(file_bytes, filename)
+        converted = _markitdown_result_to_conversion(md_result, file_path)
         cache_parse_result(
             file_hash,
             {
@@ -434,9 +433,7 @@ def parse_local_file(file_path: str) -> ConversionResult:
         data = _post(payload)
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 504:
-            raise ConversionTimeoutError(
-                file_path, timeout_s=config.DOCLING_TIMEOUT, cause=exc
-            ) from exc
+            raise ConversionTimeoutError(file_path, timeout_s=config.DOCLING_TIMEOUT, cause=exc) from exc
         raise ConversionError(
             file_path,
             f"Docling API error {exc.response.status_code}: {exc.response.text[:200]}",

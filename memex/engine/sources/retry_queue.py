@@ -53,10 +53,10 @@ class RetryQueue:
     """
 
     BACKOFF_SCHEDULE = [
-        60,       # 1 minute
-        300,      # 5 minutes
-        1800,     # 30 minutes
-        7200,     # 2 hours
+        60,  # 1 minute
+        300,  # 5 minutes
+        1800,  # 30 minutes
+        7200,  # 2 hours
     ]
     MAX_RETRIES = 4
 

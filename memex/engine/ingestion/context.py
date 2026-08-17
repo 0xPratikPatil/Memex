@@ -155,8 +155,7 @@ class ContextGenerator:
         llm_batches = all_batches[: config.CONTEXT_MAX_BATCHES]
         if len(all_batches) > config.CONTEXT_MAX_BATCHES:
             logger.warning(
-                "Context generation capped at %d LLM batches (%d total) — "
-                "remaining chunks use header fallback",
+                "Context generation capped at %d LLM batches (%d total) — remaining chunks use header fallback",
                 config.CONTEXT_MAX_BATCHES,
                 len(all_batches),
             )
@@ -177,9 +176,7 @@ class ContextGenerator:
                     # Beyond the LLM batch cap — header fallback only.
                     for chunk in batch:
                         enriched.append(
-                            self._apply_chunk_context(
-                                chunk, self._context_from_header(chunk.get("section_header", ""))
-                            )
+                            self._apply_chunk_context(chunk, self._context_from_header(chunk.get("section_header", "")))
                         )
                     continue
                 for chunk, context in zip(batch, contexts, strict=True):
@@ -194,9 +191,7 @@ class ContextGenerator:
             if batch_start not in [b[1] for b in llm_batches]:
                 for chunk in batch:
                     enriched.append(
-                        self._apply_chunk_context(
-                            chunk, self._context_from_header(chunk.get("section_header", ""))
-                        )
+                        self._apply_chunk_context(chunk, self._context_from_header(chunk.get("section_header", "")))
                     )
                 continue
             contexts = self._batch_context_from_surrounding(chunks, batch_start, batch_size)

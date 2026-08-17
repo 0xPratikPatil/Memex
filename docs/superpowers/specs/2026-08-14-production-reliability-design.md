@@ -139,9 +139,7 @@ class DoclingAsyncClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def wait_for_completion(
-        self, task_id: str, poll_interval: float = 5.0, max_wait: float = 600.0
-    ) -> dict:
+    async def wait_for_completion(self, task_id: str, poll_interval: float = 5.0, max_wait: float = 600.0) -> dict:
         """Poll until task completes or times out."""
         start = time.monotonic()
         while True:
@@ -167,6 +165,7 @@ class FileStatus:
     RETRY = "retry"
     FAILED = "failed"
 
+
 class StatusTracker:
     """Track file processing status in Qdrant payload."""
 
@@ -187,9 +186,7 @@ class StatusTracker:
         # Find all points with this source_id
         results = self._qdrant.scroll(
             collection_name=self._collection,
-            scroll_filter=Filter(
-                must=[FieldCondition(key="source_id", match=MatchValue(value=source_id))]
-            ),
+            scroll_filter=Filter(must=[FieldCondition(key="source_id", match=MatchValue(value=source_id))]),
             limit=1,
         )
         if results[0]:
@@ -232,13 +229,10 @@ class StatusTracker:
     def get_status_summary(self) -> dict:
         """Get counts by status."""
         summary = {}
-        for status in [FileStatus.PENDING, FileStatus.PROCESSING, FileStatus.DONE,
-                       FileStatus.RETRY, FileStatus.FAILED]:
+        for status in [FileStatus.PENDING, FileStatus.PROCESSING, FileStatus.DONE, FileStatus.RETRY, FileStatus.FAILED]:
             count, _ = self._qdrant.count(
                 collection_name=self._collection,
-                count_filter=Filter(
-                    must=[FieldCondition(key="processing_status", match=MatchValue(value=status))]
-                ),
+                count_filter=Filter(must=[FieldCondition(key="processing_status", match=MatchValue(value=status))]),
             )
             summary[status] = count
         return summary
@@ -253,10 +247,10 @@ class RetryQueue:
     """Exponential backoff retry queue for failed Docling operations."""
 
     BACKOFF_SCHEDULE = [
-        60,        # 1 minute
-        300,       # 5 minutes
-        1800,      # 30 minutes
-        7200,      # 2 hours
+        60,  # 1 minute
+        300,  # 5 minutes
+        1800,  # 30 minutes
+        7200,  # 2 hours
     ]
     MAX_RETRIES = 4
 
@@ -315,6 +309,7 @@ table = Table()
 table.add_column("File", ratio=3)
 table.add_column("Stage", ratio=2)
 table.add_column("Chunks", ratio=1)
+
 
 # New: Compact single-line
 def _build_compact_status(active: OrderedDict, completed: int, total: int) -> str:

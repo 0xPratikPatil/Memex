@@ -20,11 +20,13 @@ memex/
     │   ├── logging_setup.py     # Colored/structured logging (Rich handler, JSON mode)
     │   └── yaml_config.py       # YamlConfig with dot-notation + ${VAR} substitution
     ├── ingestion/
-    │   ├── loader.py            # parse_file / parse_url → Marker conversion (docling legacy path)
+    │   ├── loader.py            # parse_file / parse_url → Marker or MarkItDown conversion
     │   ├── context.py            # Context prefix generation (contextual retrieval)
     │   ├── embedding.py          # EmbeddingService: batch embed via Ollama/OpenAI/HF
     │   ├── hashing.py            # SHA256 content-hash dedup
     │   ├── ingestion.py          # IngestionOrchestrator for batch ingest
+    │   ├── marker_client.py      # Marker HTTP client (submit→poll→fetch with GpuLock)
+    │   ├── markitdown_client.py  # MarkItDown HTTP client (CPU-only, multi-format)
     │   ├── splitter.py           # Recursive/fixed chunking (fallback when HybridChunker unavailable)
     │   └── status.py             # FileStatusStore: Qdrant-backed per-file status state machine
     ├── retrieval/
@@ -78,6 +80,7 @@ All features are controlled via `config.yaml`. The master toggle for each group 
 
 ### Ingestion
 - **Marker conversion** (`converter.engine=marker`): marker-pdf + Surya OCR in Docker — faster (2.9-7.4 pg/s) and higher quality (76 vs 50 olmocr-bench) than Docling. Recursive chunking is the default.
+- **MarkItDown conversion** (`converter.engine=markitdown`): Microsoft's MarkItDown in Docker — CPU-only, no GPU contention. Handles DOCX, PPTX, XLSX, HTML, EPUB, images (via OCR), audio (via Whisper), CSV, JSON, XML, ZIP. Good for mixed-format corpora where GPU is needed for other tasks.
 - **Multi-format Embedding**: Table chunks → HTML, code chunks → fenced markdown, images → `[Image: caption]`.
 - **Legacy Docling path** (`converter.engine=docling`): kept for rollback only.
 - **Content-Hash Dedup** (`ingestion/hashing.py`): SHA256-based dedup prevents re-indexing identical content. Partial ingest recovery on crash.
@@ -138,9 +141,13 @@ All configuration lives in `config.yaml`. Copy `config.example.yaml` to `config.
 | `chunking.overlap` | `128` | Token overlap |
 | `chunking.min_length` | `30` | Minimum chunk length |
 | `chunking.tokenizer` | `Qwen/Qwen3-Embedding-0.6B` | HF tokenizer for chunk sizing |
-| `converter.engine` | `marker` | marker (recommended) / docling (legacy) |
+| `converter.engine` | `marker` | marker (recommended) / markitdown (CPU-only, multi-format) / docling (legacy) |
 | `converter.marker_url` | `http://localhost:5001` | Marker service |
 | `converter.marker_mode` | `fast` | fast (default) / balanced (GPU) |
+| `converter.marker_force_ocr` | `false` | Force OCR on all pages (scanned-only corpora) |
+| `converter.marker_timeout` | `300.0` | Conversion timeout (seconds) |
+| `converter.markitdown_url` | `http://localhost:5003` | MarkItDown service |
+| `converter.markitdown_timeout` | `30.0` | Conversion timeout (seconds) |
 | `converter.docling_timeout` | `300.0` | Conversion timeout (seconds) |
 | `converter.docling_picture_classify` | `true` | Image classification |
 | `converter.docling_enrich_code` | `false` | Code extraction (needs serve-side model) |
@@ -191,6 +198,10 @@ MCP Server (host process, uv run memex)
   │               GPU document conversion (job-based: thin server +
   │               per-job subprocess, crash-proof, no timeouts)
   │
+  ├── HTTP ──► Docker: MarkItDown (:5003)
+  │               CPU-only document conversion (DOCX, PPTX, XLSX, HTML, EPUB,
+  │               images, audio, CSV, JSON, XML, ZIP — no GPU contention)
+  │
   ├── HTTP ──► Docker: Qdrant (:6333)
   │               vector DB (1024d HNSW index)
   │
@@ -217,7 +228,7 @@ MCP Server (host process, uv run memex)
 - **stop_grace_period**: 30s (qdrant, ml-services), 60s (ollama/marker).
 - **Single network**: All services share the `backend` bridge network (MCP server runs on host).
 - **Tmpfs for /tmp**: Every service has tmpfs mount — keeps temp writes off the container filesystem.
-- **Container names**: `memex-qdrant`, `memex-ollama`, `memex-marker`, `memex-ml`.
+- **Container names**: `memex-qdrant`, `memex-ollama`, `memex-marker`, `memex-ml`, `memex-markitdown`.
 - **Service labels**: Each service has `com.memex.service` and `com.memex.description` labels.
 - **Override file**: `compose.override.yaml` is auto-loaded with tighter dev health checks.
 - **Ollama runs in Docker only** — never install Ollama on the host.

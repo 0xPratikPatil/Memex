@@ -143,14 +143,16 @@ class TestLifecycle:
     def test_transition_preserves_existing_fields(self, store: FileStatusStore, mock_qdrant: MagicMock) -> None:
         # Stage update from an existing record must keep source_name/created_at.
         mock_qdrant.scroll.return_value = (
-            _mock_points([
-                {
-                    "source": "/docs/a.pdf",
-                    "status": IngestionStatus.PROCESSING,
-                    "source_name": "docs",
-                    "created_at": "2026-01-01T00:00:00+00:00",
-                }
-            ]),
+            _mock_points(
+                [
+                    {
+                        "source": "/docs/a.pdf",
+                        "status": IngestionStatus.PROCESSING,
+                        "source_name": "docs",
+                        "created_at": "2026-01-01T00:00:00+00:00",
+                    }
+                ]
+            ),
             None,
         )
         store.update_stage("/docs/a.pdf", "Embedding", chunks=3)
@@ -191,11 +193,13 @@ class TestRetryScheduling:
 class TestQueries:
     def test_get_summary_counts(self, store: FileStatusStore, mock_qdrant: MagicMock) -> None:
         mock_qdrant.scroll.return_value = (
-            _mock_points([
-                {"source": "a", "status": IngestionStatus.DONE},
-                {"source": "b", "status": IngestionStatus.DONE},
-                {"source": "c", "status": IngestionStatus.FAILED},
-            ]),
+            _mock_points(
+                [
+                    {"source": "a", "status": IngestionStatus.DONE},
+                    {"source": "b", "status": IngestionStatus.DONE},
+                    {"source": "c", "status": IngestionStatus.FAILED},
+                ]
+            ),
             None,
         )
         summary = store.get_summary()
@@ -204,10 +208,12 @@ class TestQueries:
 
     def test_list_records_sorted(self, store: FileStatusStore, mock_qdrant: MagicMock) -> None:
         mock_qdrant.scroll.return_value = (
-            _mock_points([
-                {"source": "old", "status": IngestionStatus.DONE, "updated_at": "2026-01-01T00:00:00+00:00"},
-                {"source": "new", "status": IngestionStatus.PROCESSING, "updated_at": "2026-08-01T00:00:00+00:00"},
-            ]),
+            _mock_points(
+                [
+                    {"source": "old", "status": IngestionStatus.DONE, "updated_at": "2026-01-01T00:00:00+00:00"},
+                    {"source": "new", "status": IngestionStatus.PROCESSING, "updated_at": "2026-08-01T00:00:00+00:00"},
+                ]
+            ),
             None,
         )
         records = store.list_records()
@@ -217,10 +223,12 @@ class TestQueries:
         past = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
         future = (datetime.now(UTC) + timedelta(minutes=10)).isoformat()
         mock_qdrant.scroll.return_value = (
-            _mock_points([
-                {"source": "due", "status": IngestionStatus.RETRY, "next_retry_at": past},
-                {"source": "later", "status": IngestionStatus.RETRY, "next_retry_at": future},
-            ]),
+            _mock_points(
+                [
+                    {"source": "due", "status": IngestionStatus.RETRY, "next_retry_at": past},
+                    {"source": "later", "status": IngestionStatus.RETRY, "next_retry_at": future},
+                ]
+            ),
             None,
         )
         assert store.get_due_retries() == ["due"]
@@ -234,10 +242,12 @@ class TestCleanup:
         stale = (datetime.now(UTC) - timedelta(days=10)).isoformat()
         fresh = datetime.now(UTC).isoformat()
         mock_qdrant.scroll.return_value = (
-            _mock_points([
-                {"source": "zombie", "status": IngestionStatus.PROCESSING, "updated_at": stale},
-                {"source": "active", "status": IngestionStatus.PROCESSING, "updated_at": fresh},
-            ]),
+            _mock_points(
+                [
+                    {"source": "zombie", "status": IngestionStatus.PROCESSING, "updated_at": stale},
+                    {"source": "active", "status": IngestionStatus.PROCESSING, "updated_at": fresh},
+                ]
+            ),
             None,
         )
         cleaned = store.cleanup_stale(stale_after_s=7 * 86400)

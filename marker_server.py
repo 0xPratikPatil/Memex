@@ -74,9 +74,7 @@ async def submit_job(
             raise HTTPException(status_code=409, detail="job already running")
 
         _jobs[job_id] = {"status": "pending", "task": None}
-        task = asyncio.create_task(
-            _run_job(job_id, str(input_path), str(result_path), output_format, mode, force_ocr)
-        )
+        task = asyncio.create_task(_run_job(job_id, str(input_path), str(result_path), output_format, mode, force_ocr))
         _jobs[job_id]["task"] = task
 
     return {"job_id": job_id, "status": "pending"}
@@ -131,10 +129,14 @@ async def _run_job(
         cmd = [
             "python",
             str(CONVERT_SCRIPT),
-            "--input", input_path,
-            "--output", result_path,
-            "--format", output_format,
-            "--mode", mode,
+            "--input",
+            input_path,
+            "--output",
+            result_path,
+            "--format",
+            output_format,
+            "--mode",
+            mode,
         ]
         if force_ocr:
             cmd.append("--force-ocr")

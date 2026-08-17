@@ -45,45 +45,48 @@ The key change is passing a progress callback through the entire chain so ALL pi
 ```python
 def _ingest_file(engine, source_identifier, file_path, source_name, progress_cb=None):
     """Convert and ingest a single file with full stage reporting.
-    
+
     Stages surfaced via progress_cb:
       - "Converting" (70%) — Docling conversion / chunking
-      - "Context" (73%) — Context enrichment per chunk  
+      - "Context" (73%) — Context enrichment per chunk
       - "Metadata" (74%) — Entity/topic extraction
       - "Embedding" (75-89%) — Dense + sparse embedding
       - "Storing" (90%) — Qdrant upsert
     """
     from memex.engine.core import config
-    
+
     strategy = config.CHUNK_STRATEGY.lower()
-    
+
     def _pipeline_progress(msg, pct):
         if progress_cb:
             progress_cb(msg, pct)
-    
+
     if strategy == "hybrid":
         from memex.engine.ingestion.splitter import chunk_file
+
         _pipeline_progress("Converting + chunking (Docling)...", 70)
         result = chunk_file(file_path, include_doc=True)
         markdown = result.get("markdown", "")
         chunks = result.get("chunks", [])
         if not markdown:
             from memex.engine.ingestion.loader import parse_file
+
             parse_result = parse_file(file_path)
             if not parse_result.ok:
                 raise RuntimeError(f"Docling conversion failed: {parse_result.status}")
             markdown = parse_result.markdown
     else:
         from memex.engine.ingestion.loader import parse_file
+
         _pipeline_progress("Converting (Docling)...", 70)
         result = parse_file(file_path)
         if not result.ok:
             raise RuntimeError(f"Docling conversion failed: {result.status}")
         markdown = result.markdown
         chunks = None
-    
+
     content_hash = engine.compute_file_hash(markdown.encode())
-    
+
     if chunks is not None:
         count = engine.ingest_prechunked(
             chunks=chunks,
@@ -120,11 +123,12 @@ def ingest_prechunked(
 
     Used when chunking was done externally (e.g., by HybridChunker in a
     single Docling API call). Skips the double Docling call problem.
-    
+
     Embeddings are stored to Qdrant IMMEDIATELY at the end of this call —
     no batching across files. Each file's vectors are persisted as soon as
     all stages complete for that file.
     """
+
     def _progress(msg: str, pct: int) -> None:
         if progress_cb:
             progress_cb(msg, pct)
@@ -138,6 +142,7 @@ def ingest_prechunked(
         raise ValueError("No chunks above MIN_CHUNK_LEN after filtering.")
 
     from memex.engine.ingestion.hashing import dedup_chunks
+
     raw_chunks = dedup_chunks(raw_chunks)
     if not raw_chunks:
         raise ValueError("No chunks after deduplication.")
@@ -173,6 +178,7 @@ def ingest_prechunked(
     raw_texts = [strip_context_prefix(c["content"]) for c in raw_chunks]
 
     import concurrent.futures
+
     contextual_vecs = None
     max_workers = 3 if config.ENABLE_CONTEXTUAL_RETRIEVAL else 2
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -189,7 +195,7 @@ def ingest_prechunked(
     # EMBEDDINGS STORED IMMEDIATELY PER FILE — no cross-file batching
     _progress("Storing in Qdrant...", 90)
     # ... build points and upsert (same as ingest_text lines 663-750)
-    
+
     logger.info("Ingested %d chunks for '%s' — embeddings persisted", len(points), source_identifier)
     return len(points)
 ```
@@ -208,22 +214,22 @@ Replace sequential `for` loops with bounded `asyncio.gather()`:
 ```python
 async def sync(config_module, source_name=None, dry_run=False, progress_cb=None):
     stats = SyncStats()
-    
+
     # Phase 1: List sources (unchanged)
     # Phase 2: Get stored hashes (unchanged)
     # Phase 3: Reconcile to determine new/changed/deleted (unchanged)
-    
+
     # Phase 4: Process files concurrently
     max_concurrent = config.MAX_CONCURRENT_SYNC  # NEW config key
-    
+
     for src_cfg in source_configs:
         src_name = src_cfg.get("name", src_cfg.get("type", "local"))
         source = get_source(src_cfg.get("type", "local"), src_cfg)
-        
+
         # ... reconcile logic unchanged ...
-        
+
         semaphore = asyncio.Semaphore(max_concurrent)
-        
+
         async def _process_file(path, sf, action, file_idx, total):
             """Process a single file with bounded concurrency."""
             async with semaphore:
@@ -232,54 +238,50 @@ async def sync(config_module, source_name=None, dry_run=False, progress_cb=None)
                         _emit(path, "Parsing", file_idx, total)
                         local = await asyncio.to_thread(source.download, sf, download_dir)
                         _emit(path, "Ingesting", file_idx, total)
-                        chunks = await asyncio.to_thread(
-                            _ingest_file, engine, sf.path, str(local), src_name
-                        )
+                        chunks = await asyncio.to_thread(_ingest_file, engine, sf.path, str(local), src_name)
                         _emit(path, "Done", file_idx, total, chunks=chunks)
                         return ("added", path)
-                    
+
                     elif action == "update":
                         await asyncio.to_thread(engine.delete_by_source, path)
                         _emit(path, "Parsing", file_idx, total)
                         local = await asyncio.to_thread(source.download, sf, download_dir)
                         _emit(path, "Ingesting", file_idx, total)
-                        chunks = await asyncio.to_thread(
-                            _ingest_file, engine, sf.path, str(local), src_name
-                        )
+                        chunks = await asyncio.to_thread(_ingest_file, engine, sf.path, str(local), src_name)
                         _emit(path, "Done", file_idx, total, chunks=chunks)
                         return ("changed", path)
-                    
+
                     elif action == "delete":
                         _emit(path, "Deleting", file_idx, total)
                         await asyncio.to_thread(engine.delete_by_source, path)
                         _emit(path, "Done", file_idx, total)
                         return ("deleted", path)
-                
+
                 except Exception as exc:
                     _emit(path, "Error", file_idx, total, error=str(exc))
                     return ("error", path, str(exc))
-        
+
         # Build and run tasks
         # NOTE: file_idx is passed explicitly to avoid closure capture issues
         tasks = []
         file_idx = 0
         total_files = len(new_paths) + len(common_paths) + len(deleted_paths)
-        
+
         for path in new_paths:
             file_idx += 1
             tasks.append(_process_file(path, current_map[path], "add", file_idx, total_files))
-        
+
         for path in changed_paths:
             file_idx += 1
             tasks.append(_process_file(path, current_map[path], "update", file_idx, total_files))
-        
+
         for path in deleted_paths:
             file_idx += 1
             tasks.append(_process_file(path, current_map[path], "delete", file_idx, total_files))
-        
+
         # Run all tasks concurrently
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         # Tally results
         for r in results:
             if isinstance(r, Exception):
@@ -292,7 +294,7 @@ async def sync(config_module, source_name=None, dry_run=False, progress_cb=None)
                 stats.deleted += 1
             elif r[0] == "error":
                 stats.errors.append(r[2])
-    
+
     return stats
 ```
 
@@ -303,9 +305,11 @@ Add async wrappers for blocking Qdrant calls:
 ```python
 # In sync.py or a new utils module
 
+
 async def _get_stored_hashes_async(engine, source_name: str) -> dict[str, str]:
     """Async wrapper for _get_stored_hashes using to_thread."""
     return await asyncio.to_thread(_get_stored_hashes, engine, source_name)
+
 
 async def _delete_by_source_async(engine, path: str) -> None:
     """Async wrapper for delete_by_source using to_thread."""
@@ -341,7 +345,7 @@ The sync `_emit()` function now shows the current pipeline stage for each file:
 # Stage names shown in CLI progress display:
 # "Converting"    — Docling conversion / chunking
 # "Context"       — Context enrichment per chunk
-# "Metadata"      — Entity/topic extraction  
+# "Metadata"      — Entity/topic extraction
 # "Embedding"     — Dense + sparse embedding generation
 # "Storing"       — Qdrant upsert
 # "Done"          — Complete with chunk count
@@ -363,34 +367,39 @@ With parallel processing, multiple files report progress simultaneously. Use an 
 ```python
 import threading
 
+
 class AtomicCounter:
     def __init__(self):
         self._value = 0
         self._lock = threading.Lock()
-    
+
     def increment(self):
         with self._lock:
             self._value += 1
             return self._value
-    
+
     @property
     def value(self):
         with self._lock:
             return self._value
 
+
 # In sync():
 completed = AtomicCounter()
 
+
 def _emit(path, stage, file_idx, total, chunks=0, error=""):
     if progress_cb is not None:
-        progress_cb(FileProgress(
-            path=path,
-            total=total,
-            current=completed.increment() if stage in ("Done", "Error") else completed.value,
-            stage=stage,
-            chunks=chunks,
-            error=error,
-        ))
+        progress_cb(
+            FileProgress(
+                path=path,
+                total=total,
+                current=completed.increment() if stage in ("Done", "Error") else completed.value,
+                stage=stage,
+                chunks=chunks,
+                error=error,
+            )
+        )
 ```
 
 **Immediate per-file embedding storage:** Each file's embeddings are stored to Qdrant as soon as that file completes all pipeline stages — no cross-file batching. This is already the case in `ingest_text()` (line 724-730) and is confirmed in `ingest_prechunked()`. The "Storing" stage visible in the progress display confirms when embeddings are persisted.

@@ -149,9 +149,7 @@ class TestUnloadOllama:
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "models": [{"name": "qwen2.5:1.5b"}, {"name": "bge-m3:latest"}]
-        }
+        mock_resp.json.return_value = {"models": [{"name": "qwen2.5:1.5b"}, {"name": "bge-m3:latest"}]}
 
         with (
             patch.object(config, "OLLAMA_EMBED_URL", "http://localhost:11434/api/embed"),

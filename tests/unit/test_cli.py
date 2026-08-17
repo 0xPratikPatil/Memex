@@ -375,13 +375,15 @@ class TestBuildCompactStatus:
 
         from memex.cli import _build_compact_status
 
-        active = OrderedDict([
-            ("/docs/a.pdf", ("Converting", 0, "")),
-            ("/docs/b.pdf", ("Embedding", 5, "")),
-            ("/docs/c.pdf", ("Done", 10, "")),
-            ("/docs/d.pdf", ("Error", 0, "timeout")),
-            ("/docs/e.pdf", ("Converting", 0, "")),
-        ])
+        active = OrderedDict(
+            [
+                ("/docs/a.pdf", ("Converting", 0, "")),
+                ("/docs/b.pdf", ("Embedding", 5, "")),
+                ("/docs/c.pdf", ("Done", 10, "")),
+                ("/docs/d.pdf", ("Error", 0, "timeout")),
+                ("/docs/e.pdf", ("Converting", 0, "")),
+            ]
+        )
         result = _build_compact_status(active, completed=1, total=5)
 
         # Shows last 4: b, c, d, e (a is hidden)

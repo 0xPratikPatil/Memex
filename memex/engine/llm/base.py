@@ -66,17 +66,13 @@ class LLMProvider(ABC):
         try:
             _ = asyncio.get_running_loop()
         except RuntimeError:
-            result, _attempts = _llm_retry(
-                lambda: asyncio.run(self.chat(prompt, model=model, num_predict=num_predict))
-            )
+            result, _attempts = _llm_retry(lambda: asyncio.run(self.chat(prompt, model=model, num_predict=num_predict)))
             return result
         import concurrent.futures
 
         with concurrent.futures.ThreadPoolExecutor() as pool:
             result, _attempts = _llm_retry(
-                lambda: pool.submit(
-                    asyncio.run, self.chat(prompt, model=model, num_predict=num_predict)
-                ).result()
+                lambda: pool.submit(asyncio.run, self.chat(prompt, model=model, num_predict=num_predict)).result()
             )
             return result
 
@@ -93,9 +89,7 @@ class LLMProvider(ABC):
 
         with concurrent.futures.ThreadPoolExecutor() as pool:
             return _llm_retry(
-                lambda: pool.submit(
-                    asyncio.run, self.chat(prompt, model=model, num_predict=num_predict)
-                ).result()
+                lambda: pool.submit(asyncio.run, self.chat(prompt, model=model, num_predict=num_predict)).result()
             )
 
 

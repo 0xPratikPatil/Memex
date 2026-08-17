@@ -166,12 +166,9 @@ def chunk_url(url: str, include_doc: bool = False) -> dict[str, Any]:
         data = _post_chunking(payload)
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 504:
-            raise ConversionTimeoutError(
-                url, timeout_s=config.DOCLING_SERVE_MAX_SYNC_WAIT, cause=exc
-            ) from exc
+            raise ConversionTimeoutError(url, timeout_s=config.DOCLING_SERVE_MAX_SYNC_WAIT, cause=exc) from exc
         raise ChunkingError(
-            f"Docling chunking API error {exc.response.status_code} for {url}: "
-            f"{exc.response.text[:200]}",
+            f"Docling chunking API error {exc.response.status_code} for {url}: {exc.response.text[:200]}",
             cause=exc,
         ) from exc
     except httpx.TransportError as exc:
@@ -242,8 +239,7 @@ def chunk_local_file(file_path: str, include_doc: bool = False) -> dict[str, Any
                 cause=exc,
             ) from exc
         raise ChunkingError(
-            f"Docling chunking API error {exc.response.status_code} for {p.name}: "
-            f"{exc.response.text[:200]}",
+            f"Docling chunking API error {exc.response.status_code} for {p.name}: {exc.response.text[:200]}",
             cause=exc,
         ) from exc
     except httpx.TransportError as exc:

@@ -32,6 +32,7 @@ class TestGetLLM:
             kwargs = mock_llm_cls.call_args[1]
             assert kwargs["timeout"] == 300.0
 
+
 # ── Ollama LLM ──────────────────────────────────────────────────────────────
 
 

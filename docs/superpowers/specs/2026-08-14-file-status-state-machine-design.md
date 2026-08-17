@@ -101,12 +101,12 @@ Explicit `VALID_TRANSITIONS`:
 
 ```python
 VALID_TRANSITIONS = {
-    PENDING:    {PROCESSING, SKIPPED, FAILED},
-    PROCESSING: {PROCESSING, DONE, SKIPPED, FAILED},   # PROCESSING self-loop = stage update
-    FAILED:     {RETRY, PROCESSING},                    # manual retry or scheduled
-    RETRY:      {PROCESSING, FAILED},                   # retry attempt or backoff exhausted
-    DONE:       {PROCESSING},                           # re-ingest on change
-    SKIPPED:    {PROCESSING},                           # re-ingest on change
+    PENDING: {PROCESSING, SKIPPED, FAILED},
+    PROCESSING: {PROCESSING, DONE, SKIPPED, FAILED},  # PROCESSING self-loop = stage update
+    FAILED: {RETRY, PROCESSING},  # manual retry or scheduled
+    RETRY: {PROCESSING, FAILED},  # retry attempt or backoff exhausted
+    DONE: {PROCESSING},  # re-ingest on change
+    SKIPPED: {PROCESSING},  # re-ingest on change
 }
 ```
 

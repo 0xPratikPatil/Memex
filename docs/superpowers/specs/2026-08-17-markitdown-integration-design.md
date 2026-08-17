@@ -118,8 +118,9 @@ Mirrors `marker_client.py` but much simpler — no GpuLock, no polling, no subpr
 class MarkItDownResult:
     markdown: str
     metadata: dict
-    format: str           # "pdf", "docx", "pptx", etc.
+    format: str  # "pdf", "docx", "pptx", etc.
     processing_time: float
+
 
 async def convert_markdown(file_bytes: bytes, filename: str) -> MarkItDownResult:
     """Convert a file to Markdown via the MarkItDown Docker service."""
@@ -228,13 +229,16 @@ File 4 (XLSX) ──→ markitdown_client ──→ Docker markitdown ──→ 
 **Logging:**
 
 ```python
-logger.info("MarkItDown conversion complete", extra={
-    "source": filename,
-    "stage": "Converting",
-    "format": result.format,
-    "chars": len(result.markdown),
-    "time": f"{result.processing_time:.1f}s",
-})
+logger.info(
+    "MarkItDown conversion complete",
+    extra={
+        "source": filename,
+        "stage": "Converting",
+        "format": result.format,
+        "chars": len(result.markdown),
+        "time": f"{result.processing_time:.1f}s",
+    },
+)
 ```
 
 ## Files to Create/Modify

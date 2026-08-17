@@ -87,7 +87,6 @@ def _build_compact_status(
     return "\n".join(lines)
 
 
-
 def _setup_logging(verbose: bool) -> None:
     from memex.engine.core.logging_setup import setup_logging
 

@@ -60,10 +60,10 @@ Replace the single-blob timeout with phase-split timeouts:
 
 ```python
 httpx.Timeout(
-    connect=10.0,          # TCP connect
-    read=LLM_READ_TIMEOUT, # waiting for response body (config, default 60s)
-    write=30.0,            # sending request
-    pool=30.0,             # waiting for a pooled connection
+    connect=10.0,  # TCP connect
+    read=LLM_READ_TIMEOUT,  # waiting for response body (config, default 60s)
+    write=30.0,  # sending request
+    pool=30.0,  # waiting for a pooled connection
 )
 ```
 

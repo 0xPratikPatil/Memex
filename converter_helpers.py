@@ -44,10 +44,6 @@ def build_converter_args(
             pass  # torch not available (e.g. test environment)
 
         default_procs = list(PdfConverter.default_processors)
-        processor_list = [
-            f"{p.__module__}.{p.__qualname__}"
-            for p in default_procs
-            if p is not TableProcessor
-        ]
+        processor_list = [f"{p.__module__}.{p.__qualname__}" for p in default_procs if p is not TableProcessor]
 
     return artifact_dict, processor_list, config_parser.get_renderer()

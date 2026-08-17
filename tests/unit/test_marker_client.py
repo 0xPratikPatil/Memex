@@ -85,6 +85,7 @@ class TestConvertMarkdown:
 
     def test_acquires_gpu_lock(self, _mock_gpu_lock: MagicMock) -> None:
         """convert_markdown acquires+releases the GpuLock around the job."""
+
         def fake_post(url, files, data):
             return _FakeResponse({"job_id": "abc", "status": "pending"})
 
@@ -146,7 +147,8 @@ class TestConvertMarkdown:
             patch("memex.engine.ingestion.marker_client._get_client", return_value=fake_client),
             patch("memex.engine.ingestion.marker_client.config.MARKER_MODE", "fast"),
             patch("memex.engine.ingestion.marker_client.config.MARKER_FORCE_OCR", False),
-            patch("memex.engine.ingestion.marker_client.JOB_POLL_INTERVAL", 0),pytest.raises(CorruptedDocumentError)
+            patch("memex.engine.ingestion.marker_client.JOB_POLL_INTERVAL", 0),
+            pytest.raises(CorruptedDocumentError),
         ):
             convert_markdown(b"pdf-bytes", "doc.pdf")
 

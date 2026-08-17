@@ -626,9 +626,7 @@ class RAGEngine:
                     try:
                         document_summary = ctx_gen.generate_document_summary(document_text or "")
                     except Exception:
-                        logger.warning(
-                            "Document summary generation failed, falling back to header strategy"
-                        )
+                        logger.warning("Document summary generation failed, falling back to header strategy")
                         logger.debug("Document summary failure detail", exc_info=True)
                 _progress("Adding context to chunks...", 73)
                 raw_chunks = ctx_gen.enrich_chunks(raw_chunks, document_summary=document_summary)
