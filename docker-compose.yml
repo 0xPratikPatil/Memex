@@ -153,8 +153,10 @@ services:
       # per-job subprocess on CUDA and are freed when it exits. The job
       # architecture isolates any crash/OOM from the server.
       TORCH_DEVICE: "cuda"
-      # Prevent CUDA fragmentation OOMs during long conversions.
-      PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+      # expandable_segments:True uses mmap which causes premature OOM on 8GB
+      # GPUs — the allocator fails to find contiguous虚拟address space even
+      # when total free VRAM is sufficient. Disabled for small-GPU compat.
+      PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:False"
       NVIDIA_VISIBLE_DEVICES: all
       # Surya caches models under $HOME/.cache — keep HOME=/app so the
       # pre-cached build models are found (no runtime re-download).

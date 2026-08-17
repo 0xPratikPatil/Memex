@@ -34,10 +34,37 @@ def main() -> int:
             "force_ocr": args.force_ocr,
         }
         config_parser = ConfigParser(config)
+
+        artifact_dict = create_model_dict()
+
+        # In fast mode, skip table_rec_model + TableProcessor to save ~500MB
+        # GPU VRAM.  TableProcessor requires table_rec_model; without it the
+        # PdfConverter init fails with "Cannot resolve dependency".  Fast mode
+        # handles tables via text extraction, not the table recognition model.
+        processor_list = config_parser.get_processors()
+        if args.mode == "fast" and "table_rec_model" in artifact_dict:
+            import gc
+
+            import torch
+            from marker.processors.table import TableProcessor
+
+            del artifact_dict["table_rec_model"]
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            # Build processor list excluding TableProcessor
+            default_procs = list(PdfConverter.default_processors)
+            processor_list = [
+                f"{p.__module__}.{p.__qualname__}"
+                for p in default_procs
+                if p is not TableProcessor
+            ]
+
         converter = PdfConverter(
             config=config_parser.generate_config_dict(),
-            artifact_dict=create_model_dict(),
-            processor_list=config_parser.get_processors(),
+            artifact_dict=artifact_dict,
+            processor_list=processor_list,
             renderer=config_parser.get_renderer(),
             llm_service=config_parser.get_llm_service(),
         )
