@@ -38,8 +38,6 @@ _STAGE_STYLE: dict[str, tuple[str, str, str]] = {
     "Error": ("✗", "red", "Error"),
 }
 
-_MAX_VISIBLE_ROWS = 6
-
 
 def _stage_label(stage: str, error: str = "") -> str:
     """Return a rich-styled stage label."""
@@ -49,43 +47,43 @@ def _stage_label(stage: str, error: str = "") -> str:
     return f"[{color}]{icon} {label}[/{color}]"
 
 
-def _build_compact_status(
+def _build_live_table(
     active: OrderedDict[str, tuple[str, int, str]],
     completed: int,
     total: int,
-) -> str:
-    """Build compact single-line status for each active file.
+) -> Table:
+    """Build a Rich Table with one row per file, updated in place.
 
     Args:
         active: Dict of {path: (stage, chunks, error)}.
         completed: Number of completed files.
         total: Total number of files.
-
-    Returns:
-        Multi-line string with one status line per visible file.
     """
-    lines = []
-    rows = list(active.items())
-    visible = rows[-_MAX_VISIBLE_ROWS:]
+    table = Table(
+        show_header=True,
+        header_style="bold",
+        show_lines=False,
+        expand=True,
+        padding=(0, 1),
+    )
+    table.add_column("File", ratio=3, no_wrap=True)
+    table.add_column("Stage", ratio=2)
+    table.add_column("Chunks", ratio=1, justify="right")
 
-    for path, (stage, chunks, error) in visible:
+    for path, (stage, chunks, error) in active.items():
         fname = os.path.basename(path)
-        icon, color, _label = _STAGE_STYLE.get(stage, ("?", "dim", stage))
-        if stage == "Error":
-            lines.append(f"  [{color}]{icon} {fname}: {error}[/{color}]")
-        else:
-            chunk_str = f" ({chunks})" if chunks > 0 else ""
-            lines.append(f"  [{color}]{icon} {fname}{chunk_str}[/{color}]")
-
-    hidden = len(rows) - len(visible)
-    if hidden > 0:
-        lines.append(f"  [dim]... and {hidden} more[/dim]")
+        table.add_row(fname, _stage_label(stage, error), str(chunks) if chunks > 0 else "")
 
     if total > 0:
         pct = completed / total * 100
-        lines.append(f"  [progress.percentage]{pct:.1f}%[/progress.percentage] {completed}/{total}")
+        table.add_row(
+            "",
+            f"[progress.percentage]{pct:.1f}%[/progress.percentage] {completed}/{total}",
+            "",
+            style="dim",
+        )
 
-    return "\n".join(lines)
+    return table
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -170,14 +168,14 @@ def ingest(
             chunks = existing[1] if existing else 0
             active[p.path] = (p.stage, chunks, "")
 
-        live.update(_build_compact_status(active, completed_count, total))
+        live.update(_build_live_table(active, completed_count, total))
 
-    with Live(_build_compact_status(active, 0, total), console=console, refresh_per_second=8) as live:
+    with Live(_build_live_table(active, 0, total), console=console, refresh_per_second=8) as live:
         for file_path in files:
             src = str(file_path)
             status_store.mark_pending(src, source_name=source_name or target.name)
             active[src] = ("Checking", 0, "")
-            live.update(_build_compact_status(active, completed_count, total))
+            live.update(_build_live_table(active, completed_count, total))
 
             try:
                 # Pre-check 1: local file unchanged since last ingest (mtime+size)
@@ -186,11 +184,11 @@ def ingest(
                     status_store.mark_skipped(src, reason="unchanged")
                     active[src] = ("Skipped", chunk_count, "")
                     completed_count += 1
-                    live.update(_build_compact_status(active, completed_count, total))
+                    live.update(_build_live_table(active, completed_count, total))
                     continue
 
                 active[src] = ("Parsing", 0, "")
-                live.update(_build_compact_status(active, completed_count, total))
+                live.update(_build_live_table(active, completed_count, total))
                 result = parse_file(src)
                 if not result.ok:
                     err = f"{file_path}: {result.status} — {result.errors}"
@@ -198,23 +196,23 @@ def ingest(
                     status_store.mark_failed(src, str(result.errors))
                     active[src] = ("Error", 0, str(result.errors))
                     completed_count += 1
-                    live.update(_build_compact_status(active, completed_count, total))
+                    live.update(_build_live_table(active, completed_count, total))
                     continue
 
                 # Pre-check 2: same content hash already ingested
                 active[src] = ("Hashing", 0, "")
-                live.update(_build_compact_status(active, completed_count, total))
+                live.update(_build_live_table(active, completed_count, total))
                 content_hash = engine.compute_file_hash(result.markdown.encode())
                 already, existing_chunks = engine.is_already_ingested(src, content_hash)
                 if already:
                     status_store.mark_skipped(src, reason="dedup")
                     active[src] = ("Skipped", existing_chunks, "")
                     completed_count += 1
-                    live.update(_build_compact_status(active, completed_count, total))
+                    live.update(_build_live_table(active, completed_count, total))
                     continue
 
                 active[src] = ("Converting", 0, "")
-                live.update(_build_compact_status(active, completed_count, total))
+                live.update(_build_live_table(active, completed_count, total))
                 chunks = engine.ingest_text(
                     result.markdown,
                     source_identifier=src,
@@ -231,13 +229,13 @@ def ingest(
                 status_store.mark_done(src, chunks=chunks)
                 active[src] = ("Done", chunks, "")
                 completed_count += 1
-                live.update(_build_compact_status(active, completed_count, total))
+                live.update(_build_live_table(active, completed_count, total))
             except Exception as exc:
                 errors.append(f"{file_path}: {exc}")
                 status_store.mark_failed(src, str(exc), exc=exc)
                 active[src] = ("Error", 0, str(exc))
                 completed_count += 1
-                live.update(_build_compact_status(active, completed_count, total))
+                live.update(_build_live_table(active, completed_count, total))
 
     table = Table(title="Ingest Complete", show_header=False, title_style="bold")
     table.add_column("Metric", style="bold")
@@ -291,15 +289,15 @@ def sync(
 
         # Refresh the live display on every progress event. Without this the
         # Live view renders a static string and shows nothing during sync.
-        live.update(_build_compact_status(active, completed_count, total_files))
+        live.update(_build_live_table(active, completed_count, total_files))
 
-    with Live(_build_compact_status(active, 0, 0), console=console, refresh_per_second=8) as live:
+    with Live(_build_live_table(active, 0, 0), console=console, refresh_per_second=8) as live:
 
         async def _run() -> SyncStats:
             return await rag_sync(yaml_config, source_name=source_name, dry_run=dry_run, progress_cb=_on_progress)  # type: ignore[return-value]
 
         stats = asyncio.run(_run())
-        live.update(_build_compact_status(active, completed_count, total_files))
+        live.update(_build_live_table(active, completed_count, total_files))
 
     prefix = "would " if dry_run else ""
     table = Table(title="Sync Complete", show_header=False, title_style="bold")
