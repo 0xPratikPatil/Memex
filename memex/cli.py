@@ -27,6 +27,7 @@ _STAGE_STYLE: dict[str, tuple[str, str, str]] = {
     "Hashing": ("#", "blue", "Hashing"),
     "Parsing": ("p", "cyan", "Parsing"),
     "Converting": ("⚙ ", "cyan", "Converting"),
+    "Chunking": ("⚙ ", "cyan", "Chunking"),
     "Context": ("ctx", "blue", "Context"),
     "Metadata": ("meta", "magenta", "Metadata"),
     "Embedding": ("emb", "yellow", "Embedding"),
@@ -37,7 +38,7 @@ _STAGE_STYLE: dict[str, tuple[str, str, str]] = {
     "Error": ("✗", "red", "Error"),
 }
 
-_MAX_VISIBLE_ROWS = 4
+_MAX_VISIBLE_ROWS = 6
 
 
 def _stage_label(stage: str, error: str = "") -> str:
@@ -141,7 +142,6 @@ def ingest(
         raise typer.Exit(code=1)
 
     engine = RAGEngine()
-    engine._get_qdrant()
 
     total = len(files)
     ingested = 0
@@ -150,51 +150,71 @@ def ingest(
 
     from memex.engine.ingestion.status import FileStatusStore
 
-    engine._get_qdrant()
     status_store = FileStatusStore(engine._get_qdrant())
 
-    with Progress(*_progress_columns(), console=console) as progress:
-        task = progress.add_task("Ingesting...", total=total)
+    active: OrderedDict[str, tuple[str, int, str]] = OrderedDict()
+    completed_count = 0
 
+    def _on_progress(p: FileProgress) -> None:
+        nonlocal completed_count
+        if p.total > 0:
+            completed_count = p.current
+
+        if p.stage in ("Done", "Error", "Skipped"):
+            if p.stage == "Error":
+                active[p.path] = ("Error", 0, p.error)
+            else:
+                active[p.path] = (p.stage, p.chunks, "")
+        else:
+            existing = active.get(p.path)
+            chunks = existing[1] if existing else 0
+            active[p.path] = (p.stage, chunks, "")
+
+        live.update(_build_compact_status(active, completed_count, total))
+
+    with Live(_build_compact_status(active, 0, total), console=console, refresh_per_second=8) as live:
         for file_path in files:
             src = str(file_path)
             status_store.mark_pending(src, source_name=source_name or target.name)
-            progress.update(task, description=f"[bold blue]{file_path.name}[/bold blue] — Checking")
+            active[src] = ("Checking", 0, "")
+            live.update(_build_compact_status(active, completed_count, total))
+
             try:
                 # Pre-check 1: local file unchanged since last ingest (mtime+size)
                 can_skip, chunk_count = engine.check_unmodified_local(src)
                 if can_skip:
                     status_store.mark_skipped(src, reason="unchanged")
-                    progress.update(
-                        task,
-                        advance=1,
-                        description=f"[cyan]{file_path.name}[/cyan] — Already ingested ({chunk_count} chunks)",
-                    )
+                    active[src] = ("Skipped", chunk_count, "")
+                    completed_count += 1
+                    live.update(_build_compact_status(active, completed_count, total))
                     continue
 
-                progress.update(task, description=f"[bold blue]{file_path.name}[/bold blue] — Parsing")
+                active[src] = ("Parsing", 0, "")
+                live.update(_build_compact_status(active, completed_count, total))
                 result = parse_file(src)
                 if not result.ok:
                     err = f"{file_path}: {result.status} — {result.errors}"
                     errors.append(err)
                     status_store.mark_failed(src, str(result.errors))
-                    progress.update(task, advance=1, description=f"[red]{file_path.name} — Error[/red]")
+                    active[src] = ("Error", 0, str(result.errors))
+                    completed_count += 1
+                    live.update(_build_compact_status(active, completed_count, total))
                     continue
 
                 # Pre-check 2: same content hash already ingested
-                progress.update(task, description=f"[bold blue]{file_path.name}[/bold blue] — Checking hash")
+                active[src] = ("Hashing", 0, "")
+                live.update(_build_compact_status(active, completed_count, total))
                 content_hash = engine.compute_file_hash(result.markdown.encode())
                 already, existing_chunks = engine.is_already_ingested(src, content_hash)
                 if already:
                     status_store.mark_skipped(src, reason="dedup")
-                    progress.update(
-                        task,
-                        advance=1,
-                        description=f"[cyan]{file_path.name}[/cyan] — Already ingested ({existing_chunks} chunks)",
-                    )
+                    active[src] = ("Skipped", existing_chunks, "")
+                    completed_count += 1
+                    live.update(_build_compact_status(active, completed_count, total))
                     continue
 
-                progress.update(task, description=f"[bold blue]{file_path.name}[/bold blue] — Ingesting")
+                active[src] = ("Converting", 0, "")
+                live.update(_build_compact_status(active, completed_count, total))
                 chunks = engine.ingest_text(
                     result.markdown,
                     source_identifier=src,
@@ -204,16 +224,20 @@ def ingest(
                         "source_name": source_name or target.name,
                     },
                     content_hash=content_hash,
+                    progress_cb=_on_progress,
                 )
                 ingested += 1
                 total_chunks += chunks
                 status_store.mark_done(src, chunks=chunks)
-                desc = f"[green]{file_path.name}[/green] — Done ({chunks} chunks)"
-                progress.update(task, advance=1, description=desc)
+                active[src] = ("Done", chunks, "")
+                completed_count += 1
+                live.update(_build_compact_status(active, completed_count, total))
             except Exception as exc:
                 errors.append(f"{file_path}: {exc}")
                 status_store.mark_failed(src, str(exc), exc=exc)
-                progress.update(task, advance=1, description=f"[red]{file_path.name} — Error[/red]")
+                active[src] = ("Error", 0, str(exc))
+                completed_count += 1
+                live.update(_build_compact_status(active, completed_count, total))
 
     table = Table(title="Ingest Complete", show_header=False, title_style="bold")
     table.add_column("Metric", style="bold")

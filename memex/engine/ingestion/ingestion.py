@@ -1,7 +1,7 @@
 """IngestionOrchestrator — concurrent parsing, checkpointing, and timeout management.
 
 Coordinates multi-file ingestion with:
-- Concurrent Docling parsing via asyncio + thread pool
+- Concurrent document conversion via asyncio + thread pool (marker/markitdown/docling)
 - Per-document timeouts with graceful skip
 - Batch checkpointing for crash-resume
 - Pre-checks to skip unchanged files
@@ -97,7 +97,7 @@ class IngestionOrchestrator:
             return f"Failed: {exc}"
 
         if not result.ok:  # type: ignore[union-attr]
-            err = f"Docling status '{result.status}', errors: {result.errors}"  # type: ignore[union-attr]
+            err = f"{config.CONVERTER_ENGINE.title()} status '{result.status}', errors: {result.errors}"  # type: ignore[union-attr]
             status_store.mark_failed(item, err, stage=PipelineStage.CONVERTING)
             return f"Failed: {err}"
 
@@ -273,8 +273,12 @@ class IngestionOrchestrator:
         if not isinstance(result, ConversionResult) or not result.ok:
             err = getattr(result, "errors", []) if hasattr(result, "errors") else []
             status = getattr(result, "status", "unknown")
-            status_store.mark_failed(item, f"Docling status '{status}', errors: {err}", stage=PipelineStage.CONVERTING)
-            return f"Failed: Docling status '{status}', errors: {err}"
+            status_store.mark_failed(
+                item,
+                f"{config.CONVERTER_ENGINE.title()} status '{status}', errors: {err}",
+                stage=PipelineStage.CONVERTING,
+            )
+            return f"Failed: {config.CONVERTER_ENGINE.title()} status '{status}', errors: {err}"
 
         content_hash = compute_content_hash(result.markdown.encode())
 

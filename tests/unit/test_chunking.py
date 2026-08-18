@@ -13,7 +13,6 @@ from memex.engine.ingestion.splitter import (
     _parse_chunk_response,
     chunk_local_file,
     chunk_url,
-    is_hybrid_chunker_available,
 )
 
 
@@ -191,34 +190,6 @@ class TestChunkLocalFile:
     def test_raises_file_not_found(self) -> None:
         with pytest.raises(FileNotFoundError, match="File not found"):
             chunk_local_file("/nonexistent/file.txt")
-
-
-class TestIsHybridChunkerAvailable:
-    def test_returns_true_when_healthy(self) -> None:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-
-        with (
-            patch("memex.engine.ingestion.splitter.httpx.Client") as mock_client_cls,
-            patch("memex.engine.ingestion.splitter.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
-        ):
-            mock_client = MagicMock()
-            mock_client.get.return_value = mock_response
-            mock_client_cls.return_value = mock_client
-
-            result = is_hybrid_chunker_available()
-            assert result is True
-            mock_client.get.assert_called_once_with("http://localhost:5001/health", timeout=5.0)
-
-    def test_returns_false_on_error(self) -> None:
-        with (
-            patch("memex.engine.ingestion.splitter._chunking_client", None),
-            patch("memex.engine.ingestion.splitter.config.DOCLING_URL", "http://localhost:5001/v1/convert/source"),
-            patch("memex.engine.ingestion.splitter.config.DOCLING_TIMEOUT", 5.0),
-            patch("memex.engine.ingestion.splitter.httpx.Client", side_effect=Exception("connection failed")),
-        ):
-            result = is_hybrid_chunker_available()
-            assert result is False
 
 
 class TestTransportRetry:

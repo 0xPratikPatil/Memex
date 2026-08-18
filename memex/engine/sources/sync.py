@@ -1,7 +1,7 @@
 """Sync engine — reconcile sources against the vector collection.
 
 Parallel processing with bounded concurrency, progress callbacks through
-the entire pipeline, and single-Docling-call hybrid chunking.
+the entire pipeline, and multi-engine conversion (marker/markitdown/docling).
 """
 
 from __future__ import annotations
@@ -152,7 +152,7 @@ def _ingest_file(
     """Convert and ingest a single file. Returns chunk count.
 
     Stages surfaced via progress_cb:
-      - "Converting" (70%) — Docling conversion / chunking
+      - "Converting" (70%) — conversion / chunking
       - "Context" (73%) — Context enrichment per chunk
       - "Metadata" (74%) — Entity/topic extraction
       - "Embedding" (75-89%) — Dense + sparse embedding generation
@@ -185,7 +185,7 @@ def _ingest_file(
     if strategy == "hybrid":
         from memex.engine.ingestion.splitter import chunk_file
 
-        _emit_pipeline("Converting", "Converting + chunking (Docling)...", 70)
+        _emit_pipeline("Converting", f"Converting + chunking ({config.CONVERTER_ENGINE.title()})...", 70)
         try:
             result = chunk_file(file_path, include_doc=True)
             markdown = result.get("markdown", "")
@@ -234,7 +234,7 @@ def _ingest_file(
     else:
         from memex.engine.ingestion.loader import parse_file
 
-        _emit_pipeline("Converting", "Converting (Docling)...", 70)
+        _emit_pipeline("Converting", f"Converting ({config.CONVERTER_ENGINE.title()})...", 70)
         parse_result = parse_file(file_path)
         if not parse_result.ok:
             raise IngestionError(
@@ -263,30 +263,6 @@ def _ingest_file(
     except OSError:
         log.warning("Could not hash raw file %s for reconciliation", file_path)
 
-    def _pipeline_progress(msg: str, pct: int) -> None:
-        """Forward pipeline progress to sync-level callback."""
-        if progress_cb is not None:
-            # Map pipeline pct to stage name for display
-            if pct <= 72:
-                stage = "Converting"
-            elif pct <= 74:
-                stage = "Context"
-            elif pct <= 76:
-                stage = "Metadata"
-            elif pct <= 89:
-                stage = "Embedding"
-            else:
-                stage = "Storing"
-            progress_cb(
-                FileProgress(
-                    path=source_identifier,
-                    total=total_files,
-                    current=file_idx,
-                    stage=stage,
-                    chunks=0,
-                )
-            )
-
     if chunks is not None:
         count = engine.ingest_prechunked(
             chunks=chunks,
@@ -299,7 +275,7 @@ def _ingest_file(
                 "source_name": source_name,
             },
             content_hash=content_hash,
-            progress_cb=_pipeline_progress,
+            progress_cb=progress_cb,
         )
     else:
         count = engine.ingest_text(
@@ -312,7 +288,7 @@ def _ingest_file(
                 "source_name": source_name,
             },
             content_hash=content_hash,
-            progress_cb=_pipeline_progress,
+            progress_cb=progress_cb,
         )
     return count
 

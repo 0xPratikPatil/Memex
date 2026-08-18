@@ -5,7 +5,7 @@ and lazy-init for heavy models (sparse embeddings, reranker).
 
 Key improvements over v1:
 - Async I/O throughout
-- Docling HybridChunker for structure-aware tokenizer-aligned chunking
+- Markdown-aware chunking for MarkItDown, structure-aware for Docling
 - Legacy recursive/fixed chunking as fallback
 - Reciprocal Rank Fusion (RRF) for dense+sparse combination
 - Batch embedding via Ollama API
@@ -44,7 +44,7 @@ from qdrant_client.models import (
 
 from memex.engine.core import config
 from memex.engine.core.errors import ConfigError
-from memex.engine.core.progress import PipelineStage
+from memex.engine.core.progress import FileProgress, PipelineStage
 from memex.engine.ingestion.context import ContextGenerator, strip_context_prefix
 from memex.engine.ingestion.embedding import EmbeddingService
 from memex.engine.llm.base import EmbedProvider, LLMProvider
@@ -591,7 +591,7 @@ class RAGEngine:
         source_identifier: str,
         metadata: dict[str, Any] | None = None,
         content_hash: str = "",
-        progress_cb: Callable[[str, int], None] | None = None,
+        progress_cb: Callable[[FileProgress], None] | None = None,
         document_text: str = "",
     ) -> int:
         """Common ingestion logic for chunks. Returns number of chunks ingested.
@@ -601,7 +601,15 @@ class RAGEngine:
 
         def _progress(msg: str, pct: int) -> None:
             if progress_cb:
-                progress_cb(msg, pct)
+                progress_cb(
+                    FileProgress(
+                        path=source_identifier,
+                        total=0,
+                        current=pct,
+                        stage=msg,
+                        chunks=0,
+                    )
+                )
             logger.info("ingest [%d%%] %s", pct, msg)
             self._record_stage(source_identifier, pct)
 
@@ -768,18 +776,25 @@ class RAGEngine:
         source_identifier: str,
         metadata: dict[str, Any] | None = None,
         content_hash: str = "",
-        progress_cb: Callable[[str, int], None] | None = None,
+        progress_cb: Callable[[FileProgress], None] | None = None,
     ) -> int:
         """Chunk, embed, and upsert into Qdrant. Returns number of chunks.
 
-        When ``CHUNK_STRATEGY`` is ``hybrid``, uses the Docling Serve chunking
-        API for structure-aware chunking. Falls back to legacy recursive/fixed
-        chunking when the API is unavailable.
+        Uses markdown-aware chunking for MarkItDown output, structure-aware
+        chunking for Docling, and legacy recursive/fixed as fallback.
         """
 
         def _progress(msg: str, pct: int) -> None:
             if progress_cb:
-                progress_cb(msg, pct)
+                progress_cb(
+                    FileProgress(
+                        path=source_identifier,
+                        total=0,
+                        current=pct,
+                        stage=msg,
+                        chunks=0,
+                    )
+                )
             logger.info("ingest [%d%%] %s", pct, msg)
 
         _progress("Chunking document...", 70)
@@ -803,7 +818,7 @@ class RAGEngine:
         source_identifier: str,
         metadata: dict[str, Any] | None = None,
         content_hash: str = "",
-        progress_cb: Callable[[str, int], None] | None = None,
+        progress_cb: Callable[[FileProgress], None] | None = None,
     ) -> int:
         """Ingest pre-chunked data, skipping the create_chunks() call.
 
@@ -1281,14 +1296,10 @@ class RAGEngine:
                 converter_available = is_marker_available()
                 active_chunker = config.CHUNK_STRATEGY.title()
             else:
-                from memex.engine.ingestion.splitter import is_hybrid_chunker_available
-
-                hybrid_available = is_hybrid_chunker_available()
-                converter_available = hybrid_available
+                hybrid_available = True
+                converter_available = True
                 active_chunker = (
-                    "Docling HybridChunker"
-                    if (config.CHUNK_STRATEGY == "hybrid" and hybrid_available)
-                    else config.CHUNK_STRATEGY.title()
+                    "Markdown Aware" if (config.CHUNK_STRATEGY == "hybrid") else config.CHUNK_STRATEGY.title()
                 )
         except Exception:
             hybrid_available = False

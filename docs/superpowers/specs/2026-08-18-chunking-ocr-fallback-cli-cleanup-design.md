@@ -50,6 +50,7 @@ Add quality gate after MarkItDown conversion in `parse_local_file()`:
 if config.OCR_FALLBACK and _is_poor_quality(result, file_bytes):
     try:
         from memex.engine.ingestion.ocr_client import convert_with_ocr
+
         ocr_result = convert_with_ocr(file_bytes, filename)
         if ocr_result.ok and len(ocr_result.markdown) > len(result.markdown or ""):
             result = _ocr_to_conversion(ocr_result)

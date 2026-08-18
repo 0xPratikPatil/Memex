@@ -208,6 +208,32 @@ def _markitdown_result_to_conversion(result, url_or_path: str) -> ConversionResu
     )
 
 
+def _is_poor_quality(result: ConversionResult, file_bytes: bytes) -> bool:
+    """Detect poor conversion quality (e.g., scanned PDF via MarkItDown).
+
+    Returns True if the output suggests the document was scanned and
+    would benefit from OCR fallback.
+    """
+    text = (result.markdown or "").strip()
+    if not text:
+        return True
+    # Short text for a large file suggests scanned content
+    if len(text) < 100 and len(file_bytes) > 10_000:
+        return True
+    # Very low text-to-bytes ratio
+    return len(text) / max(len(file_bytes), 1) < 0.001
+
+
+def _ocr_to_conversion(ocr_result) -> ConversionResult:
+    """Wrap OcrResult in ConversionResult."""
+    return ConversionResult(
+        markdown=ocr_result.markdown or "",
+        status="success" if ocr_result.ok else "error",
+        processing_time=ocr_result.processing_time,
+        errors=[] if ocr_result.ok else ["OCR fallback failed"],
+    )
+
+
 def parse_url(url: str) -> ConversionResult:
     """Fetch a URL via the configured converter and return structured result."""
     from memex.engine.utils.cache import cache_parse_result, get_cached_parse_result
@@ -414,6 +440,18 @@ def parse_local_file(file_path: str) -> ConversionResult:
                 "errors": converted.errors,
             },
         )
+
+        # OCR fallback: if MarkItDown produced poor quality output, retry via OCR
+        if config.OCR_FALLBACK and _is_poor_quality(converted, file_bytes):
+            try:
+                from memex.engine.ingestion.ocr_client import convert_with_ocr
+
+                ocr_result = convert_with_ocr(file_bytes, filename)
+                if ocr_result.ok and len(ocr_result.markdown or "") > len(converted.markdown or ""):
+                    converted = _ocr_to_conversion(ocr_result)
+            except Exception:
+                pass  # Keep MarkItDown result
+
         return converted
 
     b64 = base64.b64encode(file_bytes).decode("ascii")

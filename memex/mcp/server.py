@@ -20,6 +20,7 @@ from mcp.types import ToolAnnotations
 
 from memex.engine.core import config
 from memex.engine.core.logging_setup import setup_logging
+from memex.engine.core.progress import FileProgress
 from memex.mcp.schemas import (
     AnswerOutput,
     CitationInfo,
@@ -266,8 +267,8 @@ async def rag_ingest_file(input: IngestFileInput, ctx: Context) -> str:
 
         engine = _get_engine()
 
-        def _progress(msg: str, pct: int) -> None:
-            logger.info("ingest [%d%%] %s", pct, msg)
+        def _progress(fp: FileProgress) -> None:
+            logger.info("ingest [%s] %s", fp.stage, fp.path)
 
         # Phase 1+2: Pre-check — skip if file unchanged
         await ctx.report_progress(progress=2, total=100, message="Checking if already ingested...")
@@ -318,7 +319,7 @@ async def rag_ingest_file(input: IngestFileInput, ctx: Context) -> str:
         return (
             f"Successfully ingested '{file_path_or_url}'. "
             f"Created {count} chunks using {chunker_name}. "
-            f"(Docling: {result.processing_time:.1f}s, "
+            f"({config.CONVERTER_ENGINE.title()}: {result.processing_time:.1f}s, "
             f"{len(result.markdown)} chars, hash: {content_hash[:12]}...)"
         )
     except Exception as exc:
@@ -360,14 +361,17 @@ async def rag_ingest_url(input: IngestUrlInput, ctx: Context) -> str:
 
         engine = _get_engine()
 
-        def _progress(msg: str, pct: int) -> None:
-            logger.info("ingest [%d%%] %s", pct, msg)
+        def _progress(fp: FileProgress) -> None:
+            logger.info("ingest [%s] %s", fp.stage, fp.path)
 
         await ctx.report_progress(progress=5, total=100, message="Fetching URL...")
         result = parse_url(url)
 
         if not result.ok:
-            return f"Error: Docling conversion returned status '{result.status}' with errors: {result.errors}"
+            return (
+                f"Error: {config.CONVERTER_ENGINE.title()} conversion returned status "
+                f"'{result.status}' with errors: {result.errors}"
+            )
 
         await ctx.report_progress(progress=10, total=100, message="Checking if already ingested...")
         content_hash = engine.compute_file_hash(result.markdown.encode())
@@ -996,7 +1000,6 @@ Error Handling:
 )
 async def rag_sync(input: SyncInput, ctx: Context) -> str:
     try:
-        from memex.engine.core.progress import FileProgress
         from memex.engine.sources.sync import sync
 
         def _report(progress: FileProgress) -> None:
