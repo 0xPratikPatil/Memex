@@ -156,8 +156,7 @@ def convert_markdown(file_bytes: bytes, filename: str) -> MarkerResult:
             raise
         if not config.OCR_FALLBACK_ENABLED:
             raise
-        logger.warning("Marker OOM, falling back to OCR service",
-                       extra={"source": filename, "stage": "Converting"})
+        logger.warning("Marker OOM, falling back to OCR service", extra={"source": filename, "stage": "Converting"})
         return _ocr_fallback(file_bytes, filename)
 ```
 

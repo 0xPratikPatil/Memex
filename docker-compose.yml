@@ -249,6 +249,44 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  ocr:
+    build:
+      context: .
+      dockerfile: ocr.Dockerfile
+    container_name: memex-ocr
+    init: true
+    ports:
+      - "127.0.0.1:${OCR_PORT:-5004}:5004"
+    environment:
+      - OCR_MODEL=${OCR_MODEL:-pp-ocrv6-small}
+    tmpfs:
+      - /tmp:exec,size=64M
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:5004/health').raise_for_status()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    restart: unless-stopped
+    stop_grace_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     labels:
       - "com.memex.service=markitdown"
       - "com.memex.description=Lightweight document conversion (CPU-only, multi-format)"

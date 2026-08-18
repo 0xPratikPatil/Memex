@@ -85,7 +85,29 @@ CHAT=$(_read_config_model "llm.model" "CHAT_MODEL" "qwen2.5:1.5b")
 RERANK=$(_read_config_model "reranker.model" "RERANK_MODEL" "Qwen/Qwen3-Reranker-0.6B")
 SPARSE=$(_read_config_model "sparse.model" "SPARSE_MODEL" "Qdrant/bm25")
 
-BOOT_SERVICES=(qdrant ollama marker ml-services)
+# ── Dynamic service list (reads converter.engine from config.yaml) ──────────
+CONVERTER=$(_read_config_model "converter.engine" "CONVERTER_ENGINE" "marker")
+
+# Base services — always needed
+BOOT_SERVICES=(qdrant ollama redis)
+
+# Converter-specific services
+case "$CONVERTER" in
+    marker)
+        BOOT_SERVICES+=(marker ml-services ocr)
+        ;;
+    markitdown)
+        BOOT_SERVICES+=(markitdown)
+        ;;
+    docling)
+        # Legacy: still needs marker for conversion
+        BOOT_SERVICES+=(marker ml-services)
+        ;;
+    *)
+        info "unknown converter engine '$CONVERTER' — starting all services"
+        BOOT_SERVICES+=(marker ml-services markitdown)
+        ;;
+esac
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 ok()   { echo "  ✓ $1"; }
@@ -483,10 +505,12 @@ echo "╔═══════════════════════�
 echo "║            Memex Bootstrap              ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
-echo "  embed   ${EMBED}"
-echo "  chat    ${CHAT}"
-echo "  rerank  ${RERANK}"
-echo "  sparse  ${SPARSE}"
+echo "  embed      ${EMBED}"
+echo "  chat       ${CHAT}"
+echo "  rerank     ${RERANK}"
+echo "  sparse     ${SPARSE}"
+echo "  converter  ${CONVERTER}"
+echo "  services   ${BOOT_SERVICES[*]}"
 echo ""
 
 # ── 0. System prerequisites ──────────────────────────────────────────────────
@@ -536,7 +560,7 @@ ok "running"
 
 # ── 5. Start services ───────────────────────────────────────────────────────
 echo "[5/9] Services"
-docker compose up -d --build --remove-orphans
+docker compose up -d --build --remove-orphans "${BOOT_SERVICES[@]}"
 ok "started"
 
 # ── 6. Health checks ────────────────────────────────────────────────────────
@@ -548,6 +572,17 @@ check_http() {
     ok "$name"
 }
 
+# Health check URLs per service
+declare -A HEALTH_URLS=(
+    [qdrant]="http://localhost:6333/"
+    [ollama]="http://localhost:11434/api/tags"
+    [redis]="http://localhost:6379"
+    [marker]="http://localhost:5001/health"
+    [ml-services]="http://localhost:5002/health"
+    [markitdown]="http://localhost:5003/health"
+    [ocr]="http://localhost:5004/health"
+)
+
 for svc in "${BOOT_SERVICES[@]}"; do
     if ! docker compose ps -q "$svc" &>/dev/null; then
         info "${svc}: not in compose, skipping"
@@ -556,12 +591,13 @@ for svc in "${BOOT_SERVICES[@]}"; do
     while ! docker compose ps "$svc" 2>/dev/null | tail -n+2 | grep -q "healthy"; do
         sleep 2
     done
+    url="${HEALTH_URLS[$svc]:-}"
+    if [ -n "$url" ]; then
+        check_http "$svc" "$url"
+    else
+        ok "$svc (no health URL configured)"
+    fi
 done
-
-check_http "qdrant"      "http://localhost:6333/"
-check_http "ollama"      "http://localhost:11434/api/tags"
-check_http "marker"      "http://localhost:5001/health"
-check_http "ml-services" "http://localhost:5002/health"
 
 # ── 7. Pull models ──────────────────────────────────────────────────────────
 echo "[7/9] Models"
@@ -606,16 +642,30 @@ fi
 
 # ── 9. Verify features ─────────────────────────────────────────────────────
 echo "[9/9] Features"
-# Marker converter availability
-if uv run python -c "
+# Converter availability
+case "$CONVERTER" in
+    marker)
+        if uv run python -c "
 from memex.engine.ingestion.marker_client import is_marker_available
 ok = is_marker_available()
 assert ok, 'Marker not available — check marker service'
 " 2>&1; then
-    echo "  ✓ marker converter"
-else
-    echo "  ✗ marker converter (non-fatal) — run: docker compose up -d marker"
-fi
+            echo "  ✓ marker converter"
+        else
+            echo "  ✗ marker converter (non-fatal) — run: docker compose up -d marker"
+        fi
+        ;;
+    markitdown)
+        if curl -sf http://localhost:5003/health >/dev/null 2>&1; then
+            echo "  ✓ markitdown converter"
+        else
+            echo "  ✗ markitdown converter (non-fatal) — run: docker compose up -d markitdown"
+        fi
+        ;;
+    *)
+        echo "  → converter '$CONVERTER' — skipping feature check"
+        ;;
+esac
 
 # ── Done ────────────────────────────────────────────────────────────────────
 echo ""

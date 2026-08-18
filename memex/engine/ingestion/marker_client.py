@@ -11,6 +11,9 @@ The marker server holds NO models — each conversion runs in an isolated
 subprocess with a hard timeout. A crash/OOM kills only that job; the server
 survives and the job can be retried. No more "server disconnected" storms.
 
+OOM fallback: When Marker fails with CUDA OOM (common for scanned PDFs on
+8GB GPUs), automatically retry via the lightweight OCR service (PP-OCRv6 small).
+
 Error model (typed, from memex.engine.core.errors):
     ConversionTimeoutError   — job exceeded the server-side timeout
     ConversionError          — marker reported success=false
@@ -43,6 +46,7 @@ from memex.engine.core.errors import (
     CorruptedDocumentError,
     ServiceUnavailableError,
 )
+from memex.engine.ingestion.ocr_client import OcrResult
 from memex.engine.utils.gpu_lock import gpu_lock
 
 logger = logging.getLogger("marker-client")
@@ -225,6 +229,38 @@ def _poll(job_id: str, filename: str) -> dict[str, Any]:
     )
 
 
+# ── OOM detection helpers ────────────────────────────────────────────────────
+
+_OOM_PATTERNS = (
+    "cuda",
+    "out of memory",
+    "oom",
+    "insufficient memory",
+    "allocate",
+    "memory allocation failed",
+    "runtimeerror",
+    "torch.cuda",
+)
+
+
+def _is_oom_error(error_msg: str) -> bool:
+    """Detect CUDA OOM or Surya OOM in marker error messages."""
+    lower = error_msg.lower()
+    return any(pat in lower for pat in _OOM_PATTERNS)
+
+
+def _ocr_fallback(file_bytes: bytes, filename: str) -> OcrResult:
+    """Retry conversion via the lightweight OCR service."""
+    from memex.engine.ingestion.ocr_client import convert_with_ocr
+
+    logger.info(
+        "Marker OOM — falling back to OCR service for %s",
+        filename,
+        extra={"stage": "OcrFallback", "source": filename},
+    )
+    return convert_with_ocr(file_bytes, filename)
+
+
 # ── Public API ───────────────────────────────────────────────────────────────
 
 
@@ -250,6 +286,26 @@ def convert_markdown(file_bytes: bytes, filename: str) -> MarkerResult:
 
     if not body.get("success", False):
         err = body.get("error", "unknown conversion error")
+
+        # OOM fallback: Marker OOM → retry via OCR service
+        if config.OCR_FALLBACK and _is_oom_error(err):
+            try:
+                ocr_result = _ocr_fallback(file_bytes, filename)
+                if ocr_result.ok and ocr_result.markdown.strip():
+                    return MarkerResult(
+                        markdown=ocr_result.markdown,
+                        metadata={"source": "ocr_fallback", "ocr_model": ocr_result.model},
+                        status="success",
+                        processing_time=ocr_result.processing_time,
+                    )
+            except Exception as ocr_exc:
+                logger.warning(
+                    "OCR fallback also failed for %s: %s",
+                    filename,
+                    ocr_exc,
+                    extra={"stage": "OcrFallback", "source": filename},
+                )
+
         raise ConversionError(
             filename,
             err,
@@ -297,4 +353,4 @@ def close() -> None:
         _client = None
 
 
-__all__ = ["MarkerResult", "close", "convert_markdown", "is_marker_available"]
+__all__ = ["MarkerResult", "OcrResult", "close", "convert_markdown", "is_marker_available"]

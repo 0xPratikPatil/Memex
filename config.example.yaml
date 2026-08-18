@@ -38,6 +38,11 @@ converter:
   # ── MarkItDown (CPU-only alternative — PDF, DOCX, PPTX, XLSX, HTML, EPUB, etc.) ──
   markitdown_url: "http://localhost:5003"
   markitdown_timeout: 30.0                # seconds per conversion
+  # ── OCR fallback (PP-OCRv6 small for scanned PDFs that OOM on Marker) ─────
+  ocr_fallback: true                       # auto-retry via OCR when Marker OOMs
+  ocr_url: "http://localhost:5004"
+  ocr_model: pp-ocrv6-small                # pp-ocrv6-small (default) | lightonocr-2-1b
+  ocr_timeout: 120.0                       # seconds per conversion
   # ── Legacy Docling settings (only used when engine: docling) ──────────
   docling_url: "http://localhost:5001/v1/convert/source"
   docling_api_key: ${DOCLING_API_KEY}

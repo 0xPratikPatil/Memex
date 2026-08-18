@@ -95,6 +95,12 @@ CONVERTER_MAX_CONCURRENT: int = _cfg_int("converter.max_concurrent", 2)
 MARKITDOWN_URL: str = _cfg_str("converter.markitdown_url", "http://localhost:5003")
 MARKITDOWN_TIMEOUT: float = _cfg_float("converter.markitdown_timeout", 30.0)
 
+# ── OCR fallback (PP-OCRv6 small for scanned PDFs that OOM on Marker) ───────
+OCR_FALLBACK: bool = _cfg_bool("converter.ocr_fallback", True)
+OCR_URL: str = _cfg_str("converter.ocr_url", "http://localhost:5004")
+OCR_MODEL: str = _cfg_str("converter.ocr_model", "pp-ocrv6-small")
+OCR_TIMEOUT: float = _cfg_float("converter.ocr_timeout", 120.0)
+
 # ── API Keys ──────────────────────────────────────────────────────────────────
 DOCLING_API_KEY: str = _cfg_str("converter.docling_api_key", "")
 

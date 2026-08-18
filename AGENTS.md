@@ -80,6 +80,7 @@ All features are controlled via `config.yaml`. The master toggle for each group 
 
 ### Ingestion
 - **Marker conversion** (`converter.engine=marker`): marker-pdf + Surya OCR in Docker — faster (2.9-7.4 pg/s) and higher quality (76 vs 50 olmocr-bench) than Docling. Recursive chunking is the default.
+- **OCR fallback** (`converter.ocr_fallback`=true): When Marker fails with CUDA OOM (common for scanned PDFs on 8GB GPUs), automatically retry via lightweight OCR service (PP-OCRv6 small, ~500MB VRAM). Standalone Docker container on port 5004.
 - **MarkItDown conversion** (`converter.engine=markitdown`): Microsoft's MarkItDown in Docker — CPU-only, no GPU contention. Handles DOCX, PPTX, XLSX, HTML, EPUB, images (via OCR), audio (via Whisper), CSV, JSON, XML, ZIP. Good for mixed-format corpora where GPU is needed for other tasks.
 - **Multi-format Embedding**: Table chunks → HTML, code chunks → fenced markdown, images → `[Image: caption]`.
 - **Legacy Docling path** (`converter.engine=docling`): kept for rollback only.
@@ -148,6 +149,10 @@ All configuration lives in `config.yaml`. Copy `config.example.yaml` to `config.
 | `converter.marker_timeout` | `300.0` | Conversion timeout (seconds) |
 | `converter.markitdown_url` | `http://localhost:5003` | MarkItDown service |
 | `converter.markitdown_timeout` | `30.0` | Conversion timeout (seconds) |
+| `converter.ocr_fallback` | `true` | Auto-retry via OCR when Marker OOMs |
+| `converter.ocr_url` | `http://localhost:5004` | OCR service |
+| `converter.ocr_model` | `pp-ocrv6-small` | pp-ocrv6-small / lightonocr-2-1b |
+| `converter.ocr_timeout` | `120.0` | Conversion timeout (seconds) |
 | `converter.docling_timeout` | `300.0` | Conversion timeout (seconds) |
 | `converter.docling_picture_classify` | `true` | Image classification |
 | `converter.docling_enrich_code` | `false` | Code extraction (needs serve-side model) |

@@ -8,7 +8,12 @@ import httpx
 import pytest
 
 from memex.engine.core.errors import ConversionError, CorruptedDocumentError
-from memex.engine.ingestion.marker_client import convert_markdown, is_marker_available
+from memex.engine.ingestion.marker_client import (
+    OcrResult,
+    _is_oom_error,
+    convert_markdown,
+    is_marker_available,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -215,3 +220,78 @@ class TestIsMarkerAvailable:
             patch("memex.engine.ingestion.marker_client.config.MARKER_URL", "http://localhost:5001"),
         ):
             assert is_marker_available() is False
+
+
+class TestIsOomError:
+    def test_detects_cuda_oom(self) -> None:
+        assert _is_oom_error("CUDA out of memory") is True
+        assert _is_oom_error("RuntimeError: CUDA OOM") is True
+        assert _is_oom_error("torch.cuda.OutOfMemoryError") is True
+        assert _is_oom_error("insufficient memory") is True
+        assert _is_oom_error("allocate failed") is True
+
+    def test_ignores_non_oom_errors(self) -> None:
+        assert _is_oom_error("file not found") is False
+        assert _is_oom_error("connection refused") is False
+        assert _is_oom_error("conversion failed") is False
+
+
+class TestOomFallback:
+    def test_oom_falls_back_to_ocr(self, _mock_gpu_lock: MagicMock) -> None:
+        """When Marker fails with OOM, fallback to OCR service."""
+        ocr_result = OcrResult(
+            markdown="# OCR extracted text",
+            status="success",
+            model="pp-ocrv6-small",
+            processing_time=2.0,
+        )
+
+        def fake_post(url, files, data):
+            return _FakeResponse({"job_id": "abc", "status": "pending"})
+
+        def fake_get(url):
+            if url.endswith("/result"):
+                return _FakeResponse({"success": False, "error": "CUDA out of memory"})
+            return _FakeResponse({"job_id": "abc", "status": "failed"})
+
+        fake_client = MagicMock()
+        fake_client.post.side_effect = fake_post
+        fake_client.get.side_effect = fake_get
+
+        with (
+            patch("memex.engine.ingestion.marker_client._get_client", return_value=fake_client),
+            patch("memex.engine.ingestion.marker_client.config.MARKER_MODE", "fast"),
+            patch("memex.engine.ingestion.marker_client.config.MARKER_FORCE_OCR", False),
+            patch("memex.engine.ingestion.marker_client.config.OCR_FALLBACK", True),
+            patch("memex.engine.ingestion.marker_client.config.OCR_URL", "http://localhost:5004"),
+            patch("memex.engine.ingestion.marker_client.config.OCR_TIMEOUT", 120.0),
+            patch("memex.engine.ingestion.marker_client._ocr_fallback", return_value=ocr_result),
+        ):
+            result = convert_markdown(b"scanned.pdf", "scanned.pdf")
+            assert result.ok
+            assert result.markdown == "# OCR extracted text"
+            assert result.metadata["source"] == "ocr_fallback"
+
+    def test_oom_without_fallback_raises_error(self, _mock_gpu_lock: MagicMock) -> None:
+        """When OCR fallback is disabled, OOM raises ConversionError."""
+
+        def fake_post(url, files, data):
+            return _FakeResponse({"job_id": "abc", "status": "pending"})
+
+        def fake_get(url):
+            if url.endswith("/result"):
+                return _FakeResponse({"success": False, "error": "CUDA out of memory"})
+            return _FakeResponse({"job_id": "abc", "status": "failed"})
+
+        fake_client = MagicMock()
+        fake_client.post.side_effect = fake_post
+        fake_client.get.side_effect = fake_get
+
+        with (
+            patch("memex.engine.ingestion.marker_client._get_client", return_value=fake_client),
+            patch("memex.engine.ingestion.marker_client.config.MARKER_MODE", "fast"),
+            patch("memex.engine.ingestion.marker_client.config.MARKER_FORCE_OCR", False),
+            patch("memex.engine.ingestion.marker_client.config.OCR_FALLBACK", False),
+            pytest.raises(ConversionError, match="CUDA out of memory"),
+        ):
+            convert_markdown(b"scanned.pdf", "scanned.pdf")
