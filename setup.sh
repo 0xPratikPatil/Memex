@@ -97,7 +97,7 @@ case "$CONVERTER" in
         BOOT_SERVICES+=(marker ml-services ocr)
         ;;
     markitdown)
-        BOOT_SERVICES+=(markitdown)
+        BOOT_SERVICES+=(markitdown ocr)
         ;;
     docling)
         # Legacy: still needs marker for conversion
@@ -105,7 +105,7 @@ case "$CONVERTER" in
         ;;
     *)
         info "unknown converter engine '$CONVERTER' — starting all services"
-        BOOT_SERVICES+=(marker ml-services markitdown)
+        BOOT_SERVICES+=(marker ml-services markitdown ocr)
         ;;
 esac
 
@@ -567,8 +567,16 @@ ok "started"
 echo "[6/9] Health checks"
 
 check_http() {
-    local name="$1" url="$2"
-    while ! curl -sf --max-time 3 "$url" >/dev/null 2>&1; do sleep 2; done
+    local name="$1" url="$2" timeout="${3:-60}"
+    local elapsed=0
+    while ! curl -sf --max-time 3 "$url" >/dev/null 2>&1; do
+        sleep 2
+        elapsed=$((elapsed + 2))
+        if [ "$elapsed" -ge "$timeout" ]; then
+            echo "  ✗ $name: health check timed out after ${timeout}s"
+            return 1
+        fi
+    done
     ok "$name"
 }
 
@@ -588,12 +596,18 @@ for svc in "${BOOT_SERVICES[@]}"; do
         info "${svc}: not in compose, skipping"
         continue
     fi
+    local elapsed=0
     while ! docker compose ps "$svc" 2>/dev/null | tail -n+2 | grep -q "healthy"; do
         sleep 2
+        elapsed=$((elapsed + 2))
+        if [ "$elapsed" -ge 60 ]; then
+            echo "  ✗ $svc: never became healthy after 60s"
+            break
+        fi
     done
     url="${HEALTH_URLS[$svc]:-}"
     if [ -n "$url" ]; then
-        check_http "$svc" "$url"
+        check_http "$svc" "$url" 60
     else
         ok "$svc (no health URL configured)"
     fi
