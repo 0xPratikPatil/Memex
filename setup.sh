@@ -596,7 +596,7 @@ for svc in "${BOOT_SERVICES[@]}"; do
         info "${svc}: not in compose, skipping"
         continue
     fi
-    local elapsed=0
+    elapsed=0
     while ! docker compose ps "$svc" 2>/dev/null | tail -n+2 | grep -q "healthy"; do
         sleep 2
         elapsed=$((elapsed + 2))
