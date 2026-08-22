@@ -125,6 +125,13 @@ RERANK_PROVIDER: str = _cfg_str("reranker.provider", "docker")
 RERANK_TYPE: str = _cfg_str("reranker.type", "auto")
 DENSE_DIM: int = _cfg_int("embedding.dimensions", 1024)
 
+# Auto-switch to local providers when ml-services isn't running (markitdown engine)
+if CONVERTER_ENGINE == "markitdown":
+    if SPARSE_PROVIDER in ("http", "docker"):
+        SPARSE_PROVIDER = "local"
+    if RERANK_PROVIDER in ("http", "docker"):
+        RERANK_PROVIDER = "local"
+
 # ── Chunking ──────────────────────────────────────────────────────────────────
 CHUNK_TOKENIZER: str = _cfg_str("chunking.tokenizer", "Qwen/Qwen3-Embedding-0.6B")
 CHUNK_SIZE: int = _cfg_int("chunking.size", 1024)
