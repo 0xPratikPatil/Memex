@@ -74,7 +74,8 @@ def build_startup_banner() -> str:
     lines.append("  Services:")
 
     unhealthy: list[str] = []
-    for name in ("qdrant", "ollama", "marker"):
+    converter_svc = "marker" if config.CONVERTER_ENGINE == "marker" else "markitdown"
+    for name in ("qdrant", "ollama", converter_svc):
         s = statuses.get(name)
         if s is None:
             unhealthy.append(name)

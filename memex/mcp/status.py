@@ -110,9 +110,9 @@ def create_service_checker() -> ServiceChecker:
     checker = ServiceChecker()
     checker.register_service("qdrant", config.QDRANT_URL)
     checker.register_service("ollama", config.OLLAMA_EMBED_URL)
-    converter_name = "marker" if config.CONVERTER_ENGINE == "marker" else "docling"
+    converter_name = "marker" if config.CONVERTER_ENGINE == "marker" else "markitdown"
     converter_url = (
-        f"{config.MARKER_URL.rstrip('/')}/health" if config.CONVERTER_ENGINE == "marker" else config.DOCLING_URL
+        f"{config.MARKER_URL.rstrip('/')}/health" if config.CONVERTER_ENGINE == "marker" else config.MARKITDOWN_URL
     )
     checker.register_service(converter_name, converter_url)
     checker.register_service("ml-services", config.ML_SERVICES_URL)

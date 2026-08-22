@@ -26,13 +26,13 @@ class TestIsPoorQuality:
         assert _is_poor_quality(result, b"x" * 100_000) is True
 
     def test_normal_text_ok(self) -> None:
-        text = "This is a normal document with enough content to pass the quality check. " * 5
+        text = "This is a normal document with enough content to pass the quality check. " * 10
         result = ConversionResult(markdown=text, status="success")
         assert _is_poor_quality(result, b"x" * 10_000) is False
 
     def test_good_ratio_ok(self) -> None:
-        # 500 chars in 10KB file = 0.05 ratio (well above 0.001)
-        result = ConversionResult(markdown="x" * 500, status="success")
+        # 600 chars in 10KB file = 0.06 ratio (well above 0.005)
+        result = ConversionResult(markdown="x" * 600, status="success")
         assert _is_poor_quality(result, b"x" * 10_000) is False
 
 

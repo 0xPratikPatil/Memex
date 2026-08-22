@@ -221,7 +221,7 @@ class TestIngestDedup:
 
         result = runner.invoke(app, ["ingest", str(test_file)])
         assert result.exit_code == 0
-        assert "Already ingested" in result.output
+        assert "Skipped" in result.output
         mock_engine.ingest_text.assert_not_called()
 
 
@@ -355,25 +355,25 @@ class TestEvalCommand:
 
 
 class TestBuildCompactStatus:
-    """_build_compact_status should produce compact single-line output."""
+    """_build_live_display should produce clean line-per-file output."""
 
     def test_shows_single_file(self) -> None:
         """Should show one file with stage icon."""
         from collections import OrderedDict
 
-        from memex.cli import _build_compact_status
+        from memex.cli import _build_live_display
 
         active = OrderedDict([("/docs/report.pdf", ("Converting", 0, ""))])
-        result = _build_compact_status(active, completed=0, total=1)
+        result = _build_live_display(active, completed=0, total=1)
 
-        assert "report.pdf" in result
-        assert "⚙" in result
+        assert "report.pdf" in result.plain
+        assert "Converting" in result.plain
 
     def test_shows_multiple_files(self) -> None:
-        """Should show up to 4 files."""
+        """Should show all files."""
         from collections import OrderedDict
 
-        from memex.cli import _build_compact_status
+        from memex.cli import _build_live_display
 
         active = OrderedDict(
             [
@@ -384,46 +384,44 @@ class TestBuildCompactStatus:
                 ("/docs/e.pdf", ("Converting", 0, "")),
             ]
         )
-        result = _build_compact_status(active, completed=1, total=5)
+        result = _build_live_display(active, completed=1, total=5)
 
-        # Shows last 4: b, c, d, e (a is hidden)
-        assert "b.pdf" in result
-        assert "e.pdf" in result
-        assert "and 1 more" in result
+        assert "a.pdf" in result.plain
+        assert "e.pdf" in result.plain
 
     def test_shows_progress_percentage(self) -> None:
         """Should show completion percentage."""
         from collections import OrderedDict
 
-        from memex.cli import _build_compact_status
+        from memex.cli import _build_live_display
 
         active = OrderedDict([("/docs/report.pdf", ("Converting", 0, ""))])
-        result = _build_compact_status(active, completed=3, total=10)
+        result = _build_live_display(active, completed=3, total=10)
 
-        assert "30.0%" in result
-        assert "3/10" in result
+        assert "30%" in result.plain
+        assert "3/10" in result.plain
 
     def test_shows_error_message(self) -> None:
         """Should show error message for Error stage."""
         from collections import OrderedDict
 
-        from memex.cli import _build_compact_status
+        from memex.cli import _build_live_display
 
         active = OrderedDict([("/docs/report.pdf", ("Error", 0, "504 timeout"))])
-        result = _build_compact_status(active, completed=0, total=1)
+        result = _build_live_display(active, completed=0, total=1)
 
-        assert "504 timeout" in result
+        assert "504 timeout" in result.plain
 
     def test_shows_chunk_count(self) -> None:
         """Should show chunk count when > 0."""
         from collections import OrderedDict
 
-        from memex.cli import _build_compact_status
+        from memex.cli import _build_live_display
 
         active = OrderedDict([("/docs/report.pdf", ("Done", 15, ""))])
-        result = _build_compact_status(active, completed=1, total=1)
+        result = _build_live_display(active, completed=1, total=1)
 
-        assert "15" in result
+        assert "15 chunks" in result.plain
 
 
 # ── Status command tests ─────────────────────────────────────────────────────

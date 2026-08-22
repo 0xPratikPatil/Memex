@@ -217,11 +217,11 @@ def _is_poor_quality(result: ConversionResult, file_bytes: bytes) -> bool:
     text = (result.markdown or "").strip()
     if not text:
         return True
-    # Short text for a large file suggests scanned content
-    if len(text) < 100 and len(file_bytes) > 10_000:
+    # Short text for a moderate-sized file suggests scanned content
+    if len(text) < 500 and len(file_bytes) > 5_000:
         return True
-    # Very low text-to-bytes ratio
-    return len(text) / max(len(file_bytes), 1) < 0.001
+    # Low text-to-bytes ratio
+    return len(text) / max(len(file_bytes), 1) < 0.005
 
 
 def _ocr_to_conversion(ocr_result) -> ConversionResult:
@@ -315,8 +315,16 @@ def parse_url(url: str) -> ConversionResult:
         filename = url.split("/")[-1].split("?")[0] or "document"
         from memex.engine.ingestion.markitdown_client import convert_markdown as md_convert
 
-        md_result = md_convert(resp.content, filename)
-        converted = _markitdown_result_to_conversion(md_result, url)
+        try:
+            md_result = md_convert(resp.content, filename)
+            converted = _markitdown_result_to_conversion(md_result, url)
+        except CorruptedDocumentError:
+            converted = ConversionResult(
+                markdown="",
+                status="success",
+                errors=["MarkItDown returned empty markdown"],
+            )
+
         cache_parse_result(
             file_hash,
             {
@@ -329,6 +337,30 @@ def parse_url(url: str) -> ConversionResult:
                 "errors": converted.errors,
             },
         )
+
+        # OCR fallback for URLs — same logic as local files
+        if config.OCR_FALLBACK and _is_poor_quality(converted, resp.content):
+            try:
+                from memex.engine.ingestion.ocr_client import convert_with_ocr, is_ocr_available
+
+                if not is_ocr_available():
+                    logger.warning("OCR fallback skipped — OCR service not reachable")
+                else:
+                    ocr_result = convert_with_ocr(resp.content, filename)
+                    if ocr_result.ok and len(ocr_result.markdown or "") > len(converted.markdown or ""):
+                        converted = _ocr_to_conversion(ocr_result)
+                        logger.info("OCR fallback succeeded for %s", filename)
+                    else:
+                        logger.warning("OCR fallback produced no better output for %s", filename)
+            except Exception as e:
+                logger.warning("OCR fallback failed for %s: %s", filename, e)
+
+        if not converted.markdown.strip():
+            raise CorruptedDocumentError(
+                f"MarkItDown converted {filename} but returned empty markdown",
+                component="conversion",
+            )
+
         return converted
 
     payload = {
@@ -426,8 +458,18 @@ def parse_local_file(file_path: str) -> ConversionResult:
     if config.CONVERTER_ENGINE == "markitdown":
         from memex.engine.ingestion.markitdown_client import convert_markdown as md_convert
 
-        md_result = md_convert(file_bytes, filename)
-        converted = _markitdown_result_to_conversion(md_result, file_path)
+        try:
+            md_result = md_convert(file_bytes, filename)
+            converted = _markitdown_result_to_conversion(md_result, file_path)
+        except CorruptedDocumentError:
+            # MarkItDown returned empty output — treat as poor quality,
+            # fall through to OCR below.
+            converted = ConversionResult(
+                markdown="",
+                status="success",
+                errors=["MarkItDown returned empty markdown"],
+            )
+
         cache_parse_result(
             file_hash,
             {
@@ -444,13 +486,25 @@ def parse_local_file(file_path: str) -> ConversionResult:
         # OCR fallback: if MarkItDown produced poor quality output, retry via OCR
         if config.OCR_FALLBACK and _is_poor_quality(converted, file_bytes):
             try:
-                from memex.engine.ingestion.ocr_client import convert_with_ocr
+                from memex.engine.ingestion.ocr_client import convert_with_ocr, is_ocr_available
 
-                ocr_result = convert_with_ocr(file_bytes, filename)
-                if ocr_result.ok and len(ocr_result.markdown or "") > len(converted.markdown or ""):
-                    converted = _ocr_to_conversion(ocr_result)
-            except Exception:
-                pass  # Keep MarkItDown result
+                if not is_ocr_available():
+                    logger.warning("OCR fallback skipped — OCR service not reachable")
+                else:
+                    ocr_result = convert_with_ocr(file_bytes, filename)
+                    if ocr_result.ok and len(ocr_result.markdown or "") > len(converted.markdown or ""):
+                        converted = _ocr_to_conversion(ocr_result)
+                        logger.info("OCR fallback succeeded for %s", filename)
+                    else:
+                        logger.warning("OCR fallback produced no better output for %s", filename)
+            except Exception as e:
+                logger.warning("OCR fallback failed for %s: %s", filename, e)
+
+        if not converted.markdown.strip():
+            raise CorruptedDocumentError(
+                f"MarkItDown converted {filename} but returned empty markdown",
+                component="conversion",
+            )
 
         return converted
 

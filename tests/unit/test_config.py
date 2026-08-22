@@ -24,7 +24,7 @@ class TestChunkingDefaults:
 
     def test_converter_engine_default_marker(self):
         reload(config)
-        assert config.CONVERTER_ENGINE == "marker"
+        assert config.CONVERTER_ENGINE == "markitdown"
 
     def test_marker_mode_default_balanced(self):
         # Isolate from on-disk config.yaml (setup.sh auto-detects and may set

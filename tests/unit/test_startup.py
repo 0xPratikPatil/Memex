@@ -26,9 +26,8 @@ class TestBuildStartupBanner:
 
     def test_includes_chunk_strategy(self):
         banner = build_startup_banner()
-        assert "hybrid" in banner.lower()
         assert "1024" in banner
-        assert any(name in banner for name in ("Docling HybridChunker", "legacy recursive"))
+        assert any(name in banner.lower() for name in ("recursive", "hybrid"))
 
     def test_includes_cache_status(self):
         with patch("memex.mcp.startup.config.ENABLE_CACHE", True):
@@ -57,7 +56,7 @@ class TestCheckServices:
         assert isinstance(results, dict)
         assert "qdrant" in results
         assert "ollama" in results
-        assert "marker" in results
+        assert any(name in results for name in ("marker", "markitdown"))
 
     def test_uses_service_checker(self):
         mock_checker = MagicMock()

@@ -51,7 +51,7 @@ def _ocr_rapid(image_bytes: bytes) -> dict:
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     img_array = np.array(img)
 
-    result, elapse = model(img_array)
+    result, _elapse = model(img_array)
 
     texts = []
     total_conf = 0.0
