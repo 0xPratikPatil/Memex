@@ -67,6 +67,7 @@ converter:
   ocr_url: "http://localhost:5004"
   ocr_model: pp-ocrv6-small                 # pp-ocrv6-small (default) | lightonocr-2-1b
   ocr_timeout: 600.0                        # seconds per conversion (scanned PDFs can take minutes)
+  ocr_max_concurrent: 2                     # parallel OCR jobs — MarkItDown keeps converting meanwhile
   # ── Legacy Docling settings (only used when engine: docling) ──────────
   docling_url: "http://localhost:5001/v1/convert/source"
   docling_api_key: ${DOCLING_API_KEY}
@@ -171,6 +172,12 @@ ingestion:
   timeout_total: 300.0                     # max seconds per document ingestion
   max_concurrent_parses: 3                 # parallel document conversions
   max_concurrent_sync: 8                   # files processed in parallel during sync
+
+# ── Automatic retry queue ─────────────────────────────────────────────────────
+# Failed files are auto-scheduled for retry on the next sync run.
+retry:
+  backoff_seconds: 300                     # wait before a failed file is retried
+  max_attempts: 5                          # give up auto-retrying after N attempts
 
 # ── Qdrant ────────────────────────────────────────────────────────────────────
 qdrant:

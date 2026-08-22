@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
+from memex.engine.core.errors import CorruptedDocumentError
 from memex.engine.ingestion.loader import ConversionResult, _is_poor_quality, _ocr_to_conversion
 
 
@@ -58,3 +60,59 @@ class TestOcrToConversion:
         conv = _ocr_to_conversion(ocr_result)
         assert conv.status == "error"
         assert len(conv.errors) == 1
+
+
+class TestDeferOcr:
+    """defer_ocr=True returns needs_ocr instead of running OCR inline."""
+
+    def _setup(self, tmp_path: Path):
+        f = tmp_path / "scanned.pdf"
+        f.write_bytes(b"%PDF-1.4\n" + b"x" * 100_000)
+        return str(f)
+
+    def test_defer_ocr_returns_needs_ocr(self, tmp_path: Path) -> None:
+        from memex.engine.ingestion.loader import parse_local_file
+
+        f = self._setup(tmp_path)
+        with (
+            patch("memex.engine.ingestion.loader.config.CONVERTER_ENGINE", "markitdown"),
+            patch("memex.engine.ingestion.loader.config.OCR_FALLBACK", True),
+            patch(
+                "memex.engine.ingestion.markitdown_client.convert_markdown",
+                side_effect=CorruptedDocumentError("empty"),
+            ),
+            patch("memex.engine.utils.cache.get_cached_parse_result", return_value=None),
+            patch("memex.engine.utils.cache.cache_parse_result") as mock_cache_set,
+        ):
+            result = parse_local_file(f, defer_ocr=True)
+
+        assert result.status == "needs_ocr"
+        assert result.markdown == ""
+        # No result cached — OCR result comes later from the sync lane
+        mock_cache_set.assert_not_called()
+
+    def test_defer_ocr_false_runs_ocr_inline(self, tmp_path: Path) -> None:
+        from memex.engine.ingestion.loader import parse_local_file
+
+        f = self._setup(tmp_path)
+        fake_ocr = MagicMock()
+        fake_ocr.markdown = "OCR text"
+        fake_ocr.ok = True
+        fake_ocr.processing_time = 1.0
+
+        with (
+            patch("memex.engine.ingestion.loader.config.CONVERTER_ENGINE", "markitdown"),
+            patch("memex.engine.ingestion.loader.config.OCR_FALLBACK", True),
+            patch(
+                "memex.engine.ingestion.markitdown_client.convert_markdown",
+                side_effect=CorruptedDocumentError("empty"),
+            ),
+            patch("memex.engine.utils.cache.get_cached_parse_result", return_value=None),
+            patch("memex.engine.utils.cache.cache_parse_result"),
+            patch("memex.engine.ingestion.ocr_client.is_ocr_available", return_value=True),
+            patch("memex.engine.ingestion.ocr_client.convert_with_ocr", return_value=fake_ocr),
+        ):
+            result = parse_local_file(f, defer_ocr=False)
+
+        assert result.ok is True
+        assert result.markdown == "OCR text"

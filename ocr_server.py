@@ -6,6 +6,7 @@ pypdfium2 (pure-C types, no GPU) before OCR runs on each page.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
@@ -119,10 +120,31 @@ async def swap_model(req: ModelSwapRequest):
 
 
 # ── Convert endpoint ────────────────────────────────────────────────────────
+def _process_pdf_bytes(data: bytes) -> list[dict]:
+    """Render PDF pages to images and OCR each — CPU-bound, runs in a thread."""
+    pages: list[dict] = []
+    for page_no, pil_img in enumerate(_pdf_to_pil_pages(data), start=1):
+        try:
+            result = _ocr_pil_image(pil_img)
+            pages.append({"page": page_no, **result})
+        except Exception as e:
+            logger.error("OCR failed on page %d: %s", page_no, e)
+            pages.append({"page": page_no, "text": "", "confidence": 0, "error": str(e)})
+    return pages
+
+
+def _process_image_bytes(data: bytes) -> dict:
+    """OCR a single image — CPU-bound, runs in a thread."""
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(data)).convert("RGB")
+    return _ocr_pil_image(img)
+
+
 @app.post("/convert")
 async def convert(files: list[UploadFile] = File(...)):  # noqa: B008
     start = time.time()
-    pages = []
+    pages: list[dict] = []
 
     page_no = 0
     for i, f in enumerate(files):
@@ -134,24 +156,20 @@ async def convert(files: list[UploadFile] = File(...)):  # noqa: B008
         if _is_pdf(data):
             logger.info("PDF detected (%d bytes, %s) — rendering pages", len(data), f.filename)
             try:
-                for pil_img in _pdf_to_pil_pages(data):
-                    page_no += 1
-                    try:
-                        result = _ocr_pil_image(pil_img)
-                        pages.append({"page": page_no, **result})
-                    except Exception as e:
-                        logger.error("OCR failed on page %d: %s", page_no, e)
-                        pages.append({"page": page_no, "text": "", "confidence": 0, "error": str(e)})
+                pdf_pages = await asyncio.to_thread(_process_pdf_bytes, data)
+                # Re-number pages globally across files
+                for p in pdf_pages:
+                    p["page"] = page_no + p["page"]
+                page_no += len(pdf_pages)
+                pages.extend(pdf_pages)
             except Exception as e:
                 logger.error("PDF rendering failed for %s: %s", f.filename, e)
-                pages.append({"page": i + 1, "text": "", "confidence": 0, "error": f"PDF rendering failed: {e}"})
+                page_no += 1
+                pages.append({"page": page_no, "text": "", "confidence": 0, "error": f"PDF rendering failed: {e}"})
         else:
             page_no += 1
             try:
-                from PIL import Image
-
-                img = Image.open(io.BytesIO(data)).convert("RGB")
-                result = _ocr_pil_image(img)
+                result = await asyncio.to_thread(_process_image_bytes, data)
                 pages.append({"page": page_no, **result})
             except Exception as e:
                 logger.error("OCR failed on image %d: %s", i + 1, e)

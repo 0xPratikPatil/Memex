@@ -19,6 +19,7 @@ class PipelineStage(StrEnum):
     HASHING = "Hashing"
     PARSING = "Parsing"
     CONVERTING = "Converting"
+    OCR = "OCR"
     CHUNKING = "Chunking"
     CONTEXT = "Context"
     METADATA = "Metadata"

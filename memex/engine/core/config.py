@@ -170,6 +170,16 @@ INGEST_TIMEOUT_TOTAL: float = _cfg_float("ingestion.timeout_total", 300.0)
 MAX_CONCURRENT_PARSES: int = _cfg_int("ingestion.max_concurrent_parses", 3)
 MAX_CONCURRENT_SYNC: int = _cfg_int("ingestion.max_concurrent_sync", 8)
 
+# ── OCR fallback concurrency ──────────────────────────────────────────────────
+# OCR runs in a separate lane from MarkItDown conversion: conversion workers
+# never block on a multi-minute OCR job — files needing OCR are handed to a
+# dedicated bounded pool while MarkItDown keeps converting other files.
+OCR_MAX_CONCURRENT: int = _cfg_int("converter.ocr_max_concurrent", 2)
+
+# ── Automatic retry queue ─────────────────────────────────────────────────────
+RETRY_BACKOFF_SECONDS: int = _cfg_int("retry.backoff_seconds", 300)
+RETRY_MAX_ATTEMPTS: int = _cfg_int("retry.max_attempts", 5)
+
 # ── Qdrant client settings ────────────────────────────────────────────────────
 QDRANT_TIMEOUT: float = _cfg_float("qdrant.timeout", 30.0)
 QDRANT_MAX_RETRIES: int = _cfg_int("qdrant.max_retries", 3)

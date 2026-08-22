@@ -234,8 +234,14 @@ def _ocr_to_conversion(ocr_result) -> ConversionResult:
     )
 
 
-def parse_url(url: str) -> ConversionResult:
-    """Fetch a URL via the configured converter and return structured result."""
+def parse_url(url: str, defer_ocr: bool = False) -> ConversionResult:
+    """Fetch a URL via the configured converter and return structured result.
+
+    When ``defer_ocr=True``, poor-quality MarkItDown output returns status
+    ``"needs_ocr"`` instead of running OCR inline — the caller (sync) runs
+    OCR in a separate concurrency lane so MarkItDown keeps converting
+    other files meanwhile.
+    """
     from memex.engine.utils.cache import cache_parse_result, get_cached_parse_result
 
     file_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
@@ -328,6 +334,12 @@ def parse_url(url: str) -> ConversionResult:
 
         # OCR fallback for URLs — same logic as local files
         if config.OCR_FALLBACK and _is_poor_quality(converted, resp.content):
+            if defer_ocr:
+                return ConversionResult(
+                    markdown="",
+                    status="needs_ocr",
+                    errors=["scanned or empty MarkItDown output — OCR required"],
+                )
             try:
                 from memex.engine.ingestion.ocr_client import convert_with_ocr, is_ocr_available
 
@@ -405,8 +417,11 @@ def parse_url(url: str) -> ConversionResult:
     return converted_result
 
 
-def parse_local_file(file_path: str) -> ConversionResult:
+def parse_local_file(file_path: str, defer_ocr: bool = False) -> ConversionResult:
     """Read a local file directly and convert via the configured converter.
+
+    When ``defer_ocr=True``, poor-quality MarkItDown output returns status
+    ``"needs_ocr"`` instead of running OCR inline.
 
     Args:
         file_path: Absolute path to the file (e.g., /mnt/docs/report.pdf)
@@ -477,6 +492,12 @@ def parse_local_file(file_path: str) -> ConversionResult:
 
         # OCR fallback: if MarkItDown produced poor quality output, retry via OCR
         if config.OCR_FALLBACK and _is_poor_quality(converted, file_bytes):
+            if defer_ocr:
+                return ConversionResult(
+                    markdown="",
+                    status="needs_ocr",
+                    errors=["scanned or empty MarkItDown output — OCR required"],
+                )
             try:
                 from memex.engine.ingestion.ocr_client import convert_with_ocr, is_ocr_available
 
@@ -562,12 +583,12 @@ def parse_local_file(file_path: str) -> ConversionResult:
     return converted_result
 
 
-def parse_file(file_path_or_url: str) -> ConversionResult:
+def parse_file(file_path_or_url: str, defer_ocr: bool = False) -> ConversionResult:
     """Unified entry point: detect URL vs local path and route accordingly."""
     parsed = urlparse(file_path_or_url)
     if parsed.scheme in ("http", "https"):
-        return parse_url(file_path_or_url)
-    return parse_local_file(file_path_or_url)
+        return parse_url(file_path_or_url, defer_ocr=defer_ocr)
+    return parse_local_file(file_path_or_url, defer_ocr=defer_ocr)
 
 
 def _parse_response(data: dict) -> ConversionResult:

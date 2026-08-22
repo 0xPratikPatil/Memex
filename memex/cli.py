@@ -29,6 +29,30 @@ console = Console()
 
 _TERMINAL_STAGES = ("Done", "Skipped", "Error")
 
+_STAGE_ICONS: dict[str, str] = {
+    "Checking": "·",
+    "Scanning": "·",
+    "Reconciling": "·",
+    "Hashing": "#",
+    "Parsing": "p",
+    "Converting": "⚙",
+    "OCR": "◎",
+    "Chunking": "⚙",
+    "Context": "ctx",
+    "Metadata": "meta",
+    "Embedding": "emb",
+    "Storing": "···",
+    "Deleting": "del",
+    "Done": "✓",
+    "Skipped": "↷",
+    "Error": "✗",
+}
+
+
+def _stage_label(stage: str) -> str:
+    """Icon + stage name for the progress row stage column."""
+    return f"{_STAGE_ICONS.get(stage, '·')} {stage}"
+
 
 def _make_progress() -> Progress:
     """Progress with per-file rows (indeterminate) + overall bar (determinate).
@@ -123,14 +147,18 @@ def ingest(
         def _mark_active(src: str, stage: str) -> None:
             tid = file_tasks.get(src)
             if tid is None:
-                tid = file_tasks[src] = progress.add_task(os.path.basename(src), total=None, stage=stage, detail="")
-            progress.update(tid, stage=stage)
+                tid = file_tasks[src] = progress.add_task(
+                    os.path.basename(src), total=None, stage=_stage_label(stage), detail=""
+                )
+            progress.update(tid, stage=_stage_label(stage))
 
         def _mark_done(src: str, stage: str, detail: str = "") -> None:
             tid = file_tasks.get(src)
             if tid is None:
-                tid = file_tasks[src] = progress.add_task(os.path.basename(src), total=None, stage=stage, detail=detail)
-            progress.update(tid, total=1, completed=1, stage=stage, detail=detail)
+                tid = file_tasks[src] = progress.add_task(
+                    os.path.basename(src), total=None, stage=_stage_label(stage), detail=detail
+                )
+            progress.update(tid, total=1, completed=1, stage=_stage_label(stage), detail=detail)
             if src not in done_files:
                 done_files.add(src)
                 progress.update(overall, completed=len(done_files))
@@ -235,14 +263,18 @@ def sync(
         def _mark_active(src: str, stage: str) -> None:
             tid = file_tasks.get(src)
             if tid is None:
-                tid = file_tasks[src] = progress.add_task(os.path.basename(src), total=None, stage=stage, detail="")
-            progress.update(tid, stage=stage)
+                tid = file_tasks[src] = progress.add_task(
+                    os.path.basename(src), total=None, stage=_stage_label(stage), detail=""
+                )
+            progress.update(tid, stage=_stage_label(stage))
 
         def _mark_done(src: str, stage: str, detail: str = "") -> None:
             tid = file_tasks.get(src)
             if tid is None:
-                tid = file_tasks[src] = progress.add_task(os.path.basename(src), total=None, stage=stage, detail=detail)
-            progress.update(tid, total=1, completed=1, stage=stage, detail=detail)
+                tid = file_tasks[src] = progress.add_task(
+                    os.path.basename(src), total=None, stage=_stage_label(stage), detail=detail
+                )
+            progress.update(tid, total=1, completed=1, stage=_stage_label(stage), detail=detail)
             if src not in done_files:
                 done_files.add(src)
                 progress.update(overall, completed=len(done_files))

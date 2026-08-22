@@ -137,34 +137,24 @@ def _get_stored_hashes(engine, source_name: str) -> dict[str, str]:
     return stored
 
 
-# ── Single-file ingest (hybrid-aware, with progress) ─────────────────────────
+# ── Single-file pipeline: convert → (OCR) → ingest ──────────────────────────
 
 
-def _ingest_file(
+def _convert_file(
     engine,
-    source_identifier: str,
     file_path: str,
-    source_name: str,
+    source_identifier: str,
     progress_cb: ProgressCallback | None = None,
     file_idx: int = 0,
     total_files: int = 0,
-) -> int | _SkipResult:
-    """Convert and ingest a single file. Returns chunk count.
+    defer_ocr: bool = True,
+) -> dict:
+    """Convert a single file WITHOUT ingesting. OCR is deferred when requested.
 
-    Stages surfaced via progress_cb:
-      - "Converting" (70%) — conversion / chunking
-      - "Context" (73%) — Context enrichment per chunk
-      - "Metadata" (74%) — Entity/topic extraction
-      - "Embedding" (75-89%) — Dense + sparse embedding generation
-      - "Storing" (90%) — Qdrant upsert (immediate per-file)
-
-    Args:
-        source_identifier: Logical path stored in Qdrant (real local path or S3 key).
-        file_path: Where the file actually lives for reading/parsing.
-        source_name: Source name for tracking/reconciliation.
-        progress_cb: Callback for fine-grained pipeline stage updates.
-        file_idx: Current file index for progress reporting.
-        total_files: Total file count for progress reporting.
+    Returns:
+        {"markdown": str, "chunks": list | None, "needs_ocr": bool}
+        When ``needs_ocr=True`` the caller must run OCR (in the OCR lane)
+        before ingesting.
     """
 
     def _emit_pipeline(stage: str, msg: str, pct: int) -> None:
@@ -187,16 +177,14 @@ def _ingest_file(
 
         _emit_pipeline("Converting", f"Converting + chunking ({config.CONVERTER_ENGINE.title()})...", 70)
         try:
-            result = chunk_file(file_path, include_doc=True)
+            result = chunk_file(file_path, include_doc=True, defer_ocr=defer_ocr)
+            if result.get("needs_ocr"):
+                return {"markdown": "", "chunks": None, "needs_ocr": True}
             markdown = result.get("markdown", "")
             chunks = result.get("chunks", [])
         except Exception as exc:
             if isinstance(exc, ConversionTimeoutError) and config.DOCLING_SKIP_ON_TIMEOUT:
-                log.warning("Skipping %s due to timeout (skip_on_timeout=True)", file_path)
-                return _SkipResult(file_path)
-            # Handled fallback path — log the concise reason, keep the full
-            # traceback at DEBUG only (a per-file fallback is normal operation,
-            # not an unhandled error to dump 500 lines for).
+                raise
             if isinstance(exc, MemexError):
                 log.warning(
                     "Hybrid chunking failed for %s (%s: %s), falling back to parse+chunk",
@@ -209,7 +197,9 @@ def _ingest_file(
             log.debug("Hybrid chunking fallback detail for %s", file_path, exc_info=True)
             from memex.engine.ingestion.loader import parse_file
 
-            parse_result = parse_file(file_path)
+            parse_result = parse_file(file_path, defer_ocr=defer_ocr)
+            if parse_result.status == "needs_ocr":
+                return {"markdown": "", "chunks": None, "needs_ocr": True}
             if not parse_result.ok:
                 raise IngestionError(
                     file_path,
@@ -223,7 +213,9 @@ def _ingest_file(
         if not markdown:
             from memex.engine.ingestion.loader import parse_file
 
-            parse_result = parse_file(file_path)
+            parse_result = parse_file(file_path, defer_ocr=defer_ocr)
+            if parse_result.status == "needs_ocr":
+                return {"markdown": "", "chunks": None, "needs_ocr": True}
             if not parse_result.ok:
                 raise IngestionError(
                     file_path,
@@ -235,7 +227,9 @@ def _ingest_file(
         from memex.engine.ingestion.loader import parse_file
 
         _emit_pipeline("Converting", f"Converting ({config.CONVERTER_ENGINE.title()})...", 70)
-        parse_result = parse_file(file_path)
+        parse_result = parse_file(file_path, defer_ocr=defer_ocr)
+        if parse_result.status == "needs_ocr":
+            return {"markdown": "", "chunks": None, "needs_ocr": True}
         if not parse_result.ok:
             raise IngestionError(
                 file_path,
@@ -245,6 +239,37 @@ def _ingest_file(
         markdown = parse_result.markdown
         chunks = None
 
+    return {"markdown": markdown, "chunks": chunks, "needs_ocr": False}
+
+
+def _ocr_convert_file(local_path: str) -> str:
+    """Run OCR on a local file (bounded by the OCR concurrency lane)."""
+    from memex.engine.ingestion.ocr_client import convert_with_ocr
+
+    p = Path(local_path)
+    file_bytes = p.read_bytes()
+    result = convert_with_ocr(file_bytes, p.name)
+    if not result.ok:
+        raise IngestionError(
+            local_path,
+            "OCR fallback returned no text",
+            stage=PipelineStage.OCR,
+            hint="The document may be fully image-based without extractable text.",
+        )
+    log.info("OCR produced %d chars for %s", len(result.markdown), local_path)
+    return result.markdown
+
+
+def _ingest_markdown(
+    engine,
+    markdown: str,
+    chunks,
+    source_identifier: str,
+    file_path: str,
+    source_name: str,
+    progress_cb: ProgressCallback | None = None,
+) -> int:
+    """Hash + embed + store converted markdown. Returns chunk count."""
     content_hash = engine.compute_file_hash(markdown.encode())
 
     # Raw file bytes hash — the value reconciliation compares against
@@ -263,34 +288,62 @@ def _ingest_file(
     except OSError:
         log.warning("Could not hash raw file %s for reconciliation", file_path)
 
+    metadata = {
+        "content_type": file_path.rsplit(".", 1)[-1] if "." in file_path else "",
+        "content_hash": content_hash,
+        "file_content_hash": file_content_hash,
+        "source_name": source_name,
+    }
+
     if chunks is not None:
-        count = engine.ingest_prechunked(
+        return engine.ingest_prechunked(
             chunks=chunks,
             markdown=markdown,
             source_identifier=source_identifier,
-            metadata={
-                "content_type": file_path.rsplit(".", 1)[-1] if "." in file_path else "",
-                "content_hash": content_hash,
-                "file_content_hash": file_content_hash,
-                "source_name": source_name,
-            },
+            metadata=metadata,
             content_hash=content_hash,
             progress_cb=progress_cb,
         )
+    return engine.ingest_text(
+        markdown,
+        source_identifier=source_identifier,
+        metadata=metadata,
+        content_hash=content_hash,
+        progress_cb=progress_cb,
+    )
+
+
+def _ingest_file(
+    engine,
+    source_identifier: str,
+    file_path: str,
+    source_name: str,
+    progress_cb: ProgressCallback | None = None,
+    file_idx: int = 0,
+    total_files: int = 0,
+) -> int | _SkipResult:
+    """Convert and ingest a single file (OCR inline). Returns chunk count.
+
+    Kept for compatibility with single-file callers and tests. The sync
+    engine itself uses the staged _convert_file / _ocr_convert_file /
+    _ingest_markdown flow so OCR runs in its own concurrency lane.
+    """
+    conv = _convert_file(engine, file_path, source_identifier, progress_cb, file_idx, total_files, defer_ocr=False)
+    if conv["needs_ocr"]:
+        markdown = _ocr_convert_file(file_path)
+        chunks = None
     else:
-        count = engine.ingest_text(
-            markdown,
-            source_identifier=source_identifier,
-            metadata={
-                "content_type": file_path.rsplit(".", 1)[-1] if "." in file_path else "",
-                "content_hash": content_hash,
-                "file_content_hash": file_content_hash,
-                "source_name": source_name,
-            },
-            content_hash=content_hash,
-            progress_cb=progress_cb,
-        )
-    return count
+        markdown = conv["markdown"]
+        chunks = conv["chunks"]
+    return _ingest_markdown(engine, markdown, chunks, source_identifier, file_path, source_name, progress_cb)
+
+
+def _int_setting(value, default: int, minimum: int = 0) -> int:
+    """Coerce a config value to an int, falling back to default (test mocks)."""
+    try:
+        return max(minimum, int(value))
+    except (TypeError, ValueError):
+        return default
 
 
 # ── Main sync function (parallel) ─────────────────────────────────────────────
@@ -424,91 +477,132 @@ async def sync(
         total_files = len(new_paths) + len(common_paths) + len(deleted_paths)
 
         # ── Phase 3: Concurrent file processing ──────────────────────────
+        # Two concurrency lanes:
+        #   - `semaphore`      (MarkItDown conversion + ingest, N workers)
+        #   - `ocr_semaphore`  (OCR jobs, bounded separately)
+        # A worker that hits a scanned PDF hands the file to the OCR lane and
+        # releases the main lane — MarkItDown keeps converting other files
+        # while OCR churns (multi-minute jobs) in the background.
         tasks: list[asyncio.Task] = []
         file_idx_counter = 0
+
+        ocr_semaphore = asyncio.Semaphore(_int_setting(config.OCR_MAX_CONCURRENT, 2, 1))
+
+        def _schedule_auto_retry(path: str, error: str) -> None:
+            """Queue a failed file for automatic retry on the next sync run."""
+            max_attempts = _int_setting(config.RETRY_MAX_ATTEMPTS, 5, 1)
+            backoff_s = _int_setting(config.RETRY_BACKOFF_SECONDS, 300, 5)
+            try:
+                rec = status_store.get_status(path)
+                attempts = int((rec or {}).get("attempts") or 0) + 1
+                if attempts <= max_attempts:
+                    status_store.schedule_retry(path, error, attempts=attempts, backoff_s=backoff_s)
+                    log.info(
+                        "Scheduled auto-retry %d/%d for '%s' (next sync)",
+                        attempts,
+                        max_attempts,
+                        path,
+                    )
+                else:
+                    log.warning("Giving up auto-retry for '%s' after %d attempts", path, attempts)
+            except Exception as exc:
+                log.warning("Auto-retry scheduling failed for '%s': %s", path, exc)
+
+        def _fail(path: str, exc: BaseException, idx: int, total: int, *, msg: str) -> tuple:
+            _log_file_error(msg, path, exc, stage=PipelineStage.ERROR)
+            _emit(path, "Error", idx, total, error=str(exc))
+            status_store.mark_failed(path, str(exc), exc=exc)
+            _schedule_auto_retry(path, str(exc))
+            completed.increment()
+            return ("error", path, str(exc))
+
+        def _skip_timeout(path: str, exc: BaseException, idx: int, total: int) -> tuple | None:
+            """Return a Skipped tuple when the exception is a timeout-skip."""
+            if isinstance(exc, ConversionTimeoutError) and config.DOCLING_SKIP_ON_TIMEOUT:
+                stats.skipped += 1
+                _emit(path, "Skipped", idx, total)
+                status_store.mark_skipped(path, reason="timeout")
+                completed.increment()
+                log.info("Skipped '%s' (timeout)", path)
+                return ("skipped", path)
+            return None
+
+        async def _convert_and_ingest(
+            path: str,
+            sf: SourceFile,
+            idx: int,
+            total: int,
+            _source: Source = source,
+            _download_dir: Path = download_dir,
+            _src_name: str = src_name,
+            _ocr_semaphore: asyncio.Semaphore = ocr_semaphore,
+            *,
+            kind: str,
+        ) -> tuple[str, str] | tuple[str, str, str]:
+            """Convert → (OCR lane) → ingest for one file."""
+            try:
+                if kind == "added":
+                    status_store.mark_pending(path, source_name=_src_name)
+                # ── Phase 1: download + convert (MarkItDown lane) ─────────
+                async with semaphore:
+                    _emit(path, "Converting", idx, total)
+                    status_store.update_stage(path, PipelineStage.CONVERTING)
+                    local = await asyncio.to_thread(_source.download, sf, _download_dir)
+                    conv = await asyncio.to_thread(
+                        _convert_file, engine, str(local), path, progress_cb, idx, total, True
+                    )
+                # ── Phase 2: OCR (separate lane — MarkItDown continues) ──
+                markdown = conv["markdown"]
+                chunks = conv["chunks"]
+                if conv.get("needs_ocr"):
+                    _emit(path, "OCR", idx, total)
+                    status_store.update_stage(path, PipelineStage.OCR)
+                    async with _ocr_semaphore:
+                        markdown = await asyncio.to_thread(_ocr_convert_file, str(local))
+                    chunks = None
+                # ── Phase 3: ingest (embed + store, MarkItDown lane) ──────
+                async with semaphore:
+                    chunk_count = await asyncio.to_thread(
+                        _ingest_markdown, engine, markdown, chunks, path, str(local), _src_name, progress_cb
+                    )
+                _emit(path, "Done", idx, total, chunks=chunk_count)
+                status_store.mark_done(path, chunks=chunk_count)
+                completed.increment()
+                log.info("%s '%s' (%d chunks)", "Added" if kind == "added" else "Updated", path, chunk_count)
+                return (kind, path)
+            except Exception as exc:
+                skipped = _skip_timeout(path, exc, idx, total)
+                if skipped is not None:
+                    return skipped
+                return _fail(path, exc, idx, total, msg="Failed to ingest '%s': %s")
 
         async def _process_new(
             path: str,
             sf: SourceFile,
             idx: int,
             total: int,
-            _source: Source = source,
-            _download_dir: Path = download_dir,
-            _src_name: str = src_name,
         ) -> tuple[str, str] | tuple[str, str, str]:
-            async with semaphore:
-                if dry_run:
-                    log.info("[dry-run] Would add: %s", path)
-                    _emit(path, "Done", idx, total)
-                    completed.increment()
-                    return ("added", path)
-                try:
-                    status_store.mark_pending(path, source_name=_src_name)
-                    _emit(path, "Converting", idx, total)
-                    status_store.update_stage(path, PipelineStage.CONVERTING)
-                    local = await asyncio.to_thread(_source.download, sf, _download_dir)
-                    result = await asyncio.to_thread(
-                        _ingest_file, engine, sf.path, str(local), _src_name, progress_cb, idx, total
-                    )
-                    if isinstance(result, _SkipResult):
-                        stats.skipped += 1
-                        _emit(path, "Skipped", idx, total)
-                        status_store.mark_skipped(path, reason="timeout")
-                        completed.increment()
-                        log.info("Skipped '%s' (timeout)", path)
-                        return ("skipped", path)
-                    chunk_count = result
-                    _emit(path, "Done", idx, total, chunks=chunk_count)
-                    status_store.mark_done(path, chunks=chunk_count)
-                    completed.increment()
-                    log.info("Added '%s' (%d chunks)", path, chunk_count)
-                    return ("added", path)
-                except Exception as exc:
-                    _log_file_error("Failed to ingest '%s': %s", path, exc, stage=PipelineStage.ERROR)
-                    _emit(path, "Error", idx, total, error=str(exc))
-                    status_store.mark_failed(path, str(exc), exc=exc)
-                    completed.increment()
-                    return ("error", path, str(exc))
+            if dry_run:
+                log.info("[dry-run] Would add: %s", path)
+                _emit(path, "Done", idx, total)
+                completed.increment()
+                return ("added", path)
+            return await _convert_and_ingest(path, sf, idx, total, kind="added")
 
         async def _process_changed(
             path: str,
             sf: SourceFile,
             idx: int,
             total: int,
-            _source: Source = source,
-            _download_dir: Path = download_dir,
-            _src_name: str = src_name,
         ) -> tuple[str, str] | tuple[str, str, str]:
-            async with semaphore:
-                try:
+            try:
+                async with semaphore:
                     _emit(path, "Deleting", idx, total)
                     status_store.update_stage(path, PipelineStage.DELETING)
                     await asyncio.to_thread(engine.delete_by_source, path)
-                    _emit(path, "Converting", idx, total)
-                    status_store.update_stage(path, PipelineStage.CONVERTING)
-                    local = await asyncio.to_thread(_source.download, sf, _download_dir)
-                    result = await asyncio.to_thread(
-                        _ingest_file, engine, sf.path, str(local), _src_name, progress_cb, idx, total
-                    )
-                    if isinstance(result, _SkipResult):
-                        stats.skipped += 1
-                        _emit(path, "Skipped", idx, total)
-                        status_store.mark_skipped(path, reason="timeout")
-                        completed.increment()
-                        log.info("Skipped '%s' (timeout)", path)
-                        return ("skipped", path)
-                    chunk_count = result
-                    _emit(path, "Done", idx, total, chunks=chunk_count)
-                    status_store.mark_done(path, chunks=chunk_count)
-                    completed.increment()
-                    log.info("Updated '%s' (%d chunks)", path, chunk_count)
-                    return ("changed", path)
-                except Exception as exc:
-                    _log_file_error("Failed to update '%s': %s", path, exc, stage=PipelineStage.ERROR)
-                    _emit(path, "Error", idx, total, error=str(exc))
-                    status_store.mark_failed(path, str(exc), exc=exc)
-                    completed.increment()
-                    return ("error", path, str(exc))
+            except Exception as exc:
+                return _fail(path, exc, idx, total, msg="Failed to update '%s': %s")
+            return await _convert_and_ingest(path, sf, idx, total, kind="changed")
 
         async def _process_deleted(path: str, idx: int, total: int) -> tuple[str, str] | tuple[str, str, str]:
             async with semaphore:
@@ -547,8 +641,6 @@ async def sync(
             idx: int,
             total: int,
             _source: Source = source,
-            _download_dir: Path = download_dir,
-            _src_name: str = src_name,
             _stored_hashes: dict[str, str] = stored_hashes,
         ) -> tuple[str, str] | tuple[str, str, str]:
             async with semaphore:
@@ -576,36 +668,15 @@ async def sync(
                     completed.increment()
                     return ("changed", path)
 
-                # Changed file
-                try:
+            # Changed file — delete old chunks, then convert + ingest
+            try:
+                async with semaphore:
                     _emit(path, "Deleting", idx, total)
                     status_store.update_stage(path, PipelineStage.DELETING)
                     await asyncio.to_thread(engine.delete_by_source, path)
-                    _emit(path, "Converting", idx, total)
-                    status_store.update_stage(path, PipelineStage.CONVERTING)
-                    local = await asyncio.to_thread(_source.download, sf, _download_dir)
-                    result = await asyncio.to_thread(
-                        _ingest_file, engine, sf.path, str(local), _src_name, progress_cb, idx, total
-                    )
-                    if isinstance(result, _SkipResult):
-                        stats.skipped += 1
-                        _emit(path, "Skipped", idx, total)
-                        status_store.mark_skipped(path, reason="timeout")
-                        completed.increment()
-                        log.info("Skipped '%s' (timeout)", path)
-                        return ("skipped", path)
-                    chunk_count = result
-                    _emit(path, "Done", idx, total, chunks=chunk_count)
-                    status_store.mark_done(path, chunks=chunk_count)
-                    completed.increment()
-                    log.info("Updated '%s' (%d chunks)", path, chunk_count)
-                    return ("changed", path)
-                except Exception as exc:
-                    _log_file_error("Failed to update '%s': %s", path, exc, stage=PipelineStage.ERROR)
-                    _emit(path, "Error", idx, total, error=str(exc))
-                    status_store.mark_failed(path, str(exc), exc=exc)
-                    completed.increment()
-                    return ("error", path, str(exc))
+            except Exception as exc:
+                return _fail(path, exc, idx, total, msg="Failed to update '%s': %s")
+            return await _convert_and_ingest(path, sf, idx, total, kind="changed")
 
         # Build task list
         for path in new_paths:
