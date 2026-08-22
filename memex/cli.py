@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from collections import OrderedDict
 from pathlib import Path
 
 import typer
 from rich.console import Console
-from rich.live import Live
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
-from rich.text import Text
 
 from memex import __version__
 from memex.engine.core.progress import FileProgress
@@ -40,49 +39,61 @@ _STAGE_STYLE: dict[str, tuple[str, str, str]] = {
 }
 
 
-def _stage_label(stage: str, error: str = "") -> str:
-    """Return a rich-styled stage label."""
-    icon, color, label = _STAGE_STYLE.get(stage, ("?", "dim", stage))
-    if stage == "Error" and error:
-        return f"[{color}]{icon} {error}[/{color}]"
-    return f"[{color}]{icon} {label}[/{color}]"
-
-
 def _build_live_display(
     active: OrderedDict[str, tuple[str, int, str]],
     completed: int,
     total: int,
-) -> Text:
-    """Build a single Text object with all file lines + progress bar.
-
-    Using Text (not Group) ensures Rich.Live.update() replaces cleanly.
-    """
-    display = Text()
+) -> str:
+    """Build a plain text display string — one line per file + progress bar."""
+    lines: list[str] = []
 
     for path, (stage, chunks, error) in active.items():
         fname = os.path.basename(path)
-        icon, color, label = _STAGE_STYLE.get(stage, ("?", "dim", stage))
+        icon, _color, _label = _STAGE_STYLE.get(stage, ("?", "dim", stage))
 
-        display.append(f"  {icon} ", style=color)
-        display.append(f"{fname:<36s}", style="bold" if stage not in ("Done", "Skipped") else "")
-        display.append(f" {label}", style=color)
-
+        line = f"  {icon}  {fname:<36s} {stage}"
         if stage == "Error" and error:
-            display.append(f"  {error[:50]}", style="red")
+            line += f"  {error[:50]}"
         elif chunks > 0:
-            display.append(f"  {chunks} chunks", style="dim")
+            line += f"  {chunks} chunks"
+        lines.append(line)
 
-        display.append("\n")
-
-    # Overall progress bar
     if total > 0:
         pct = completed / total * 100
         filled = int(pct / 5)  # 20 chars wide
         bar = "━" * filled + "╸" + "─" * (20 - filled - 1)
-        display.append(f"\n  {bar} {completed}/{total} ", style="bold")
-        display.append(f"{pct:.0f}%", style="green" if pct >= 100 else "yellow")
+        lines.append("")
+        lines.append(f"  {bar} {completed}/{total} {pct:.0f}%")
 
-    return display
+    return "\n".join(lines)
+
+
+class LiveDisplay:
+    """ANSI cursor-based live display — replaces Rich.Live which has height bugs."""
+
+    def __init__(self) -> None:
+        self._n_lines = 0
+        self._use_ansi = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+
+    def update(self, text: str) -> None:
+        """Clear previous output and print new text in place."""
+        if self._use_ansi and self._n_lines > 0:
+            sys.stdout.write(f"\033[{self._n_lines}A")
+            for _ in range(self._n_lines):
+                sys.stdout.write("\033[2K\n")
+            sys.stdout.write(f"\033[{self._n_lines}A")
+        sys.stdout.write(text)
+        if text and not text.endswith("\n"):
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+        self._n_lines = text.count("\n") + (1 if text else 0)
+
+    def stop(self) -> None:
+        """Finalize — move cursor below the display."""
+        if self._use_ansi and self._n_lines > 0:
+            sys.stdout.write(f"\033[{self._n_lines}B\n")
+            sys.stdout.flush()
+        self._n_lines = 0
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -129,8 +140,6 @@ def ingest(
     else:
         files = [target]
 
-    # Normalize to absolute real paths so dedup against stored chunks works
-    # regardless of how the CLI was invoked (./docs vs /abs/path/docs).
     files = [Path(os.path.realpath(f)) for f in files]
     files = sorted(files)
 
@@ -151,6 +160,7 @@ def ingest(
 
     active: OrderedDict[str, tuple[str, int, str]] = OrderedDict()
     completed_count = 0
+    live = LiveDisplay()
 
     def _on_progress(p: FileProgress) -> None:
         nonlocal completed_count
@@ -169,72 +179,71 @@ def ingest(
 
         live.update(_build_live_display(active, completed_count, total))
 
-    with Live(_build_live_display(active, 0, total), console=console, refresh_per_second=8) as live:
-        for file_path in files:
-            src = str(file_path)
-            status_store.mark_pending(src, source_name=source_name or target.name)
-            active[src] = ("Checking", 0, "")
+    for file_path in files:
+        src = str(file_path)
+        status_store.mark_pending(src, source_name=source_name or target.name)
+        active[src] = ("Checking", 0, "")
+        live.update(_build_live_display(active, completed_count, total))
+
+        try:
+            can_skip, chunk_count = engine.check_unmodified_local(src)
+            if can_skip:
+                status_store.mark_skipped(src, reason="unchanged")
+                active[src] = ("Skipped", chunk_count, "")
+                completed_count += 1
+                live.update(_build_live_display(active, completed_count, total))
+                continue
+
+            active[src] = ("Parsing", 0, "")
+            live.update(_build_live_display(active, completed_count, total))
+            result = parse_file(src)
+            if not result.ok:
+                err = f"{file_path}: {result.status} — {result.errors}"
+                errors.append(err)
+                status_store.mark_failed(src, str(result.errors))
+                active[src] = ("Error", 0, str(result.errors))
+                completed_count += 1
+                live.update(_build_live_display(active, completed_count, total))
+                continue
+
+            active[src] = ("Hashing", 0, "")
+            live.update(_build_live_display(active, completed_count, total))
+            content_hash = engine.compute_file_hash(result.markdown.encode())
+            already, existing_chunks = engine.is_already_ingested(src, content_hash)
+            if already:
+                status_store.mark_skipped(src, reason="dedup")
+                active[src] = ("Skipped", existing_chunks, "")
+                completed_count += 1
+                live.update(_build_live_display(active, completed_count, total))
+                continue
+
+            active[src] = ("Converting", 0, "")
+            live.update(_build_live_display(active, completed_count, total))
+            chunks = engine.ingest_text(
+                result.markdown,
+                source_identifier=src,
+                metadata={
+                    "content_type": file_path.suffix.lstrip("."),
+                    "content_hash": content_hash,
+                    "source_name": source_name or target.name,
+                },
+                content_hash=content_hash,
+                progress_cb=_on_progress,
+            )
+            ingested += 1
+            total_chunks += chunks
+            status_store.mark_done(src, chunks=chunks)
+            active[src] = ("Done", chunks, "")
+            completed_count += 1
+            live.update(_build_live_display(active, completed_count, total))
+        except Exception as exc:
+            errors.append(f"{file_path}: {exc}")
+            status_store.mark_failed(src, str(exc), exc=exc)
+            active[src] = ("Error", 0, str(exc))
+            completed_count += 1
             live.update(_build_live_display(active, completed_count, total))
 
-            try:
-                # Pre-check 1: local file unchanged since last ingest (mtime+size)
-                can_skip, chunk_count = engine.check_unmodified_local(src)
-                if can_skip:
-                    status_store.mark_skipped(src, reason="unchanged")
-                    active[src] = ("Skipped", chunk_count, "")
-                    completed_count += 1
-                    live.update(_build_live_display(active, completed_count, total))
-                    continue
-
-                active[src] = ("Parsing", 0, "")
-                live.update(_build_live_display(active, completed_count, total))
-                result = parse_file(src)
-                if not result.ok:
-                    err = f"{file_path}: {result.status} — {result.errors}"
-                    errors.append(err)
-                    status_store.mark_failed(src, str(result.errors))
-                    active[src] = ("Error", 0, str(result.errors))
-                    completed_count += 1
-                    live.update(_build_live_display(active, completed_count, total))
-                    continue
-
-                # Pre-check 2: same content hash already ingested
-                active[src] = ("Hashing", 0, "")
-                live.update(_build_live_display(active, completed_count, total))
-                content_hash = engine.compute_file_hash(result.markdown.encode())
-                already, existing_chunks = engine.is_already_ingested(src, content_hash)
-                if already:
-                    status_store.mark_skipped(src, reason="dedup")
-                    active[src] = ("Skipped", existing_chunks, "")
-                    completed_count += 1
-                    live.update(_build_live_display(active, completed_count, total))
-                    continue
-
-                active[src] = ("Converting", 0, "")
-                live.update(_build_live_display(active, completed_count, total))
-                chunks = engine.ingest_text(
-                    result.markdown,
-                    source_identifier=src,
-                    metadata={
-                        "content_type": file_path.suffix.lstrip("."),
-                        "content_hash": content_hash,
-                        "source_name": source_name or target.name,
-                    },
-                    content_hash=content_hash,
-                    progress_cb=_on_progress,
-                )
-                ingested += 1
-                total_chunks += chunks
-                status_store.mark_done(src, chunks=chunks)
-                active[src] = ("Done", chunks, "")
-                completed_count += 1
-                live.update(_build_live_display(active, completed_count, total))
-            except Exception as exc:
-                errors.append(f"{file_path}: {exc}")
-                status_store.mark_failed(src, str(exc), exc=exc)
-                active[src] = ("Error", 0, str(exc))
-                completed_count += 1
-                live.update(_build_live_display(active, completed_count, total))
+    live.stop()
 
     table = Table(title="Ingest Complete", show_header=False, title_style="bold")
     table.add_column("Metric", style="bold")
@@ -269,6 +278,7 @@ def sync(
     active: OrderedDict[str, tuple[str, int, str]] = OrderedDict()
     total_files = 0
     completed_count = 0
+    live = LiveDisplay()
 
     def _on_progress(p: FileProgress) -> None:
         nonlocal total_files, completed_count
@@ -286,17 +296,14 @@ def sync(
             chunks = existing[1] if existing else 0
             active[p.path] = (p.stage, chunks, "")
 
-        # Refresh the live display on every progress event. Without this the
-        # Live view renders a static string and shows nothing during sync.
         live.update(_build_live_display(active, completed_count, total_files))
 
-    with Live(_build_live_display(active, 0, 0), console=console, refresh_per_second=8) as live:
+    async def _run() -> SyncStats:
+        return await rag_sync(yaml_config, source_name=source_name, dry_run=dry_run, progress_cb=_on_progress)  # type: ignore[return-value]
 
-        async def _run() -> SyncStats:
-            return await rag_sync(yaml_config, source_name=source_name, dry_run=dry_run, progress_cb=_on_progress)  # type: ignore[return-value]
-
-        stats = asyncio.run(_run())
-        live.update(_build_live_display(active, completed_count, total_files))
+    stats = asyncio.run(_run())
+    live.update(_build_live_display(active, completed_count, total_files))
+    live.stop()
 
     prefix = "would " if dry_run else ""
     table = Table(title="Sync Complete", show_header=False, title_style="bold")

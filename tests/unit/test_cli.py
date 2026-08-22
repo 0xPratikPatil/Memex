@@ -358,19 +358,16 @@ class TestBuildCompactStatus:
     """_build_live_display should produce clean line-per-file output."""
 
     def test_shows_single_file(self) -> None:
-        """Should show one file with stage icon."""
         from collections import OrderedDict
 
         from memex.cli import _build_live_display
 
         active = OrderedDict([("/docs/report.pdf", ("Converting", 0, ""))])
         result = _build_live_display(active, completed=0, total=1)
-
-        assert "report.pdf" in result.plain
-        assert "Converting" in result.plain
+        assert "report.pdf" in result
+        assert "Converting" in result
 
     def test_shows_multiple_files(self) -> None:
-        """Should show all files."""
         from collections import OrderedDict
 
         from memex.cli import _build_live_display
@@ -385,43 +382,36 @@ class TestBuildCompactStatus:
             ]
         )
         result = _build_live_display(active, completed=1, total=5)
-
-        assert "a.pdf" in result.plain
-        assert "e.pdf" in result.plain
+        assert "a.pdf" in result
+        assert "e.pdf" in result
 
     def test_shows_progress_percentage(self) -> None:
-        """Should show completion percentage."""
         from collections import OrderedDict
 
         from memex.cli import _build_live_display
 
         active = OrderedDict([("/docs/report.pdf", ("Converting", 0, ""))])
         result = _build_live_display(active, completed=3, total=10)
-
-        assert "30%" in result.plain
-        assert "3/10" in result.plain
+        assert "30%" in result
+        assert "3/10" in result
 
     def test_shows_error_message(self) -> None:
-        """Should show error message for Error stage."""
         from collections import OrderedDict
 
         from memex.cli import _build_live_display
 
         active = OrderedDict([("/docs/report.pdf", ("Error", 0, "504 timeout"))])
         result = _build_live_display(active, completed=0, total=1)
-
-        assert "504 timeout" in result.plain
+        assert "504 timeout" in result
 
     def test_shows_chunk_count(self) -> None:
-        """Should show chunk count when > 0."""
         from collections import OrderedDict
 
         from memex.cli import _build_live_display
 
         active = OrderedDict([("/docs/report.pdf", ("Done", 15, ""))])
         result = _build_live_display(active, completed=1, total=1)
-
-        assert "15 chunks" in result.plain
+        assert "15 chunks" in result
 
 
 # ── Status command tests ─────────────────────────────────────────────────────
