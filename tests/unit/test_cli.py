@@ -351,69 +351,6 @@ class TestEvalCommand:
         assert "No queries" in result.output
 
 
-# ── Compact display tests ────────────────────────────────────────────────────
-
-
-class TestBuildCompactStatus:
-    """_build_live_display should produce clean line-per-file output."""
-
-    def test_shows_single_file(self) -> None:
-        from collections import OrderedDict
-
-        from memex.cli import _build_live_display
-
-        active = OrderedDict([("/docs/report.pdf", ("Converting", 0, ""))])
-        result = _build_live_display(active, completed=0, total=1)
-        assert "report.pdf" in result
-        assert "Converting" in result
-
-    def test_shows_multiple_files(self) -> None:
-        from collections import OrderedDict
-
-        from memex.cli import _build_live_display
-
-        active = OrderedDict(
-            [
-                ("/docs/a.pdf", ("Converting", 0, "")),
-                ("/docs/b.pdf", ("Embedding", 5, "")),
-                ("/docs/c.pdf", ("Done", 10, "")),
-                ("/docs/d.pdf", ("Error", 0, "timeout")),
-                ("/docs/e.pdf", ("Converting", 0, "")),
-            ]
-        )
-        result = _build_live_display(active, completed=1, total=5)
-        assert "a.pdf" in result
-        assert "e.pdf" in result
-
-    def test_shows_progress_percentage(self) -> None:
-        from collections import OrderedDict
-
-        from memex.cli import _build_live_display
-
-        active = OrderedDict([("/docs/report.pdf", ("Converting", 0, ""))])
-        result = _build_live_display(active, completed=3, total=10)
-        assert "30%" in result
-        assert "3/10" in result
-
-    def test_shows_error_message(self) -> None:
-        from collections import OrderedDict
-
-        from memex.cli import _build_live_display
-
-        active = OrderedDict([("/docs/report.pdf", ("Error", 0, "504 timeout"))])
-        result = _build_live_display(active, completed=0, total=1)
-        assert "504 timeout" in result
-
-    def test_shows_chunk_count(self) -> None:
-        from collections import OrderedDict
-
-        from memex.cli import _build_live_display
-
-        active = OrderedDict([("/docs/report.pdf", ("Done", 15, ""))])
-        result = _build_live_display(active, completed=1, total=1)
-        assert "15 chunks" in result
-
-
 # ── Status command tests ─────────────────────────────────────────────────────
 
 

@@ -1,4 +1,8 @@
-"""Lightweight OCR service — RapidOCR (PP-OCRv6 ONNX, no PaddlePaddle)."""
+"""Lightweight OCR service — RapidOCR (PP-OCRv6 ONNX, no PaddlePaddle).
+
+Accepts both images and PDFs. PDFs are rendered to page images with
+pypdfium2 (pure-C types, no GPU) before OCR runs on each page.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +22,8 @@ app = FastAPI(title="Memex OCR Service", version="0.1.0")
 # ── Model registry ──────────────────────────────────────────────────────────
 ACTIVE_MODEL: str = os.environ.get("OCR_MODEL", "pp-ocrv6-small")
 _models: dict[str, object] = {}
+
+PDF_MAGIC = b"%PDF-"
 
 
 class ModelInfo(BaseModel):
@@ -40,16 +46,32 @@ def _load_rapidocr():
         raise
 
 
-def _ocr_rapid(image_bytes: bytes) -> dict:
-    """Run RapidOCR on image bytes, return structured result."""
+def _is_pdf(data: bytes) -> bool:
+    """Detect PDF by magic bytes (allows leading whitespace)."""
+    return data.lstrip()[:5] == PDF_MAGIC
+
+
+def _pdf_to_pil_pages(pdf_bytes: bytes, scale: float = 2.0):
+    """Render each PDF page to a PIL image (scale 2 = ~144 DPI)."""
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(pdf_bytes)
+    try:
+        for i in range(len(pdf)):
+            page = pdf[i]
+            bitmap = page.render(scale=scale)
+            yield bitmap.to_pil()
+    finally:
+        pdf.close()
+
+
+def _ocr_pil_image(pil_img) -> dict:
+    """Run RapidOCR on a PIL image, return structured result."""
     model = _models.get("pp-ocrv6-small")
     if model is None:
         raise RuntimeError("RapidOCR not loaded")
 
-    from PIL import Image
-
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    img_array = np.array(img)
+    img_array = np.array(pil_img.convert("RGB"))
 
     result, _elapse = model(img_array)
 
@@ -102,14 +124,38 @@ async def convert(files: list[UploadFile] = File(...)):  # noqa: B008
     start = time.time()
     pages = []
 
+    page_no = 0
     for i, f in enumerate(files):
-        image_bytes = await f.read()
-        try:
-            result = _ocr_rapid(image_bytes)
-            pages.append({"page": i + 1, **result})
-        except Exception as e:
-            logger.error("OCR failed on page %d: %s", i + 1, e)
-            pages.append({"page": i + 1, "text": "", "confidence": 0, "error": str(e)})
+        data = await f.read()
+        if not data:
+            pages.append({"page": i + 1, "text": "", "confidence": 0, "error": "empty upload"})
+            continue
+
+        if _is_pdf(data):
+            logger.info("PDF detected (%d bytes, %s) — rendering pages", len(data), f.filename)
+            try:
+                for pil_img in _pdf_to_pil_pages(data):
+                    page_no += 1
+                    try:
+                        result = _ocr_pil_image(pil_img)
+                        pages.append({"page": page_no, **result})
+                    except Exception as e:
+                        logger.error("OCR failed on page %d: %s", page_no, e)
+                        pages.append({"page": page_no, "text": "", "confidence": 0, "error": str(e)})
+            except Exception as e:
+                logger.error("PDF rendering failed for %s: %s", f.filename, e)
+                pages.append({"page": i + 1, "text": "", "confidence": 0, "error": f"PDF rendering failed: {e}"})
+        else:
+            page_no += 1
+            try:
+                from PIL import Image
+
+                img = Image.open(io.BytesIO(data)).convert("RGB")
+                result = _ocr_pil_image(img)
+                pages.append({"page": page_no, **result})
+            except Exception as e:
+                logger.error("OCR failed on image %d: %s", i + 1, e)
+                pages.append({"page": page_no, "text": "", "confidence": 0, "error": str(e)})
 
     # Build markdown from pages
     markdown_parts = []

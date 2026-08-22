@@ -39,6 +39,11 @@ class TestOcrResult:
         r = OcrResult(markdown="", status="error")
         assert r.ok is False
 
+    def test_not_ok_when_empty_markdown(self) -> None:
+        # Success status but no extracted text = not usable
+        r = OcrResult(markdown="  ", status="success")
+        assert r.ok is False
+
 
 class TestIsOcrAvailable:
     def test_returns_true_when_healthy(self) -> None:

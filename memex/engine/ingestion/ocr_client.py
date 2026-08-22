@@ -45,7 +45,7 @@ class OcrResult:
 
     @property
     def ok(self) -> bool:
-        return self.status == "success"
+        return self.status == "success" and bool(self.markdown.strip())
 
 
 # ── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -74,13 +74,17 @@ def _get_client() -> httpx.Client:
 
 
 @retry(
-    retry=retry_if_exception_type(httpx.TransportError),
+    retry=retry_if_exception_type(httpx.ConnectError),
     stop=stop_after_attempt(2),
     wait=wait_exponential(multiplier=1, max=5),
     reraise=True,
 )
 def _post(url: str, files: list[tuple[str, tuple[str, bytes, str]]]) -> httpx.Response:
-    """POST files to OCR service, retrying connection failures."""
+    """POST files to OCR service, retrying only connection refusals.
+
+    Read timeouts are NOT retried — the server may be mid-OCR on a long
+    job and a retry would restart minutes of work.
+    """
     client = _get_client()
     return client.post(url, files=files)
 

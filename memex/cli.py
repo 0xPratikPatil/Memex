@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
-import sys
-from collections import OrderedDict
 from pathlib import Path
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
-from rich.table import Table
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskID,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
+from rich.table import Column, Table
 
 from memex import __version__
 from memex.engine.core.progress import FileProgress
@@ -20,86 +27,36 @@ from memex.engine.core.progress import FileProgress
 app = typer.Typer(help="Memex RAG — CLI commands")
 console = Console()
 
-# Stage display: (icon, color, label)
-_STAGE_STYLE: dict[str, tuple[str, str, str]] = {
-    "Scanning": ("·", "dim", "Scanning"),
-    "Reconciling": ("·", "dim", "Reconciling"),
-    "Hashing": ("#", "blue", "Hashing"),
-    "Parsing": ("p", "cyan", "Parsing"),
-    "Converting": ("⚙ ", "cyan", "Converting"),
-    "Chunking": ("⚙ ", "cyan", "Chunking"),
-    "Context": ("ctx", "blue", "Context"),
-    "Metadata": ("meta", "magenta", "Metadata"),
-    "Embedding": ("emb", "yellow", "Embedding"),
-    "Storing": ("···", "green", "Storing"),
-    "Deleting": ("del", "red", "Deleting"),
-    "Done": ("✓", "green", "Done"),
-    "Skipped": ("↷", "cyan", "Skipped"),
-    "Error": ("✗", "red", "Error"),
-}
+_TERMINAL_STAGES = ("Done", "Skipped", "Error")
 
 
-def _build_live_display(
-    active: OrderedDict[str, tuple[str, int, str]],
-    completed: int,
-    total: int,
-) -> str:
-    """Build a plain text display string — one line per file + progress bar."""
-    lines: list[str] = []
+def _make_progress() -> Progress:
+    """Progress with per-file rows (indeterminate) + overall bar (determinate).
 
-    for path, (stage, chunks, error) in active.items():
-        fname = os.path.basename(path)
-        icon, _color, _label = _STAGE_STYLE.get(stage, ("?", "dim", stage))
+    Text columns use Column(overflow="ellipsis") so rows never wrap —
+    line wrapping breaks live redraw and causes duplicated rows.
+    """
 
-        line = f"  {icon}  {fname:<36s} {stage}"
-        if stage == "Error" and error:
-            line += f"  {error[:50]}"
-        elif chunks > 0:
-            line += f"  {chunks} chunks"
-        lines.append(line)
+    def _ellipsis_col(text_format: str, style: str = "none") -> TextColumn:
+        return TextColumn(text_format, style=style, table_column=Column(overflow="ellipsis"))
 
-    if total > 0:
-        pct = completed / total * 100
-        filled = int(pct / 5)  # 20 chars wide
-        bar = "━" * filled + "╸" + "─" * (20 - filled - 1)
-        lines.append("")
-        lines.append(f"  {bar} {completed}/{total} {pct:.0f}%")
-
-    return "\n".join(lines)
+    return Progress(
+        SpinnerColumn(),
+        _ellipsis_col("[bold]{task.description}"),
+        _ellipsis_col("{task.fields[stage]}", style="cyan"),
+        BarColumn(bar_width=20),
+        TaskProgressColumn(),
+        _ellipsis_col("{task.fields[detail]}"),
+        console=console,
+        refresh_per_second=10,
+    )
 
 
-class LiveDisplay:
-    """ANSI cursor-based live display — replaces Rich.Live which has height bugs."""
-
-    def __init__(self) -> None:
-        self._n_lines = 0
-        self._use_ansi = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
-
-    def update(self, text: str) -> None:
-        """Clear previous output and print new text in place."""
-        if self._use_ansi and self._n_lines > 0:
-            sys.stdout.write(f"\033[{self._n_lines}A")
-            for _ in range(self._n_lines):
-                sys.stdout.write("\033[2K\n")
-            sys.stdout.write(f"\033[{self._n_lines}A")
-        sys.stdout.write(text)
-        if text and not text.endswith("\n"):
-            sys.stdout.write("\n")
-        sys.stdout.flush()
-        self._n_lines = text.count("\n") + (1 if text else 0)
-
-    def stop(self) -> None:
-        """Finalize — move cursor below the display."""
-        if self._use_ansi and self._n_lines > 0:
-            sys.stdout.write(f"\033[{self._n_lines}B\n")
-            sys.stdout.flush()
-        self._n_lines = 0
-
-
-def _setup_logging(verbose: bool) -> None:
+def _setup_logging(verbose: bool, *, quiet: bool = False) -> None:
+    """Configure logging; quiet suppresses INFO noise during live displays."""
     from memex.engine.core.logging_setup import setup_logging
 
-    setup_logging(verbose=verbose)
+    setup_logging(verbose=verbose, level=logging.WARNING if (quiet and not verbose) else None)
 
 
 def _progress_columns() -> list:
@@ -121,7 +78,7 @@ def ingest(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ) -> None:
     """Ingest files or directories into the RAG knowledge base."""
-    _setup_logging(verbose)
+    _setup_logging(verbose, quiet=True)
 
     from memex.engine.core.pipeline import RAGEngine
     from memex.engine.core.yaml_config import YamlConfig
@@ -158,92 +115,86 @@ def ingest(
 
     status_store = FileStatusStore(engine._get_qdrant())
 
-    active: OrderedDict[str, tuple[str, int, str]] = OrderedDict()
-    completed_count = 0
-    live = LiveDisplay()
+    with _make_progress() as progress:
+        overall = progress.add_task("[bold]Overall", total=total, stage="", detail="")
+        file_tasks: dict[str, TaskID] = {}
+        done_files: set[str] = set()
 
-    def _on_progress(p: FileProgress) -> None:
-        nonlocal completed_count
-        if p.total > 0:
-            completed_count = p.current
+        def _mark_active(src: str, stage: str) -> None:
+            tid = file_tasks.get(src)
+            if tid is None:
+                tid = file_tasks[src] = progress.add_task(os.path.basename(src), total=None, stage=stage, detail="")
+            progress.update(tid, stage=stage)
 
-        if p.stage in ("Done", "Error", "Skipped"):
-            if p.stage == "Error":
-                active[p.path] = ("Error", 0, p.error)
+        def _mark_done(src: str, stage: str, detail: str = "") -> None:
+            tid = file_tasks.get(src)
+            if tid is None:
+                tid = file_tasks[src] = progress.add_task(os.path.basename(src), total=None, stage=stage, detail=detail)
+            progress.update(tid, total=1, completed=1, stage=stage, detail=detail)
+            if src not in done_files:
+                done_files.add(src)
+                progress.update(overall, completed=len(done_files))
+
+        def _on_progress(p: FileProgress) -> None:
+            if p.stage in _TERMINAL_STAGES:
+                detail = ""
+                if p.stage == "Error" and p.error:
+                    detail = p.error[:60]
+                elif p.chunks:
+                    detail = f"{p.chunks} chunks"
+                _mark_done(p.path, p.stage, detail)
             else:
-                active[p.path] = (p.stage, p.chunks, "")
-        else:
-            existing = active.get(p.path)
-            chunks = existing[1] if existing else 0
-            active[p.path] = (p.stage, chunks, "")
+                _mark_active(p.path, p.stage)
 
-        live.update(_build_live_display(active, completed_count, total))
+        for file_path in files:
+            src = str(file_path)
+            status_store.mark_pending(src, source_name=source_name or target.name)
+            _mark_active(src, "Checking")
 
-    for file_path in files:
-        src = str(file_path)
-        status_store.mark_pending(src, source_name=source_name or target.name)
-        active[src] = ("Checking", 0, "")
-        live.update(_build_live_display(active, completed_count, total))
+            try:
+                can_skip, chunk_count = engine.check_unmodified_local(src)
+                if can_skip:
+                    status_store.mark_skipped(src, reason="unchanged")
+                    _mark_done(src, "Skipped", f"{chunk_count} chunks")
+                    continue
 
-        try:
-            can_skip, chunk_count = engine.check_unmodified_local(src)
-            if can_skip:
-                status_store.mark_skipped(src, reason="unchanged")
-                active[src] = ("Skipped", chunk_count, "")
-                completed_count += 1
-                live.update(_build_live_display(active, completed_count, total))
-                continue
+                _mark_active(src, "Parsing")
+                result = parse_file(src)
+                if not result.ok:
+                    err = f"{file_path}: {result.status} — {result.errors}"
+                    errors.append(err)
+                    status_store.mark_failed(src, str(result.errors))
+                    _mark_done(src, "Error", str(result.errors)[:60])
+                    continue
 
-            active[src] = ("Parsing", 0, "")
-            live.update(_build_live_display(active, completed_count, total))
-            result = parse_file(src)
-            if not result.ok:
-                err = f"{file_path}: {result.status} — {result.errors}"
-                errors.append(err)
-                status_store.mark_failed(src, str(result.errors))
-                active[src] = ("Error", 0, str(result.errors))
-                completed_count += 1
-                live.update(_build_live_display(active, completed_count, total))
-                continue
+                _mark_active(src, "Hashing")
+                content_hash = engine.compute_file_hash(result.markdown.encode())
+                already, existing_chunks = engine.is_already_ingested(src, content_hash)
+                if already:
+                    status_store.mark_skipped(src, reason="dedup")
+                    _mark_done(src, "Skipped", f"{existing_chunks} chunks")
+                    continue
 
-            active[src] = ("Hashing", 0, "")
-            live.update(_build_live_display(active, completed_count, total))
-            content_hash = engine.compute_file_hash(result.markdown.encode())
-            already, existing_chunks = engine.is_already_ingested(src, content_hash)
-            if already:
-                status_store.mark_skipped(src, reason="dedup")
-                active[src] = ("Skipped", existing_chunks, "")
-                completed_count += 1
-                live.update(_build_live_display(active, completed_count, total))
-                continue
-
-            active[src] = ("Converting", 0, "")
-            live.update(_build_live_display(active, completed_count, total))
-            chunks = engine.ingest_text(
-                result.markdown,
-                source_identifier=src,
-                metadata={
-                    "content_type": file_path.suffix.lstrip("."),
-                    "content_hash": content_hash,
-                    "source_name": source_name or target.name,
-                },
-                content_hash=content_hash,
-                progress_cb=_on_progress,
-            )
-            ingested += 1
-            total_chunks += chunks
-            status_store.mark_done(src, chunks=chunks)
-            active[src] = ("Done", chunks, "")
-            completed_count += 1
-            live.update(_build_live_display(active, completed_count, total))
-        except Exception as exc:
-            errors.append(f"{file_path}: {exc}")
-            status_store.mark_failed(src, str(exc), exc=exc)
-            active[src] = ("Error", 0, str(exc))
-            completed_count += 1
-            live.update(_build_live_display(active, completed_count, total))
-
-    live.stop()
+                _mark_active(src, "Converting")
+                chunks = engine.ingest_text(
+                    result.markdown,
+                    source_identifier=src,
+                    metadata={
+                        "content_type": file_path.suffix.lstrip("."),
+                        "content_hash": content_hash,
+                        "source_name": source_name or target.name,
+                    },
+                    content_hash=content_hash,
+                    progress_cb=_on_progress,
+                )
+                ingested += 1
+                total_chunks += chunks
+                status_store.mark_done(src, chunks=chunks)
+                _mark_done(src, "Done", f"{chunks} chunks")
+            except Exception as exc:
+                errors.append(f"{file_path}: {exc}")
+                status_store.mark_failed(src, str(exc), exc=exc)
+                _mark_done(src, "Error", str(exc)[:60])
 
     table = Table(title="Ingest Complete", show_header=False, title_style="bold")
     table.add_column("Metric", style="bold")
@@ -267,7 +218,7 @@ def sync(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ) -> None:
     """Sync collection against configured document sources."""
-    _setup_logging(verbose)
+    _setup_logging(verbose, quiet=True)
 
     from memex.engine.core.yaml_config import YamlConfig
     from memex.engine.sources.sync import SyncStats
@@ -275,35 +226,48 @@ def sync(
 
     yaml_config = YamlConfig(config_path)
 
-    active: OrderedDict[str, tuple[str, int, str]] = OrderedDict()
-    total_files = 0
-    completed_count = 0
-    live = LiveDisplay()
+    with _make_progress() as progress:
+        overall = progress.add_task("[bold]Overall", total=None, stage="", detail="")
+        file_tasks: dict[str, TaskID] = {}
+        done_files: set[str] = set()
+        seen_total = 0
 
-    def _on_progress(p: FileProgress) -> None:
-        nonlocal total_files, completed_count
-        if p.total > 0:
-            total_files = p.total
-        completed_count = p.current
+        def _mark_active(src: str, stage: str) -> None:
+            tid = file_tasks.get(src)
+            if tid is None:
+                tid = file_tasks[src] = progress.add_task(os.path.basename(src), total=None, stage=stage, detail="")
+            progress.update(tid, stage=stage)
 
-        if p.stage in ("Done", "Error", "Skipped"):
-            if p.stage == "Error":
-                active[p.path] = ("Error", 0, p.error)
+        def _mark_done(src: str, stage: str, detail: str = "") -> None:
+            tid = file_tasks.get(src)
+            if tid is None:
+                tid = file_tasks[src] = progress.add_task(os.path.basename(src), total=None, stage=stage, detail=detail)
+            progress.update(tid, total=1, completed=1, stage=stage, detail=detail)
+            if src not in done_files:
+                done_files.add(src)
+                progress.update(overall, completed=len(done_files))
+
+        def _on_progress(p: FileProgress) -> None:
+            nonlocal seen_total
+            if p.total > 0:
+                seen_total = p.total
+                progress.update(overall, total=p.total)
+            if p.stage in _TERMINAL_STAGES:
+                detail = ""
+                if p.stage == "Error" and p.error:
+                    detail = p.error[:60]
+                elif p.chunks:
+                    detail = f"{p.chunks} chunks"
+                _mark_done(p.path, p.stage, detail)
             else:
-                active[p.path] = (p.stage, p.chunks, "")
-        else:
-            existing = active.get(p.path)
-            chunks = existing[1] if existing else 0
-            active[p.path] = (p.stage, chunks, "")
+                _mark_active(p.path, p.stage)
 
-        live.update(_build_live_display(active, completed_count, total_files))
+        async def _run() -> SyncStats:
+            return await rag_sync(yaml_config, source_name=source_name, dry_run=dry_run, progress_cb=_on_progress)  # type: ignore[return-value]
 
-    async def _run() -> SyncStats:
-        return await rag_sync(yaml_config, source_name=source_name, dry_run=dry_run, progress_cb=_on_progress)  # type: ignore[return-value]
-
-    stats = asyncio.run(_run())
-    live.update(_build_live_display(active, completed_count, total_files))
-    live.stop()
+        stats = asyncio.run(_run())
+        if seen_total == 0:
+            progress.update(overall, total=1, completed=1)
 
     prefix = "would " if dry_run else ""
     table = Table(title="Sync Complete", show_header=False, title_style="bold")

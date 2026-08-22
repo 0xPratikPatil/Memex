@@ -12,6 +12,7 @@ COPY ocr_server.py .
 RUN uv pip install --system --compile-bytecode \
     uvicorn fastapi python-multipart httpx \
     rapidocr-onnxruntime \
+    pypdfium2 \
     Pillow numpy
 
 EXPOSE 5004

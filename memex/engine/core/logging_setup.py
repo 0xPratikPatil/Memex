@@ -103,11 +103,13 @@ def _build_handler(verbose: bool, *, use_json: bool, use_plain: bool) -> logging
     return handler
 
 
-def setup_logging(verbose: bool = False) -> None:
+def setup_logging(verbose: bool = False, level: int | None = None) -> None:
     """Configure the root logger once.
 
     Args:
         verbose: Enable DEBUG level. When False, INFO and above.
+        level: Explicit level override (e.g. logging.WARNING during live
+            progress displays so log lines don't corrupt terminal redraws).
     """
     use_json = os.environ.get("MEMEX_LOG_JSON", "0") == "1"
     use_plain = os.environ.get("MEMEX_LOG_PLAIN", "0") == "1"
@@ -119,7 +121,11 @@ def setup_logging(verbose: bool = False) -> None:
 
     handler = _build_handler(verbose, use_json=use_json, use_plain=use_plain)
     root.addHandler(handler)
-    root.setLevel(logging.DEBUG if verbose else logging.INFO)
+    if level is not None:
+        root.setLevel(level)
+        handler.setLevel(level)
+    else:
+        root.setLevel(logging.DEBUG if verbose else logging.INFO)
 
     # Quiet noisy third-party loggers at INFO.
     for noisy in ("httpx", "httpcore", "urllib3", "qdrant_client", "mcp"):
