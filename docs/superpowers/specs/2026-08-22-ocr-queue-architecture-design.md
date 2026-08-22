@@ -126,10 +126,47 @@ next start: query status store for ocr_queued=true
   → re-enqueue → resume
 ```
 
+## GPU-Accelerated OCR
+
+Current OCR runs `rapidocr-onnxruntime` on **CPU** (ONNX Runtime CPU provider) — PP-OCRv6-small
+models work on CPU but text-detection (DBNet) on high-res page images is the bottleneck
+(~210s per 14-page PDF). Move to GPU:
+
+### Container changes
+
+- Base image: `ghcr.io/astral-sh/uv:python3.12-bookworm-slim` → **`nvidia/cuda:12.x-runtime-ubuntu22.04`**
+  with uv installed (nvidia-container-toolkit is already configured on the host — Marker uses it).
+- `rapidocr-onnxruntime` → keep, but add **`onnxruntime-gpu`** (CUDA + cuDNN ExecutionProvider).
+- Runtime provider selection: `providers=["CUDAExecutionProvider", "CPUExecutionProvider"]`
+  — automatic CPU fallback if the GPU is unavailable or out of memory. No hard failure.
+
+### docker-compose changes
+
+- OCR service gets `deploy.resources.reservations.devices: [{capabilities: ["gpu"], device_ids: ["0"]}]`.
+- VRAM budget: cap detection input side length via `OCR_LIMIT_SIDE_LEN` env (default 1280)
+  → ~500-700MB VRAM footprint, fits alongside Ollama (~4GB) on the 8GB card.
+
+### GpuLock coordination
+
+- Extend `gpu_lock.py` to know about OCR (like Marker): before an OCR job starts, check
+  VRAM headroom; if Ollama models are resident and VRAM is tight, either evict idle Ollama
+  models or wait. OCR's ingest step uses Ollama embeddings, so the two overlap in the
+  queue architecture — the lock prevents the same OOM class Marker had.
+
+### Expected effect
+
+- Detection per page: tens of seconds → ~1-2s; a 14-page scanned PDF ≈ 210s → **~30-60s**.
+- Dead-man timeout stays 900s (generous on GPU).
+- CPU quick win included regardless: PDF render scale 2.0 → **1.5** + side-length cap —
+  halves CPU-fallback cost with negligible quality loss on deed-type documents.
+- `ocr_workers` stays default 1; with GPU, raising to 2 becomes viable — config knob, not default.
+
 ## Config Changes
 
 - `converter.ocr_max_concurrent` (2) → **`converter.ocr_workers`** (default **1**).
 - `converter.ocr_timeout`: 600 → **900** (per-job dead-man cap only; queue wait excluded).
+- `converter.ocr_render_scale`: 2.0 → **1.5**.
+- New: `converter.ocr_limit_side_len` (**1280**) — max page-image side in px (VRAM/CPU cap).
 
 ## Error Handling
 
@@ -152,6 +189,9 @@ next start: query status store for ocr_queued=true
 - Scanned PDF via `memex ingest` → `◎ OCR queued` → Done with chunks.
 - MCP `rag_ingest_file` returns immediately; `rag_processing_status` flips to Done.
 - Crash recovery: kill sync mid-queue → restart → queued files resume.
+- GPU: verify `CUDAExecutionProvider` active in OCR container logs (`nvidia-smi` shows the
+  process); verify CPU fallback still works with the GPU device removed.
+- Timing check: 14-page scanned PDF completes in <90s with GPU.
 
 **Existing tests** must stay green: sync, cli, ocr_fallback, ocr_client, status.
 
