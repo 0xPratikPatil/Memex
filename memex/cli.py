@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
+from collections import OrderedDict
 from pathlib import Path
 
 import typer
@@ -29,6 +31,12 @@ console = Console()
 
 _TERMINAL_STAGES = ("Done", "Skipped", "Error")
 
+# Completed file rows are kept in a small rolling window and older rows are
+# removed. Rich Progress cannot clear a display taller than the terminal
+# (vertical_overflow="visible") — unbounded rows make every refresh scroll
+# instead of redraw in place.
+_MAX_TERMINAL_ROWS = 8
+
 _STAGE_ICONS: dict[str, str] = {
     "Checking": "·",
     "Scanning": "·",
@@ -52,6 +60,49 @@ _STAGE_ICONS: dict[str, str] = {
 def _stage_label(stage: str) -> str:
     """Icon + stage name for the progress row stage column."""
     return f"{_STAGE_ICONS.get(stage, '·')} {stage}"
+
+
+class _ProgressTracker:
+    """Overall + per-file tasks with a bounded rolling terminal-row window."""
+
+    def __init__(self, progress: Progress, total: int | None) -> None:
+        self._progress = progress
+        self.overall = progress.add_task("[bold]Overall", total=total, stage="", detail="")
+        self._file_tasks: dict[str, TaskID] = {}
+        self._terminal_order: OrderedDict[str, TaskID] = OrderedDict()
+        self.done_files: set[str] = set()
+
+    def set_total(self, total: int) -> None:
+        self._progress.update(self.overall, total=total)
+
+    def _evict(self) -> None:
+        while len(self._terminal_order) > _MAX_TERMINAL_ROWS:
+            src, tid = self._terminal_order.popitem(last=False)
+            if src in self._file_tasks:
+                with contextlib.suppress(Exception):
+                    self._progress.remove_task(tid)
+                del self._file_tasks[src]
+
+    def mark_active(self, src: str, stage: str) -> None:
+        tid = self._file_tasks.get(src)
+        if tid is None:
+            tid = self._file_tasks[src] = self._progress.add_task(
+                os.path.basename(src), total=None, stage=_stage_label(stage), detail=""
+            )
+        self._progress.update(tid, stage=_stage_label(stage))
+
+    def mark_done(self, src: str, stage: str, detail: str = "") -> None:
+        tid = self._file_tasks.get(src)
+        if tid is None:
+            tid = self._file_tasks[src] = self._progress.add_task(
+                os.path.basename(src), total=None, stage=_stage_label(stage), detail=detail
+            )
+        self._progress.update(tid, total=1, completed=1, stage=_stage_label(stage), detail=detail)
+        self._terminal_order[src] = tid
+        self._evict()
+        if src not in self.done_files:
+            self.done_files.add(src)
+            self._progress.update(self.overall, completed=len(self.done_files))
 
 
 def _make_progress() -> Progress:
@@ -140,28 +191,7 @@ def ingest(
     status_store = FileStatusStore(engine._get_qdrant())
 
     with _make_progress() as progress:
-        overall = progress.add_task("[bold]Overall", total=total, stage="", detail="")
-        file_tasks: dict[str, TaskID] = {}
-        done_files: set[str] = set()
-
-        def _mark_active(src: str, stage: str) -> None:
-            tid = file_tasks.get(src)
-            if tid is None:
-                tid = file_tasks[src] = progress.add_task(
-                    os.path.basename(src), total=None, stage=_stage_label(stage), detail=""
-                )
-            progress.update(tid, stage=_stage_label(stage))
-
-        def _mark_done(src: str, stage: str, detail: str = "") -> None:
-            tid = file_tasks.get(src)
-            if tid is None:
-                tid = file_tasks[src] = progress.add_task(
-                    os.path.basename(src), total=None, stage=_stage_label(stage), detail=detail
-                )
-            progress.update(tid, total=1, completed=1, stage=_stage_label(stage), detail=detail)
-            if src not in done_files:
-                done_files.add(src)
-                progress.update(overall, completed=len(done_files))
+        tracker = _ProgressTracker(progress, total=total)
 
         def _on_progress(p: FileProgress) -> None:
             if p.stage in _TERMINAL_STAGES:
@@ -170,40 +200,40 @@ def ingest(
                     detail = p.error[:60]
                 elif p.chunks:
                     detail = f"{p.chunks} chunks"
-                _mark_done(p.path, p.stage, detail)
+                tracker.mark_done(p.path, p.stage, detail)
             else:
-                _mark_active(p.path, p.stage)
+                tracker.mark_active(p.path, p.stage)
 
         for file_path in files:
             src = str(file_path)
             status_store.mark_pending(src, source_name=source_name or target.name)
-            _mark_active(src, "Checking")
+            tracker.mark_active(src, "Checking")
 
             try:
                 can_skip, chunk_count = engine.check_unmodified_local(src)
                 if can_skip:
                     status_store.mark_skipped(src, reason="unchanged")
-                    _mark_done(src, "Skipped", f"{chunk_count} chunks")
+                    tracker.mark_done(src, "Skipped", f"{chunk_count} chunks")
                     continue
 
-                _mark_active(src, "Parsing")
+                tracker.mark_active(src, "Parsing")
                 result = parse_file(src)
                 if not result.ok:
                     err = f"{file_path}: {result.status} — {result.errors}"
                     errors.append(err)
                     status_store.mark_failed(src, str(result.errors))
-                    _mark_done(src, "Error", str(result.errors)[:60])
+                    tracker.mark_done(src, "Error", str(result.errors)[:60])
                     continue
 
-                _mark_active(src, "Hashing")
+                tracker.mark_active(src, "Hashing")
                 content_hash = engine.compute_file_hash(result.markdown.encode())
                 already, existing_chunks = engine.is_already_ingested(src, content_hash)
                 if already:
                     status_store.mark_skipped(src, reason="dedup")
-                    _mark_done(src, "Skipped", f"{existing_chunks} chunks")
+                    tracker.mark_done(src, "Skipped", f"{existing_chunks} chunks")
                     continue
 
-                _mark_active(src, "Converting")
+                tracker.mark_active(src, "Converting")
                 chunks = engine.ingest_text(
                     result.markdown,
                     source_identifier=src,
@@ -218,11 +248,11 @@ def ingest(
                 ingested += 1
                 total_chunks += chunks
                 status_store.mark_done(src, chunks=chunks)
-                _mark_done(src, "Done", f"{chunks} chunks")
+                tracker.mark_done(src, "Done", f"{chunks} chunks")
             except Exception as exc:
                 errors.append(f"{file_path}: {exc}")
                 status_store.mark_failed(src, str(exc), exc=exc)
-                _mark_done(src, "Error", str(exc)[:60])
+                tracker.mark_done(src, "Error", str(exc)[:60])
 
     table = Table(title="Ingest Complete", show_header=False, title_style="bold")
     table.add_column("Metric", style="bold")
@@ -255,51 +285,31 @@ def sync(
     yaml_config = YamlConfig(config_path)
 
     with _make_progress() as progress:
-        overall = progress.add_task("[bold]Overall", total=None, stage="", detail="")
-        file_tasks: dict[str, TaskID] = {}
-        done_files: set[str] = set()
+        tracker = _ProgressTracker(progress, total=None)
         seen_total = 0
-
-        def _mark_active(src: str, stage: str) -> None:
-            tid = file_tasks.get(src)
-            if tid is None:
-                tid = file_tasks[src] = progress.add_task(
-                    os.path.basename(src), total=None, stage=_stage_label(stage), detail=""
-                )
-            progress.update(tid, stage=_stage_label(stage))
-
-        def _mark_done(src: str, stage: str, detail: str = "") -> None:
-            tid = file_tasks.get(src)
-            if tid is None:
-                tid = file_tasks[src] = progress.add_task(
-                    os.path.basename(src), total=None, stage=_stage_label(stage), detail=detail
-                )
-            progress.update(tid, total=1, completed=1, stage=_stage_label(stage), detail=detail)
-            if src not in done_files:
-                done_files.add(src)
-                progress.update(overall, completed=len(done_files))
 
         def _on_progress(p: FileProgress) -> None:
             nonlocal seen_total
             if p.total > 0:
                 seen_total = p.total
-                progress.update(overall, total=p.total)
+                tracker.set_total(p.total)
             if p.stage in _TERMINAL_STAGES:
                 detail = ""
                 if p.stage == "Error" and p.error:
                     detail = p.error[:60]
                 elif p.chunks:
                     detail = f"{p.chunks} chunks"
-                _mark_done(p.path, p.stage, detail)
+                tracker.mark_done(p.path, p.stage, detail)
             else:
-                _mark_active(p.path, p.stage)
+                tracker.mark_active(p.path, p.stage)
 
         async def _run() -> SyncStats:
             return await rag_sync(yaml_config, source_name=source_name, dry_run=dry_run, progress_cb=_on_progress)  # type: ignore[return-value]
 
         stats = asyncio.run(_run())
         if seen_total == 0:
-            progress.update(overall, total=1, completed=1)
+            tracker.set_total(1)
+            progress.update(tracker.overall, completed=1)
 
     prefix = "would " if dry_run else ""
     table = Table(title="Sync Complete", show_header=False, title_style="bold")

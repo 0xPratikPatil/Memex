@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from memex.engine.core.errors import CorruptedDocumentError
+from memex.engine.core.errors import CorruptedDocumentError, ServiceUnavailableError
 from memex.engine.ingestion.loader import ConversionResult, _is_poor_quality, _ocr_to_conversion
 
 
@@ -116,3 +116,23 @@ class TestDeferOcr:
 
         assert result.ok is True
         assert result.markdown == "OCR text"
+
+    def test_markitdown_outage_routes_to_ocr(self, tmp_path: Path) -> None:
+        """MarkItDown unreachable (container down) → defer to OCR, not instant failure."""
+        from memex.engine.ingestion.loader import parse_local_file
+
+        f = self._setup(tmp_path)
+        with (
+            patch("memex.engine.ingestion.loader.config.CONVERTER_ENGINE", "markitdown"),
+            patch("memex.engine.ingestion.loader.config.OCR_FALLBACK", True),
+            patch(
+                "memex.engine.ingestion.markitdown_client.convert_markdown",
+                side_effect=ServiceUnavailableError("MarkItDown", "cannot reach http://localhost:5003"),
+            ),
+            patch("memex.engine.utils.cache.get_cached_parse_result", return_value=None),
+            patch("memex.engine.utils.cache.cache_parse_result") as mock_cache_set,
+        ):
+            result = parse_local_file(f, defer_ocr=True)
+
+        assert result.status == "needs_ocr"
+        mock_cache_set.assert_not_called()

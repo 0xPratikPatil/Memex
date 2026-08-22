@@ -324,7 +324,7 @@ def parse_url(url: str, defer_ocr: bool = False) -> ConversionResult:
         try:
             md_result = md_convert(resp.content, filename)
             converted = _markitdown_result_to_conversion(md_result, url)
-        except (CorruptedDocumentError, ConversionError) as exc:
+        except (CorruptedDocumentError, ConversionError, ServiceUnavailableError) as exc:
             logger.warning("MarkItDown failed for %s: %s — attempting OCR", filename, exc)
             converted = ConversionResult(
                 markdown="",
@@ -480,7 +480,7 @@ def parse_local_file(file_path: str, defer_ocr: bool = False) -> ConversionResul
         try:
             md_result = md_convert(file_bytes, filename)
             converted = _markitdown_result_to_conversion(md_result, file_path)
-        except (CorruptedDocumentError, ConversionError) as exc:
+        except (CorruptedDocumentError, ConversionError, ServiceUnavailableError) as exc:
             # MarkItDown produced empty output or failed (e.g. scanned PDF) —
             # treat as poor quality and fall through to OCR below.
             logger.warning("MarkItDown failed for %s: %s — attempting OCR", filename, exc)

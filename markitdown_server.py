@@ -10,7 +10,9 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import time
 from io import BytesIO
 
@@ -25,6 +27,12 @@ app = FastAPI(title="MarkItDown Converter")
 # Lazy singleton — imported once, reused across requests.
 _markitdown_instance = None
 
+# Bound concurrent conversions: each holds a full document in memory and is
+# CPU-heavy. Without this, 8+ concurrent requests OOM the container. Also
+# keeps the event loop responsive so /health never stalls.
+MAX_CONCURRENT = int(os.environ.get("MARKITDOWN_MAX_CONCURRENT", "4"))
+_convert_semaphore = asyncio.Semaphore(MAX_CONCURRENT)
+
 
 def _get_markitdown():
     global _markitdown_instance
@@ -33,6 +41,13 @@ def _get_markitdown():
 
         _markitdown_instance = MarkItDown()
     return _markitdown_instance
+
+
+def _convert_sync(content: bytes, name: str) -> str:
+    """Run MarkItDown synchronously — executed in a worker thread."""
+    md = _get_markitdown()
+    result = md.convert(BytesIO(content), file_name=name)
+    return result.text_content
 
 
 @app.get("/health")
@@ -45,7 +60,7 @@ async def convert(
     file: UploadFile = File(...),  # noqa: B008
     filename: str = Form(default=""),
 ) -> JSONResponse:
-    """Convert a document to Markdown."""
+    """Convert a document to Markdown (CPU work offloaded to threads)."""
     start = time.monotonic()
     name = filename or file.filename or "document"
 
@@ -54,22 +69,22 @@ async def convert(
         if not content:
             raise HTTPException(status_code=400, detail="empty file") from None
 
-        md = _get_markitdown()
-        result = md.convert(BytesIO(content), file_name=name)
+        async with _convert_semaphore:
+            text = await asyncio.to_thread(_convert_sync, content, name)
         elapsed = time.monotonic() - start
 
         logger.info(
             "conversion complete",
-            extra={"source": name, "chars": len(result.text_content), "time": f"{elapsed:.1f}s"},
+            extra={"source": name, "chars": len(text), "time": f"{elapsed:.1f}s"},
         )
 
         return JSONResponse(
             {
                 "success": True,
-                "output": result.text_content,
+                "output": text,
                 "format": _detect_format(name),
                 "processing_time": round(elapsed, 2),
-                "metadata": getattr(result, "metadata", {}) or {},
+                "metadata": {},
             }
         )
     except HTTPException:
