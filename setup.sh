@@ -580,11 +580,10 @@ check_http() {
     ok "$name"
 }
 
-# Health check URLs per service
+# Health check URLs per service (redis has no HTTP endpoint — docker compose healthcheck is sufficient)
 declare -A HEALTH_URLS=(
     [qdrant]="http://localhost:6333/"
     [ollama]="http://localhost:11434/api/tags"
-    [redis]="http://localhost:6379"
     [marker]="http://localhost:5001/health"
     [ml-services]="http://localhost:5002/health"
     [markitdown]="http://localhost:5003/health"
