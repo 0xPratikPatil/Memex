@@ -56,13 +56,13 @@ class OcrQueue:
 
 - `asyncio.Queue[OcrJob]`, FIFO discovery order.
 - N consumer workers (config `converter.ocr_workers`, **default 1**).
-- Consumer per job:
-  1. `status_store.update_stage(source, PipelineStage.OCR)` (+`ocr_queued: false` once started)
-  2. `convert_with_ocr(bytes(local_path))` — dead-man timeout only (default 900s)
-  3. `chunk_markdown_aware(...)` chunking
-  4. ingest via engine (reuse sync's `_ingest_markdown`)
-  5. `mark_done(chunks)` or `mark_failed` + auto-retry queue
-  6. progress events through `progress_cb` so CLI rows animate `◎ OCR`
+- Consumer loop, two phases (see GPU/GpuLock section):
+  1. **OCR phase**: pull job(s) → `status_store.update_stage(source, PipelineStage.OCR)`
+     (+`ocr_queued: false` once started) → `convert_with_ocr(bytes(local_path))` —
+     dead-man timeout only (default 900s); VLM models acquire GpuLock here
+  2. **Ingest phase**: `chunk_markdown_aware(...)` → ingest via engine (reuse sync's
+     `_ingest_markdown`) → `mark_done(chunks)` or `mark_failed` + auto-retry queue
+  3. progress events through `progress_cb` so CLI rows animate `◎ OCR`
 - Any per-job exception is caught; the worker survives and continues with the next job.
 
 ### Status store
@@ -152,6 +152,10 @@ models work on CPU but text-detection (DBNet) on high-res page images is the bot
   VRAM headroom; if Ollama models are resident and VRAM is tight, either evict idle Ollama
   models or wait. OCR's ingest step uses Ollama embeddings, so the two overlap in the
   queue architecture — the lock prevents the same OOM class Marker had.
+- Two-phase consumer loop: **OCR phase** (acquire GpuLock → OCR all currently queued jobs)
+  then **ingest phase** (release → embeddings via Ollama). Amortizes model switching.
+- Server-side idle unload: OCR server frees the active model after N idle seconds
+  (config `OCR_IDLE_UNLOAD_S`, default 300) so Ollama regains VRAM between batches.
 
 ### Expected effect
 
@@ -161,12 +165,52 @@ models work on CPU but text-detection (DBNet) on high-res page images is the bot
   halves CPU-fallback cost with negligible quality loss on deed-type documents.
 - `ocr_workers` stays default 1; with GPU, raising to 2 becomes viable — config knob, not default.
 
+## Multi-Model OCR Backends
+
+Three interchangeable backends behind one abstraction — **exactly one is active**, chosen by
+`converter.ocr_model` config (or `/model/swap` at runtime). No automatic cascade.
+
+### Backend registry (`ocr_server.py`)
+
+| Backend | Model | Backend lib | GPU | CPU |
+|---------|-------|-------------|-----|-----|
+| `pp-ocrv6-small` | RapidOCR det+rec ONNX | `onnxruntime` (CUDA or CPU provider) | ✓ ~500-700MB | ✓ |
+| `granite-docling-258m` | Granite-Docling-258M VLM | `transformers` | ✓ ~600MB fp16 | ✓ (slow) |
+| `lightonocr-2-1b` | LightOnOCR-2-1B VLM | `lightonocr` / `transformers` | ✓ ~4.2GB fp16 | ✓ (very slow) |
+
+- VLM backends operate in **page-image → text** mode: the server renders PDF pages to
+  images (as today) and the VLM reads each page image; no whole-document conversion.
+- Provider auto-detection per backend: try CUDA → fall back to CPU. `/health` reports
+  `{model, provider, loaded}` — "work perfectly on GPU or CPU" means: correct backend
+  loads, correct provider activates, output quality is the model's own.
+- `/model/swap` accepts all three names: unload current (free VRAM) → load new.
+- Weights: downloaded from HuggingFace on first start, cached in named volume
+  `ocr_models` (image stays small; subsequent starts instant).
+- Config: `converter.ocr_model` (default `pp-ocrv6-small`).
+
+### VRAM policy (8GB card, Ollama ~4GB)
+
+- `pp-ocrv6-small` (≤700MB): resident alongside Ollama, no eviction.
+- `granite-docling-258m` (~600MB): resident alongside Ollama, no eviction.
+- `lightonocr-2-1b` (~4.2GB fp16, full precision): requires GpuLock eviction of Ollama
+  (two-phase consumer loop above). Server unloads it after idle so Ollama returns.
+- No quantization (user chose full precision).
+
+### Timeouts
+
+- Dead-man 900s includes model load time (~30-60s for 4.2GB from volume).
+- Per-page VLM time varies widely by provider (GPU: 1-3s; CPU: 30-120s). A 100-page
+  document on CPU could exceed 900s → job marked failed + auto-retry. Acceptable:
+  CPU-VLM is a degraded mode, not the target path.
+
 ## Config Changes
 
 - `converter.ocr_max_concurrent` (2) → **`converter.ocr_workers`** (default **1**).
 - `converter.ocr_timeout`: 600 → **900** (per-job dead-man cap only; queue wait excluded).
 - `converter.ocr_render_scale`: 2.0 → **1.5**.
 - New: `converter.ocr_limit_side_len` (**1280**) — max page-image side in px (VRAM/CPU cap).
+- `converter.ocr_model`: `pp-ocrv6-small` (default) | `granite-docling-258m` | `lightonocr-2-1b`.
+- New (server env): `OCR_IDLE_UNLOAD_S` (**300**).
 
 ## Error Handling
 
@@ -192,6 +236,11 @@ models work on CPU but text-detection (DBNet) on high-res page images is the bot
 - GPU: verify `CUDAExecutionProvider` active in OCR container logs (`nvidia-smi` shows the
   process); verify CPU fallback still works with the GPU device removed.
 - Timing check: 14-page scanned PDF completes in <90s with GPU.
+- Multi-model: for each of the three models — `/health` shows loaded model + provider;
+  OCR one scanned page returns text; `/model/swap` between all three works (VRAM freed);
+  weight download cached in `ocr_models` volume (second start has no network fetch).
+- LightOnOCR-2-1B + GpuLock: while a VLM job runs, Ollama models are evicted; after
+  idle unload, Ollama reloads for embeddings. Verify no OOM on the 8GB card.
 
 **Existing tests** must stay green: sync, cli, ocr_fallback, ocr_client, status.
 
