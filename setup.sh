@@ -580,10 +580,11 @@ check_http() {
     ok "$name"
 }
 
-# Health check URLs per service (redis has no HTTP endpoint — docker compose healthcheck is sufficient)
+# Health check URLs per service
 declare -A HEALTH_URLS=(
     [qdrant]="http://localhost:6333/"
     [ollama]="http://localhost:11434/api/tags"
+    [redis]="redis-cli"
     [marker]="http://localhost:5001/health"
     [ml-services]="http://localhost:5002/health"
     [markitdown]="http://localhost:5003/health"
@@ -605,7 +606,13 @@ for svc in "${BOOT_SERVICES[@]}"; do
         fi
     done
     url="${HEALTH_URLS[$svc]:-}"
-    if [ -n "$url" ]; then
+    if [ "$url" = "redis-cli" ]; then
+        if docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q "PONG"; then
+            ok "$svc"
+        else
+            echo "  ✗ $svc: redis-cli ping failed"
+        fi
+    elif [ -n "$url" ]; then
         check_http "$svc" "$url" 60
     else
         ok "$svc (no health URL configured)"
