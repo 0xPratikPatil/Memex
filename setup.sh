@@ -84,6 +84,7 @@ EMBED=$(_read_config_model "embedding.model" "EMBED_MODEL" "qwen3-embedding:0.6b
 CHAT=$(_read_config_model "llm.model" "CHAT_MODEL" "qwen2.5:1.5b")
 RERANK=$(_read_config_model "reranker.model" "RERANK_MODEL" "Qwen/Qwen3-Reranker-0.6B")
 SPARSE=$(_read_config_model "sparse.model" "SPARSE_MODEL" "Qdrant/bm25")
+OCR=$(_read_config_model "converter.ocr_model" "OCR_MODEL" "pp-ocrv6-medium")
 
 # ── Dynamic service list (reads converter.engine from config.yaml) ──────────
 CONVERTER=$(_read_config_model "converter.engine" "CONVERTER_ENGINE" "marker")
@@ -97,11 +98,7 @@ case "$CONVERTER" in
         BOOT_SERVICES+=(marker ml-services ocr)
         ;;
     markitdown)
-        BOOT_SERVICES+=(markitdown ocr)
-        ;;
-    docling)
-        # Legacy: still needs marker for conversion
-        BOOT_SERVICES+=(marker ml-services)
+        BOOT_SERVICES+=(markitdown ml-services ocr)
         ;;
     *)
         info "unknown converter engine '$CONVERTER' — starting all services"
@@ -510,6 +507,7 @@ echo "  chat       ${CHAT}"
 echo "  rerank     ${RERANK}"
 echo "  sparse     ${SPARSE}"
 echo "  converter  ${CONVERTER}"
+echo "  ocr model  ${OCR} (PP-OCRv6, pre-cached in image)"
 echo "  services   ${BOOT_SERVICES[*]}"
 echo ""
 
@@ -633,6 +631,19 @@ pull() {
 pull "$EMBED"
 pull "$CHAT"
 ok "ready"
+
+# OCR model — pre-cached in the image at build time. Verify the container
+# loaded the model configured in config.yaml (converter.ocr_model).
+if printf '%s\n' "${BOOT_SERVICES[@]}" | grep -qx "ocr"; then
+    info "OCR model: ${OCR} (pre-cached at image build)"
+    OCR_HEALTH=$(curl -sf http://localhost:5004/health 2>/dev/null || echo "")
+    if [ -n "$OCR_HEALTH" ]; then
+        OCR_LOADED=$(echo "$OCR_HEALTH" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('model'), d.get('provider'), d.get('loaded'))" 2>/dev/null || echo "?")
+        echo "  ✓ OCR server: ${OCR_LOADED}"
+    else
+        echo "  → OCR server not responding yet — check: docker compose logs ocr" >&2
+    fi
+fi
 
 # ── 8. Verify models loaded ─────────────────────────────────────────────────
 echo "[8/9] Verify models"

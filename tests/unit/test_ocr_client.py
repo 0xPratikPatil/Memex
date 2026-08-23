@@ -50,6 +50,7 @@ class TestIsOcrAvailable:
         mock_client = MagicMock()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
+        mock_resp.json.return_value = {"status": "ok", "loaded": True, "model": "pp-ocrv6-small"}
         mock_client.get.return_value = mock_resp
 
         with (
@@ -57,6 +58,19 @@ class TestIsOcrAvailable:
             patch("memex.engine.ingestion.ocr_client.config.OCR_URL", "http://localhost:5004"),
         ):
             assert is_ocr_available() is True
+
+    def test_returns_false_when_not_loaded(self) -> None:
+        mock_client = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"status": "ok", "loaded": False, "model": "pp-ocrv6-small"}
+        mock_client.get.return_value = mock_resp
+
+        with (
+            patch("memex.engine.ingestion.ocr_client._get_client", return_value=mock_client),
+            patch("memex.engine.ingestion.ocr_client.config.OCR_URL", "http://localhost:5004"),
+        ):
+            assert is_ocr_available() is False
 
     def test_returns_false_on_error(self) -> None:
         with (

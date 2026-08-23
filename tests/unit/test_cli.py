@@ -69,7 +69,8 @@ class TestIngestCommand:
 
         result = runner.invoke(app, ["ingest", str(test_file)])
         assert result.exit_code == 0
-        assert "Ingested" in result.output
+        assert "ingest complete" in result.output
+        assert "1 ingested" in result.output
         assert "Done" in result.output
 
     @patch("memex.engine.core.pipeline.RAGEngine")
@@ -93,7 +94,8 @@ class TestIngestCommand:
 
         result = runner.invoke(app, ["ingest", str(tmp_path), "--recursive"])
         assert result.exit_code == 0
-        assert "Ingested" in result.output
+        assert "ingest complete" in result.output
+        assert "2 ingested" in result.output
         assert "Done" in result.output
 
     @patch("memex.engine.core.pipeline.RAGEngine")
@@ -155,7 +157,7 @@ class TestIngestCommand:
 
         result = runner.invoke(app, ["ingest", str(test_file)])
         assert result.exit_code == 1
-        assert "failed:" in result.output
+        assert "errors" in result.output
 
     @patch("memex.engine.core.pipeline.RAGEngine")
     @patch("memex.engine.ingestion.loader.parse_file")
@@ -238,7 +240,7 @@ class TestSyncCommand:
 
         result = runner.invoke(app, ["sync"])
         assert result.exit_code == 0
-        assert "Unchanged" in result.output
+        assert "5 unchanged" in result.output
         assert "5" in result.output
 
     @patch("memex.engine.sources.sync.sync", new_callable=AsyncMock)
@@ -253,7 +255,7 @@ class TestSyncCommand:
 
         result = runner.invoke(app, ["sync", "--dry-run"])
         assert result.exit_code == 0
-        assert "Would Changed" in result.output
+        assert "1 would change" in result.output
         assert "1" in result.output
 
     @patch("memex.engine.sources.sync.sync", new_callable=AsyncMock)
@@ -281,7 +283,7 @@ class TestSyncCommand:
 
         result = runner.invoke(app, ["sync"])
         assert result.exit_code == 1
-        assert "failed:" in result.output
+        assert "listing failed" in result.output
 
 
 class TestEvalCommand:

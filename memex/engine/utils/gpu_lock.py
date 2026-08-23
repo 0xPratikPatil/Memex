@@ -38,6 +38,8 @@ _SAFETY_MARGIN_MB = 512
 # llm/embed: Ollama chat + embed models (qwen2.5 1.6G + bge-m3 0.66G) ≈ 2.3GB.
 _OWNER_FOOTPRINT_MB = {
     "marker": 4096,
+    "ocr": 4200,  # lightonocr-2-1b fp16 on CUDA
+    "ocr-small": 700,  # pp-ocrv6-small / granite-docling-258m
     "llm": 2560,
     "embed": 2560,
 }
@@ -179,10 +181,11 @@ class GpuLock:
         # We are the exclusive owner now (or the previous owner released).
         self._owner = owner
 
-        # If we are marker, evict Ollama to free VRAM, then wait for it to drop.
-        if owner == "marker":
+        # If we are marker or ocr (VLM), evict Ollama to free VRAM, then wait.
+        if owner in ("marker", "ocr"):
             logger.info(
-                "GpuLock(marker): used %dMB + footprint %dMB > %dMB — unloading Ollama",
+                "GpuLock(%s): used %dMB + footprint %dMB > %dMB — unloading Ollama",
+                owner,
                 used,
                 footprint,
                 total,
@@ -192,11 +195,12 @@ class GpuLock:
             while time.monotonic() < deadline:
                 freed = _vram_used_mb()
                 if freed is not None and freed + footprint + _SAFETY_MARGIN_MB <= total:
-                    logger.info("GpuLock(marker): VRAM freed (%dMB) — proceeding", freed)
+                    logger.info("GpuLock(%s): VRAM freed (%dMB) — proceeding", owner, freed)
                     return
                 time.sleep(2.0)
             logger.warning(
-                "GpuLock(marker): VRAM still tight after %.0fs — proceeding anyway",
+                "GpuLock(%s): VRAM still tight after %.0fs — proceeding anyway",
+                owner,
                 config.GPU_MAX_WAIT_S,
             )
 

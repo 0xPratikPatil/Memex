@@ -80,7 +80,7 @@ All features are controlled via `config.yaml`. The master toggle for each group 
 
 ### Ingestion
 - **Marker conversion** (`converter.engine=marker`): marker-pdf + Surya OCR in Docker — faster (2.9-7.4 pg/s) and higher quality (76 vs 50 olmocr-bench) than Docling. Recursive chunking is the default.
-- **OCR fallback** (`converter.ocr_fallback`=true): When Marker fails with CUDA OOM (common for scanned PDFs on 8GB GPUs), automatically retry via lightweight OCR service (PP-OCRv6 small, ~500MB VRAM). Standalone Docker container on port 5004.
+- **OCR fallback** (`converter.ocr_fallback`=true): MarkItDown output quality-checked; poor text (scanned PDFs) automatically retried via OCR service running REAL PP-OCRv6 models (rapidocr>=3.9, pre-cached in image, onnxruntime-gpu auto CPU/GPU). One file at a time — queue exposed via `GET /queue`. Standalone Docker container on port 5004.
 - **MarkItDown conversion** (`converter.engine=markitdown`): Microsoft's MarkItDown in Docker — CPU-only, no GPU contention. Handles DOCX, PPTX, XLSX, HTML, EPUB, images (via OCR), audio (via Whisper), CSV, JSON, XML, ZIP. Good for mixed-format corpora where GPU is needed for other tasks.
 - **Multi-format Embedding**: Table chunks → HTML, code chunks → fenced markdown, images → `[Image: caption]`.
 - **Legacy Docling path** (`converter.engine=docling`): kept for rollback only.
@@ -97,13 +97,13 @@ All features are controlled via `config.yaml`. The master toggle for each group 
 
 ### Answer Generation (`answer.enabled`)
 - Cited Answers with `[N]` citations, refusal detection (`answer.refusal_sentinel="INSUFFICIENT_CONTEXT"`), citation confidence scoring.
-- Parameter: `answer.max_context_chars`=12000.
+- Parameter: `answer.max_context_chars`=8000 (fits ollama 4k context window).
 
 ### Document Sources & Sync
 - **Pluggable Sources** (`sources` section in config.yaml): Local directories (`type: local`) + S3 buckets (`type: s3`).
 - **Sync Engine** (`rag_sync`): Reconciles collection against sources — adds new, replaces changed, removes deleted files. Safety: if any source fails to list, all deletions are suppressed for that run.
 
-## MCP Tools (14 available)
+## MCP Tools (15 available)
 
 | Tool | Use when |
 |------|----------|
@@ -114,13 +114,14 @@ All features are controlled via `config.yaml`. The master toggle for each group 
 | `rag_list_documents` | See what documents are indexed |
 | `rag_collection_stats` | Check collection size and config |
 | `rag_delete_document` | Remove a document and its chunks |
-| `rag_service_status` | Check Docker service health |
+| `rag_service_status` | Check Docker service health (incl. OCR model/provider + converter queues) |
 | `rag_sync` | Sync collection against configured sources |
 | `rag_get_filter_context` | Show available metadata fields and values |
 | `rag_extract_filters` | Extract metadata filters from natural language |
 | `rag_eval` | Run golden-set evaluation |
 | `rag_eval_sweep` | Compare multiple retrieval configs side by side |
 | `rag_processing_status` | Show file processing status (pending, converting, done, error) |
+| `rag_retry_failed` | Retry files that previously failed ingestion |
 
 ## Key Config (config.yaml)
 
@@ -131,7 +132,7 @@ All configuration lives in `config.yaml`. Copy `config.example.yaml` to `config.
 | `vectorstore.url` | `http://localhost:6333` | Qdrant vector DB |
 | `vectorstore.collection` | `memex` | Collection name |
 | `embedding.model` | `qwen3-embedding:0.6b` | Ollama embedding model |
-| `embedding.fallback_model` | `bge-m3` | Fallback if primary fails |
+| `embedding.fallback_model` | `bge-m3` | Fallback if primary fails (`""` = disabled) |
 | `embedding.provider` | `ollama` | ollama / openai / huggingface / fastembed |
 | `embedding.dimensions` | `1024` | Vector dimensions |
 | `embedding.batch_size` | `64` | Batch size for embedding |
@@ -142,16 +143,18 @@ All configuration lives in `config.yaml`. Copy `config.example.yaml` to `config.
 | `chunking.overlap` | `128` | Token overlap |
 | `chunking.min_length` | `30` | Minimum chunk length |
 | `chunking.tokenizer` | `Qwen/Qwen3-Embedding-0.6B` | HF tokenizer for chunk sizing |
-| `converter.engine` | `marker` | marker (recommended) / markitdown (CPU-only, multi-format) / docling (legacy) |
+| `converter.engine` | `marker` | marker (recommended) / markitdown (CPU-only, multi-format, default for scanned corpora with OCR fallback) |
+| `ingestion.max_concurrent_parses` | `3` | Parallel document conversions (CLI ingest) |
+| `ingestion.max_concurrent_sync` | `8` | Files processed in parallel during sync |
 | `converter.marker_url` | `http://localhost:5001` | Marker service |
 | `converter.marker_mode` | `fast` | fast (default) / balanced (GPU) |
 | `converter.marker_force_ocr` | `false` | Force OCR on all pages (scanned-only corpora) |
 | `converter.marker_timeout` | `300.0` | Conversion timeout (seconds) |
 | `converter.markitdown_url` | `http://localhost:5003` | MarkItDown service |
-| `converter.markitdown_timeout` | `30.0` | Conversion timeout (seconds) |
-| `converter.ocr_fallback` | `true` | Auto-retry via OCR when Marker OOMs |
+| `converter.markitdown_timeout` | `600.0` | Conversion timeout (seconds — must exceed real conversion time or clients abandon mid-job) |
+| `converter.ocr_fallback` | `true` | Auto-retry via OCR when MarkItDown output is poor (PDFs/images only) |
 | `converter.ocr_url` | `http://localhost:5004` | OCR service |
-| `converter.ocr_model` | `pp-ocrv6-small` | pp-ocrv6-small / lightonocr-2-1b |
+| `converter.ocr_model` | `pp-ocrv6-medium` | Real PP-OCRv6 tiers (rapidocr>=3.9): small / medium; VLM: granite-docling-258m / lightonocr-2-1b |
 | `converter.ocr_timeout` | `120.0` | Conversion timeout (seconds) |
 | `converter.docling_timeout` | `300.0` | Conversion timeout (seconds) |
 | `converter.docling_picture_classify` | `true` | Image classification |
@@ -171,7 +174,7 @@ All configuration lives in `config.yaml`. Copy `config.example.yaml` to `config.
 | `contextual_retrieval.enabled` | `true` | Context prefixes on chunks |
 | `contextual_retrieval.strategy` | `summary` | Context generation strategy |
 | `contextual_retrieval.max_tokens` | `50` | Max tokens in context prefix |
-| `contextual_retrieval.batch_size` | `10` | Batch size for context generation |
+| `contextual_retrieval.batch_size` | `20` | Chunks per LLM call (20x500-char truncation fits 4k context) |
 | `metadata.extraction_enabled` | `true` | Master toggle for all extractors |
 | `metadata.entity_extraction` | `true` | Entity extraction |
 | `metadata.doc_classification` | `true` | Document type classification |
@@ -186,7 +189,7 @@ All configuration lives in `config.yaml`. Copy `config.example.yaml` to `config.
 | `search.mmr.fetch_k` | `20` | MMR candidate pool size |
 | `search.mmr.lambda_mult` | `0.5` | MMR relevance/diversity balance |
 | `answer.enabled` | `false` | Citation-based answer generation |
-| `answer.max_context_chars` | `12000` | Max context for answer generation |
+| `answer.max_context_chars` | `8000` | Max context for answer generation (fits ollama 4k context) |
 | `answer.refusal_sentinel` | `INSUFFICIENT_CONTEXT` | Refusal marker |
 | `mcp.character_limit` | `25000` | Max response characters |
 | `evaluation.log_timing` | `false` | Per-stage pipeline timing in logs |
@@ -293,7 +296,7 @@ memex eval golden.yaml --top-k 5
 
 ### Progress Tracking
 
-All CLI commands use Rich live progress bars. The `sync` command exposes a `progress_cb` callback for per-file stage reporting:
+All CLI commands use Rich live progress bars (description · stage icon · live elapsed · green bar · percent — no spinner, no red pulse). A `memex notes` panel at startup shows config notes (e.g. query expansion cost). MarkItDown and OCR queue rows sit under Overall and always show `idle` / `now: file · waiting: …` (polled from `GET /queue`). Rows evict beyond the terminal height so the display never appends/scrolls. The `sync` command exposes a `progress_cb` callback for per-file stage reporting:
 
 ```python
 from memex.engine.core.progress import FileProgress, ProgressCallback
@@ -304,6 +307,8 @@ async def my_callback(progress: FileProgress) -> None:
 ```
 
 Sync stages: `Scanning` → `Reconciling` → `Hashing` → `Parsing` → `Ingesting` → `Done` | `Error` | `Deleting`
+
+Completion prints a single minimal line (`✓ sync complete in 1m32s — …added · changed · deleted · unchanged · errors`) — no table.
 
 ## LLM Providers
 

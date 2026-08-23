@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
@@ -81,28 +82,43 @@ ML_SERVICES_URL: str = _cfg_str("sparse.url", f"http://localhost:{ML_SERVICES_PO
 QDRANT_URL: str = _cfg_str("vectorstore.url", f"http://localhost:{QDRANT_PORT}")
 REDIS_URL: str = _cfg_str("caching.redis_url", f"redis://localhost:{REDIS_PORT}/0")
 
-# ── Converter engine (marker | docling legacy) ─────────────────────────────────
-CONVERTER_ENGINE: str = _cfg_str("converter.engine", "marker")
-MARKER_URL: str = _cfg_str("converter.marker_url", f"http://localhost:{DOCLING_PORT}")
-MARKER_MODE: str = _cfg_str("converter.marker_mode", "balanced")  # balanced | fast
-MARKER_FORCE_OCR: bool = _cfg_bool("converter.marker_force_ocr", False)
-MARKER_TIMEOUT: float = _cfg_float("converter.marker_timeout", 300.0)
-# Cap concurrent in-flight conversions to Marker. Must stay low enough that
-# the GPU service is not overwhelmed (2 is safe for a single GPU server).
-CONVERTER_MAX_CONCURRENT: int = _cfg_int("converter.max_concurrent", 2)
+# ── Converter engine ──────────────────────────────────────────────────────────
+CONVERTER_ENGINE: str = _cfg_str("converter.engine", "markitdown")
+CONVERTER_MAX_CONCURRENT: int = 2  # cap parallel conversions
 
-# ── MarkItDown (CPU-only alternative to Marker) ───────────────────────────────
+# ── MarkItDown (CPU-only converter) ───────────────────────────────────────────
 MARKITDOWN_URL: str = _cfg_str("converter.markitdown_url", "http://localhost:5003")
-MARKITDOWN_TIMEOUT: float = _cfg_float("converter.markitdown_timeout", 30.0)
+MARKITDOWN_TIMEOUT: float = _cfg_float("converter.markitdown_timeout", 600.0)
 
-# ── OCR fallback (PP-OCRv6 small for scanned PDFs that OOM on Marker) ───────
-OCR_FALLBACK: bool = _cfg_bool("converter.ocr_fallback", True)
+# ── OCR (scanned PDFs that MarkItDown can't extract) ──────────────────────────
 OCR_URL: str = _cfg_str("converter.ocr_url", "http://localhost:5004")
 OCR_MODEL: str = _cfg_str("converter.ocr_model", "pp-ocrv6-small")
-OCR_TIMEOUT: float = _cfg_float("converter.ocr_timeout", 600.0)
+OCR_TIMEOUT: float = _cfg_float("converter.ocr_timeout", 900.0)
 
-# ── API Keys ──────────────────────────────────────────────────────────────────
-DOCLING_API_KEY: str = _cfg_str("converter.docling_api_key", "")
+# ── Legacy constants (kept for backward compat, unused by new code) ──────────
+MARKER_URL: str = ""
+MARKER_TIMEOUT: float = 300.0
+MARKER_MODE: str = "balanced"
+MARKER_FORCE_OCR: bool = False
+OCR_FALLBACK: bool = True
+OCR_WORKERS: int = 1
+OCR_MAX_CONCURRENT: int = 1
+OCR_RENDER_SCALE: float = 1.5
+OCR_LIMIT_SIDE_LEN: int = 1280
+DOCLING_TIMEOUT: float = 300.0
+DOCLING_API_KEY: str = ""
+DOCLING_SERVE_MAX_SYNC_WAIT: int = 120
+DOCLING_SKIP_ON_TIMEOUT: bool = False
+DOCLING_ENRICH_CODE: bool = False
+DOCLING_ENRICH_FORMULA: bool = False
+DOCLING_PICTURE_CLASSIFY: bool = True
+DOCLING_CHART_EXTRACT: bool = False
+DOCLING_IMAGE_EXPORT: str = "embedded"
+DOCLING_PDF_BACKEND: str = "docling_parse"
+DOCLING_TABLE_MODE: str = "accurate"
+DOCLING_TABLE_STRUCTURE: bool = True
+DOCLING_NUM_WORKERS: int = 0
+DOCLING_MAX_CONCURRENT: int = 2
 
 # ── Provider selection ─────────────────────────────────────────────────────────
 LLM_PROVIDER: str = _cfg_str("llm.provider", "ollama")
@@ -125,13 +141,6 @@ RERANK_PROVIDER: str = _cfg_str("reranker.provider", "docker")
 RERANK_TYPE: str = _cfg_str("reranker.type", "auto")
 DENSE_DIM: int = _cfg_int("embedding.dimensions", 1024)
 
-# Auto-switch to local providers when ml-services isn't running (markitdown engine)
-if CONVERTER_ENGINE == "markitdown":
-    if SPARSE_PROVIDER in ("http", "docker"):
-        SPARSE_PROVIDER = "local"
-    if RERANK_PROVIDER in ("http", "docker"):
-        RERANK_PROVIDER = "local"
-
 # ── Chunking ──────────────────────────────────────────────────────────────────
 CHUNK_TOKENIZER: str = _cfg_str("chunking.tokenizer", "Qwen/Qwen3-Embedding-0.6B")
 CHUNK_SIZE: int = _cfg_int("chunking.size", 1024)
@@ -142,12 +151,9 @@ CHUNK_MERGE_PEERS: bool = _cfg_bool("chunking.merge_peers", True)
 
 # ── HTTP client settings ──────────────────────────────────────────────────────
 HTTP_TIMEOUT: float = _cfg_float("http.timeout", 60.0)
-DOCLING_TIMEOUT: float = _cfg_float("converter.docling_timeout", 300.0)
 HTTP_MAX_RETRIES: int = _cfg_int("http.max_retries", 3)
 HTTP_RETRY_BACKOFF: float = _cfg_float("http.retry_backoff", 0.5)
 LLM_TIMEOUT: float = _cfg_float("llm.timeout", HTTP_TIMEOUT)
-# A single LLM read should not need the full total budget — 60s is plenty for
-# one response body. Prevents a transient stall from burning 180s.
 LLM_READ_TIMEOUT: float = _cfg_float("llm.read_timeout", 60.0)
 
 # Connection-level failures (server restart, dropped keep-alive) need a longer
@@ -155,26 +161,11 @@ LLM_READ_TIMEOUT: float = _cfg_float("llm.read_timeout", 60.0)
 HTTP_TRANSPORT_MAX_RETRIES: int = _cfg_int("http.transport_max_retries", 5)
 HTTP_TRANSPORT_RETRY_BACKOFF: float = _cfg_float("http.transport_retry_backoff", 2.0)
 
-# ── Docling Serve settings ────────────────────────────────────────────────────
-DOCLING_SERVE_MAX_SYNC_WAIT: int = _cfg_int("converter.docling_serve_max_sync_wait", 120)
-DOCLING_SKIP_ON_TIMEOUT: bool = _cfg_bool("converter.docling_skip_on_timeout", False)
-
-# ── Docling async settings ────────────────────────────────────────────────────
-DOCLING_POLL_INTERVAL: float = _cfg_float("converter.docling_poll_interval", 5.0)
-DOCLING_MAX_RETRIES: int = _cfg_int("converter.docling_max_retries", 4)
-DOCLING_RETRY_BACKOFF: list[float] = _cfg("converter.docling_retry_backoff", [60.0, 300.0, 1800.0, 7200.0])
-
 # ── Ingestion pipeline settings ───────────────────────────────────────────────
 INGEST_TIMEOUT_PARSE: float = _cfg_float("ingestion.timeout_parse", 120.0)
 INGEST_TIMEOUT_TOTAL: float = _cfg_float("ingestion.timeout_total", 300.0)
 MAX_CONCURRENT_PARSES: int = _cfg_int("ingestion.max_concurrent_parses", 3)
 MAX_CONCURRENT_SYNC: int = _cfg_int("ingestion.max_concurrent_sync", 8)
-
-# ── OCR fallback concurrency ──────────────────────────────────────────────────
-# OCR runs in a separate lane from MarkItDown conversion: conversion workers
-# never block on a multi-minute OCR job — files needing OCR are handed to a
-# dedicated bounded pool while MarkItDown keeps converting other files.
-OCR_MAX_CONCURRENT: int = _cfg_int("converter.ocr_max_concurrent", 2)
 
 # ── Automatic retry queue ─────────────────────────────────────────────────────
 RETRY_BACKOFF_SECONDS: int = _cfg_int("retry.backoff_seconds", 300)
@@ -197,22 +188,7 @@ MCP_HOST: str = _cfg_str("mcp.host", "127.0.0.1")
 CHARACTER_LIMIT: int = _cfg_int("mcp.character_limit", 25000)
 
 # ── Feature toggles ──────────────────────────────────────────────────────────
-ENABLE_OCR: bool = _cfg_bool("converter.docling_ocr", True)
 ENABLE_RERANKING: bool = _cfg_bool("reranker.enabled", True)
-
-# ── Docling enrichment ───────────────────────────────────────────────────────
-DOCLING_ENRICH_CODE: bool = _cfg_bool("converter.docling_enrich_code", False)
-DOCLING_ENRICH_FORMULA: bool = _cfg_bool("converter.docling_enrich_formula", False)
-DOCLING_PICTURE_CLASSIFY: bool = _cfg_bool("converter.docling_picture_classify", True)
-DOCLING_CHART_EXTRACT: bool = _cfg_bool("converter.docling_chart_extract", False)
-DOCLING_IMAGE_EXPORT: str = _cfg_str("converter.docling_image_export", "embedded")
-DOCLING_PDF_BACKEND: str = _cfg_str("converter.docling_pdf_backend", "")
-
-# ── Docling conversion performance (legacy — only used when engine=docling) ──
-DOCLING_TABLE_MODE: str = _cfg_str("converter.docling_table_mode", "accurate")  # accurate | fast
-DOCLING_TABLE_STRUCTURE: bool = _cfg_bool("converter.docling_table_structure", True)
-DOCLING_NUM_WORKERS: int = _cfg_int("converter.docling_num_workers", 0)  # 0 = server default
-DOCLING_MAX_CONCURRENT: int = _cfg_int("converter.docling_max_concurrent", 2)
 
 # ── Query Expansion ──────────────────────────────────────────────────────────
 ENABLE_QUERY_EXPANSION: bool = _cfg_bool("query_expansion.enabled", True)
@@ -230,7 +206,7 @@ ENABLE_CONTEXTUAL_RETRIEVAL: bool = _cfg_bool("contextual_retrieval.enabled", Tr
 CONTEXT_STRATEGY: str = _cfg_str("contextual_retrieval.strategy", "summary")
 CONTEXT_MODEL: str = _cfg_str("contextual_retrieval.model", "")
 CONTEXT_PREFIX_MAX_TOKENS: int = _cfg_int("contextual_retrieval.max_tokens", 50)
-CONTEXT_BATCH_SIZE: int = _cfg_int("contextual_retrieval.batch_size", 10)
+CONTEXT_BATCH_SIZE: int = _cfg_int("contextual_retrieval.batch_size", 20)
 # Cap sequential LLM batches per document — beyond this, remaining batches get
 # section-header fallback (prevents pathological docs from dozens of LLM calls).
 CONTEXT_MAX_BATCHES: int = _cfg_int("contextual_retrieval.max_batches", 8)
@@ -274,27 +250,91 @@ EVAL_LOG_TIMING: bool = _cfg_bool("evaluation.log_timing", False)
 
 # ── Answer Generation ─────────────────────────────────────────────────────────
 ENABLE_ANSWER: bool = _cfg_bool("answer.enabled", False)
-ANSWER_MAX_CONTEXT_CHARS: int = _cfg_int("answer.max_context_chars", 12000)
+ANSWER_MAX_CONTEXT_CHARS: int = _cfg_int("answer.max_context_chars", 8000)
 
 # ── Startup checks ────────────────────────────────────────────────────────────
 
 
+def _stdout_is_tty() -> bool:
+    try:
+        return bool(sys.stdout.isatty())
+    except Exception:
+        return False
+
+
+def _print_notes_panel(notes: list[tuple[str, str, str]]) -> None:
+    """Render startup notes as a single styled panel (CLI/TTY only).
+
+    On non-TTY stdout (MCP stdio transport, piped output) the notes are
+    logged instead — printing to stdout would corrupt the JSON-RPC stream.
+    """
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.text import Text
+
+    console = Console(stderr=False, highlight=False)
+    body = Text()
+    for label, msg, kind in notes:
+        if kind == "warn":
+            body.append(" ⚠ ", style="yellow")
+            body.append(label, style="bold")
+            body.append(f": {msg}\n")
+        else:
+            body.append(" i ", style="cyan")
+            body.append(label, style="bold")
+            body.append(f": {msg}\n")
+    border = "yellow" if any(kind == "warn" for _, _, kind in notes) else "cyan"
+    panel = Panel(body, title="memex notes", title_align="left", border_style=border, expand=False)
+    console.print(panel)
+
+
 def _run_startup_checks() -> None:
-    if EMBED_MODEL == EMBED_MODEL_FALLBACK:
-        _log.warning(
-            "embedding.model and embedding.fallback_model are identical (%s) — fallback will have no effect.",
-            EMBED_MODEL,
+    notes: list[tuple[str, str, str]] = []
+
+    if EMBED_MODEL_FALLBACK and EMBED_MODEL == EMBED_MODEL_FALLBACK:
+        notes.append(
+            (
+                "embedding",
+                f"fallback_model is identical to model ({EMBED_MODEL}) — "
+                'set a different model or "" to disable',
+                "warn",
+            )
         )
-    if RERANK_MODEL == RERANK_MODEL_FALLBACK:
-        _log.warning(
-            "reranker.model and reranker.fallback_model are identical (%s) — fallback will have no effect.",
-            RERANK_MODEL,
+    if RERANK_MODEL_FALLBACK and RERANK_MODEL == RERANK_MODEL_FALLBACK:
+        notes.append(
+            (
+                "reranker",
+                f"fallback_model is identical to model ({RERANK_MODEL}) — "
+                'set a different model or "" to disable',
+                "warn",
+            )
         )
     if ENABLE_CONTEXTUAL_RETRIEVAL:
-        _log.warning("contextual_retrieval is on — doubles embedding cost")
+        notes.append(
+            (
+                "contextual retrieval",
+                "on — doubles embedding cost (each chunk gets an LLM context prefix)",
+                "info",
+            )
+        )
     if ENABLE_QUERY_EXPANSION and (ENABLE_HYDE or ENABLE_MULTI_QUERY or ENABLE_QUERY_REWRITE):
         count = sum([ENABLE_HYDE, ENABLE_MULTI_QUERY, ENABLE_QUERY_REWRITE])
-        _log.warning("Query expansion on with %d sub-techniques — %d+ LLM calls per search", count, count)
+        notes.append(
+            (
+                "query expansion",
+                f"on with {count} sub-techniques — {count}+ LLM calls per search",
+                "info",
+            )
+        )
+
+    if not notes:
+        return
+
+    if _stdout_is_tty():
+        _print_notes_panel(notes)
+    else:
+        for label, msg, _kind in notes:
+            _log.warning("%s: %s", label, msg)
 
 
 _run_startup_checks()

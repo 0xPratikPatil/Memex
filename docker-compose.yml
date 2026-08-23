@@ -223,23 +223,23 @@ services:
     ports:
       - "127.0.0.1:${MARKITDOWN_PORT:-5003}:5003"
     tmpfs:
-      - /tmp:exec,size=64M
+      - /tmp:exec,size=512M
     networks:
       - backend
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:5003/health').raise_for_status()"]
       interval: 30s
       timeout: 5s
-      start_period: 10s
+      start_period: 30s
       retries: 3
     deploy:
       resources:
         limits:
           cpus: "2.0"
-          memory: 1G
+          memory: 3G
         reservations:
-          cpus: "0.25"
-          memory: 256M
+          cpus: "0.5"
+          memory: 512M
     restart: unless-stopped
     stop_grace_period: 10s
     security_opt:
@@ -250,36 +250,56 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ══════════════════════════════════════════════════════════════════════════════
+  # OCR — Multi-model OCR service (RapidOCR + Granite-Docling + LightOnOCR)
+  #
+  # Two build targets (ocr.Dockerfile):
+  #   rapidocr — pp-ocrv6-medium, onnxruntime-gpu (auto CPU/GPU, default)
+  #   vlm      — all 3 models, PyTorch + transformers (~8GB)
+  #
+  # GPU auto-detection: onnxruntime-gpu uses CUDA when available, falls back to
+  # CPU automatically. Just mount GPU with NVIDIA Container Toolkit.
+  # ══════════════════════════════════════════════════════════════════════════════
   ocr:
     build:
       context: .
       dockerfile: ocr.Dockerfile
+      target: ${OCR_BUILD_TARGET:-rapidocr}
+    image: memex-ocr:${OCR_BUILD_TARGET:-rapidocr}
     container_name: memex-ocr
     init: true
     ports:
       - "127.0.0.1:${OCR_PORT:-5004}:5004"
     environment:
-      - OCR_MODEL=${OCR_MODEL:-pp-ocrv6-small}
+      OCR_MODEL: "${OCR_MODEL:-pp-ocrv6-medium}"
+      OCR_IDLE_UNLOAD_S: "${OCR_IDLE_UNLOAD_S:-300}"
+      NVIDIA_VISIBLE_DEVICES: all
+      HF_HOME: /models/huggingface
+      TRANSFORMERS_CACHE: /models/huggingface
     tmpfs:
       - /tmp:exec,size=64M
     networks:
       - backend
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:5004/health').raise_for_status()"]
+      test: ["CMD", "curl", "-sf", "http://localhost:5004/health"]
       interval: 30s
-      timeout: 5s
-      start_period: 30s
+      timeout: 10s
+      start_period: ${OCR_START_PERIOD:-30s}
       retries: 3
     deploy:
       resources:
         limits:
-          cpus: "2.0"
-          memory: 1G
+          cpus: "${OCR_CPU_LIMIT:-2.0}"
+          memory: "${OCR_MEM_LIMIT:-4G}"
         reservations:
-          cpus: "0.25"
-          memory: 256M
+          cpus: "1.0"
+          memory: 2G
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
     restart: unless-stopped
-    stop_grace_period: 10s
+    stop_grace_period: 30s
     security_opt:
       - no-new-privileges:true
     logging:
@@ -288,8 +308,8 @@ services:
         max-size: "10m"
         max-file: "3"
     labels:
-      - "com.memex.service=markitdown"
-      - "com.memex.description=Lightweight document conversion (CPU-only, multi-format)"
+      - "com.memex.service=ocr"
+      - "com.memex.description=OCR service (pp-ocrv6-medium, auto GPU)"
 
   # ── Redis — persistent caching layer ──
   redis:

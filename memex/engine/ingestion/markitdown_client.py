@@ -82,13 +82,18 @@ def _get_client() -> httpx.Client:
 
 
 @retry(
-    retry=retry_if_exception_type(httpx.TransportError),
+    retry=retry_if_exception_type((httpx.ConnectError, httpx.ConnectTimeout)),
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, max=10),
     reraise=True,
 )
 def _post_convert(file_bytes: bytes, filename: str) -> httpx.Response:
-    """POST file to MarkItDown, retrying connection-level failures."""
+    """POST file to MarkItDown, retrying only connection-level failures.
+
+    Read timeouts are NOT retried — the server may still be converting the
+    file in a worker thread. Retrying would queue the same heavy job again
+    and double server load.
+    """
     client = _get_client()
     url = f"{_base_url()}/convert"
     files = {"file": (filename, io.BytesIO(file_bytes), "application/octet-stream")}
@@ -167,6 +172,21 @@ def is_markitdown_available() -> bool:
         return resp.status_code == 200
     except Exception:
         return False
+
+
+def get_queue_status() -> dict[str, Any]:
+    """Live MarkItDown queue state: which file is converting, which wait.
+
+    Returns:
+        {"current": str|None, "pending": [...], "queued": int, "busy": bool}
+        or {"error": ...} when the service is unreachable.
+    """
+    try:
+        resp = _get_client().get(f"{_base_url()}/queue", timeout=3.0)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 def close() -> None:

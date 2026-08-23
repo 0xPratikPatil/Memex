@@ -6,6 +6,8 @@ import asyncio
 import contextlib
 import logging
 import os
+import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 
@@ -15,7 +17,6 @@ from rich.panel import Panel
 from rich.progress import (
     BarColumn,
     Progress,
-    SpinnerColumn,
     TaskID,
     TaskProgressColumn,
     TextColumn,
@@ -31,26 +32,20 @@ console = Console()
 
 _TERMINAL_STAGES = ("Done", "Skipped", "Error")
 
-# Completed file rows are kept in a small rolling window and older rows are
-# removed. Rich Progress cannot clear a display taller than the terminal
-# (vertical_overflow="visible") — unbounded rows make every refresh scroll
-# instead of redraw in place.
-_MAX_TERMINAL_ROWS = 8
-
 _STAGE_ICONS: dict[str, str] = {
-    "Checking": "·",
-    "Scanning": "·",
-    "Reconciling": "·",
+    "Checking": "?",
+    "Scanning": "≡",
+    "Reconciling": "⇄",
     "Hashing": "#",
-    "Parsing": "p",
+    "Parsing": "⇣",
     "Converting": "⚙",
     "OCR": "◎",
-    "Chunking": "⚙",
-    "Context": "ctx",
-    "Metadata": "meta",
-    "Embedding": "emb",
-    "Storing": "···",
-    "Deleting": "del",
+    "Chunking": "▤",
+    "Context": "⌁",
+    "Metadata": "▦",
+    "Embedding": "◆",
+    "Storing": "⇧",
+    "Deleting": "✂",
     "Done": "✓",
     "Skipped": "↷",
     "Error": "✗",
@@ -62,21 +57,55 @@ def _stage_label(stage: str) -> str:
     return f"{_STAGE_ICONS.get(stage, '·')} {stage}"
 
 
+def _fmt_dur(seconds: float) -> str:
+    """Human duration: 2.3s / 1m05s / 1h02m."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, secs = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m{secs:02.0f}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02}m"
+
+
 class _ProgressTracker:
-    """Overall + per-file tasks with a bounded rolling terminal-row window."""
+    """Overall + per-file tasks with a bounded rolling terminal-row window.
+
+    Tracks per-file wall time (first activity → terminal stage) and the
+    total run time for the final summary.
+    """
 
     def __init__(self, progress: Progress, total: int | None) -> None:
         self._progress = progress
         self.overall = progress.add_task("[bold]Overall", total=total, stage="", detail="")
         self._file_tasks: dict[str, TaskID] = {}
         self._terminal_order: OrderedDict[str, TaskID] = OrderedDict()
+        self._start_times: dict[str, float] = {}
+        self.file_times: dict[str, float] = {}
+        self.file_stage: dict[str, str] = {}
         self.done_files: set[str] = set()
+        self._started_ts = time.monotonic()
 
     def set_total(self, total: int) -> None:
         self._progress.update(self.overall, total=total)
 
+    def total_elapsed(self) -> float:
+        return time.monotonic() - self._started_ts
+
+    def _display_budget(self) -> int:
+        """Max rows this display can show without scrolling the terminal.
+
+        Overall + 2 queue rows are fixed; the rest is shared by active and
+        terminal file rows. Eviction keeps the total inside the budget so
+        the live region always redraws in place (never appends).
+        """
+        height = console.size.height or 24
+        return max(6, height - 4)
+
     def _evict(self) -> None:
-        while len(self._terminal_order) > _MAX_TERMINAL_ROWS:
+        while len(self._file_tasks) > self._display_budget():
+            if not self._terminal_order:
+                break
             src, tid = self._terminal_order.popitem(last=False)
             if src in self._file_tasks:
                 with contextlib.suppress(Exception):
@@ -84,14 +113,20 @@ class _ProgressTracker:
                 del self._file_tasks[src]
 
     def mark_active(self, src: str, stage: str) -> None:
+        if src not in self._start_times:
+            self._start_times[src] = time.monotonic()
         tid = self._file_tasks.get(src)
         if tid is None:
             tid = self._file_tasks[src] = self._progress.add_task(
                 os.path.basename(src), total=None, stage=_stage_label(stage), detail=""
             )
+            self._evict()
         self._progress.update(tid, stage=_stage_label(stage))
 
     def mark_done(self, src: str, stage: str, detail: str = "") -> None:
+        start = self._start_times.setdefault(src, time.monotonic())
+        self.file_times[src] = time.monotonic() - start
+        self.file_stage[src] = stage
         tid = self._file_tasks.get(src)
         if tid is None:
             tid = self._file_tasks[src] = self._progress.add_task(
@@ -106,8 +141,12 @@ class _ProgressTracker:
 
 
 def _make_progress() -> Progress:
-    """Progress with per-file rows (indeterminate) + overall bar (determinate).
+    """Progress with per-file rows + overall bar (determinate).
 
+    Minimal pip/git-style layout — description · stage · live elapsed ·
+    bar · percent. No spinner, no red pulse: per-file rows are
+    indeterminate (total=None) and pulse in dim gray; the overall bar
+    fills green as files finish. Elapsed time shows live on every row.
     Text columns use Column(overflow="ellipsis") so rows never wrap —
     line wrapping breaks live redraw and causes duplicated rows.
     """
@@ -116,15 +155,86 @@ def _make_progress() -> Progress:
         return TextColumn(text_format, style=style, table_column=Column(overflow="ellipsis"))
 
     return Progress(
-        SpinnerColumn(),
         _ellipsis_col("[bold]{task.description}"),
         _ellipsis_col("{task.fields[stage]}", style="cyan"),
-        BarColumn(bar_width=20),
+        TimeElapsedColumn(),
+        BarColumn(
+            bar_width=16,
+            complete_style="green",
+            finished_style="green",
+            pulse_style="grey50",
+        ),
         TaskProgressColumn(),
         _ellipsis_col("{task.fields[detail]}"),
         console=console,
         refresh_per_second=10,
     )
+
+
+class _QueueDisplay:
+    """Live converter queue rows: which file is converting now, which wait.
+
+    Polls ``GET {service}/queue`` (MarkItDown + OCR) in background threads
+    and updates one Progress row per service. Rows sit right after the
+    Overall row and are always visible: "idle" when the queue is empty.
+    """
+
+    POLL_INTERVAL_S = 1.0
+
+    def __init__(self, progress: Progress) -> None:
+        self._progress = progress
+        self._stop = threading.Event()
+        self._tasks: dict[str, TaskID] = {}
+
+    def start(self) -> None:
+        from memex.engine.core import config as engine_config
+
+        services = {
+            "MarkItDown": engine_config.MARKITDOWN_URL,
+            "OCR": engine_config.OCR_URL,
+        }
+        for label, base_url in services.items():
+            task = self._progress.add_task(
+                f"[bold]{label} queue",
+                total=None,
+                stage="idle",
+                detail="",
+            )
+            self._tasks[label] = task
+            threading.Thread(
+                target=self._poll,
+                args=(label, base_url, task),
+                daemon=True,
+                name=f"{label.lower()}-queue-poll",
+            ).start()
+
+    def _poll(self, label: str, base_url: str, task: TaskID) -> None:
+        import httpx
+
+        url = f"{base_url.rstrip('/')}/queue"
+        while not self._stop.wait(self.POLL_INTERVAL_S):
+            try:
+                resp = httpx.get(url, timeout=1.5)
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+            except Exception:
+                continue
+
+            current = data.get("current")
+            pending = list(data.get("pending") or [])
+            if current or pending:
+                detail = f"waiting: {', '.join(pending)}" if pending else ""
+                self._progress.update(
+                    task,
+                    stage=f"now: {current}" if current else "starting…",
+                    detail=detail,
+                )
+            else:
+                self._progress.update(task, stage="idle", detail="")
+
+    def stop(self) -> None:
+        self._stop.set()
 
 
 def _setup_logging(verbose: bool, *, quiet: bool = False) -> None:
@@ -136,12 +246,49 @@ def _setup_logging(verbose: bool, *, quiet: bool = False) -> None:
 
 def _progress_columns() -> list:
     return [
-        SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         TaskProgressColumn(),
         TimeElapsedColumn(),
     ]
+
+
+def _print_run_summary(
+    *,
+    title: str,
+    elapsed: float,
+    stats_line: str,
+    errors: list[str],
+) -> None:
+    """Minimal one-line summary — per-file times already live on their rows."""
+    console.print()
+    console.print(
+        f"[bold green]✓ {title}[/] in [bold]{_fmt_dur(elapsed)}[/] — {stats_line}"
+    )
+    for err in errors:
+        console.print(f"  [red]✗ {err}[/]")
+
+
+def _stats_line_ingest(ingested: int, total_chunks: int, error_count: int) -> str:
+    if error_count:
+        return (
+            f"[green]{ingested}[/] ingested · [green]{total_chunks}[/] chunks"
+            f" · [red]{error_count} errors[/]"
+        )
+    return f"[green]{ingested}[/] ingested · [green]{total_chunks}[/] chunks · 0 errors"
+
+
+def _stats_line_sync(stats, dry_run: bool) -> str:
+    prefix = "would " if dry_run else ""
+    changed_verb = "change" if dry_run else "changed"
+    deleted_verb = "delete" if dry_run else "deleted"
+    errors = (
+        f" · [red]{len(stats.errors)} errors[/]" if stats.errors else " · 0 errors"
+    )
+    return (
+        f"[green]{stats.added}[/] added · [yellow]{stats.changed}[/] {prefix}{changed_verb}"
+        f" · [red]{stats.deleted}[/] {prefix}{deleted_verb} · {stats.unchanged} unchanged{errors}"
+    )
 
 
 @app.command()
@@ -192,79 +339,80 @@ def ingest(
 
     with _make_progress() as progress:
         tracker = _ProgressTracker(progress, total=total)
+        queue_display = _QueueDisplay(progress)
+        queue_display.start()
+        try:
+            def _on_progress(p: FileProgress) -> None:
+                if p.stage in _TERMINAL_STAGES:
+                    detail = ""
+                    if p.stage == "Error" and p.error:
+                        detail = p.error[:60]
+                    elif p.chunks:
+                        detail = f"{p.chunks} chunks"
+                    tracker.mark_done(p.path, p.stage, detail)
+                else:
+                    tracker.mark_active(p.path, p.stage)
 
-        def _on_progress(p: FileProgress) -> None:
-            if p.stage in _TERMINAL_STAGES:
-                detail = ""
-                if p.stage == "Error" and p.error:
-                    detail = p.error[:60]
-                elif p.chunks:
-                    detail = f"{p.chunks} chunks"
-                tracker.mark_done(p.path, p.stage, detail)
-            else:
-                tracker.mark_active(p.path, p.stage)
+            for file_path in files:
+                src = str(file_path)
+                status_store.mark_pending(src, source_name=source_name or target.name)
+                tracker.mark_active(src, "Checking")
 
-        for file_path in files:
-            src = str(file_path)
-            status_store.mark_pending(src, source_name=source_name or target.name)
-            tracker.mark_active(src, "Checking")
+                try:
+                    can_skip, chunk_count = engine.check_unmodified_local(src)
+                    if can_skip:
+                        status_store.mark_skipped(src, reason="unchanged")
+                        tracker.mark_done(src, "Skipped", f"{chunk_count} chunks")
+                        continue
 
-            try:
-                can_skip, chunk_count = engine.check_unmodified_local(src)
-                if can_skip:
-                    status_store.mark_skipped(src, reason="unchanged")
-                    tracker.mark_done(src, "Skipped", f"{chunk_count} chunks")
-                    continue
+                    tracker.mark_active(src, "Parsing")
+                    result = parse_file(src)
+                    if not result.ok:
+                        err = f"{file_path}: {result.status} — {result.errors}"
+                        errors.append(err)
+                        status_store.mark_failed(src, str(result.errors))
+                        tracker.mark_done(src, "Error", str(result.errors)[:60])
+                        continue
 
-                tracker.mark_active(src, "Parsing")
-                result = parse_file(src)
-                if not result.ok:
-                    err = f"{file_path}: {result.status} — {result.errors}"
-                    errors.append(err)
-                    status_store.mark_failed(src, str(result.errors))
-                    tracker.mark_done(src, "Error", str(result.errors)[:60])
-                    continue
+                    tracker.mark_active(src, "Hashing")
+                    content_hash = engine.compute_file_hash(result.markdown.encode())
+                    already, existing_chunks = engine.is_already_ingested(src, content_hash)
+                    if already:
+                        status_store.mark_skipped(src, reason="dedup")
+                        tracker.mark_done(src, "Skipped", f"{existing_chunks} chunks")
+                        continue
 
-                tracker.mark_active(src, "Hashing")
-                content_hash = engine.compute_file_hash(result.markdown.encode())
-                already, existing_chunks = engine.is_already_ingested(src, content_hash)
-                if already:
-                    status_store.mark_skipped(src, reason="dedup")
-                    tracker.mark_done(src, "Skipped", f"{existing_chunks} chunks")
-                    continue
+                    tracker.mark_active(src, "Converting")
+                    chunks = engine.ingest_text(
+                        result.markdown,
+                        source_identifier=src,
+                        metadata={
+                            "content_type": file_path.suffix.lstrip("."),
+                            "content_hash": content_hash,
+                            "source_name": source_name or target.name,
+                        },
+                        content_hash=content_hash,
+                        progress_cb=_on_progress,
+                    )
+                    ingested += 1
+                    total_chunks += chunks
+                    status_store.mark_done(src, chunks=chunks)
+                    tracker.mark_done(src, "Done", f"{chunks} chunks")
+                except Exception as exc:
+                    errors.append(f"{file_path}: {exc}")
+                    status_store.mark_failed(src, str(exc), exc=exc)
+                    tracker.mark_done(src, "Error", str(exc)[:60])
+        finally:
+            queue_display.stop()
 
-                tracker.mark_active(src, "Converting")
-                chunks = engine.ingest_text(
-                    result.markdown,
-                    source_identifier=src,
-                    metadata={
-                        "content_type": file_path.suffix.lstrip("."),
-                        "content_hash": content_hash,
-                        "source_name": source_name or target.name,
-                    },
-                    content_hash=content_hash,
-                    progress_cb=_on_progress,
-                )
-                ingested += 1
-                total_chunks += chunks
-                status_store.mark_done(src, chunks=chunks)
-                tracker.mark_done(src, "Done", f"{chunks} chunks")
-            except Exception as exc:
-                errors.append(f"{file_path}: {exc}")
-                status_store.mark_failed(src, str(exc), exc=exc)
-                tracker.mark_done(src, "Error", str(exc)[:60])
-
-    table = Table(title="Ingest Complete", show_header=False, title_style="bold")
-    table.add_column("Metric", style="bold")
-    table.add_column("Value")
-    table.add_row("Ingested", f"[green]{ingested}[/green]")
-    table.add_row("Errors", f"[red]{len(errors)}[/red]" if errors else "0")
-    table.add_row("Total chunks", str(total_chunks))
-    console.print(Panel(table))
+    _print_run_summary(
+        title="ingest complete",
+        elapsed=tracker.total_elapsed(),
+        stats_line=_stats_line_ingest(ingested, total_chunks, len(errors)),
+        errors=errors,
+    )
 
     if errors:
-        for err in errors:
-            console.print(f"  [red]failed:[/red] {err}")
         raise typer.Exit(code=1)
 
 
@@ -286,45 +434,44 @@ def sync(
 
     with _make_progress() as progress:
         tracker = _ProgressTracker(progress, total=None)
-        seen_total = 0
+        queue_display = _QueueDisplay(progress)
+        queue_display.start()
+        try:
+            seen_total = 0
 
-        def _on_progress(p: FileProgress) -> None:
-            nonlocal seen_total
-            if p.total > 0:
-                seen_total = p.total
-                tracker.set_total(p.total)
-            if p.stage in _TERMINAL_STAGES:
-                detail = ""
-                if p.stage == "Error" and p.error:
-                    detail = p.error[:60]
-                elif p.chunks:
-                    detail = f"{p.chunks} chunks"
-                tracker.mark_done(p.path, p.stage, detail)
-            else:
-                tracker.mark_active(p.path, p.stage)
+            def _on_progress(p: FileProgress) -> None:
+                nonlocal seen_total
+                if p.total > 0:
+                    seen_total = p.total
+                    tracker.set_total(p.total)
+                if p.stage in _TERMINAL_STAGES:
+                    detail = ""
+                    if p.stage == "Error" and p.error:
+                        detail = p.error[:60]
+                    elif p.chunks:
+                        detail = f"{p.chunks} chunks"
+                    tracker.mark_done(p.path, p.stage, detail)
+                else:
+                    tracker.mark_active(p.path, p.stage)
 
-        async def _run() -> SyncStats:
-            return await rag_sync(yaml_config, source_name=source_name, dry_run=dry_run, progress_cb=_on_progress)  # type: ignore[return-value]
+            async def _run() -> SyncStats:
+                return await rag_sync(yaml_config, source_name=source_name, dry_run=dry_run, progress_cb=_on_progress)  # type: ignore[return-value]
 
-        stats = asyncio.run(_run())
+            stats = asyncio.run(_run())
+        finally:
+            queue_display.stop()
         if seen_total == 0:
             tracker.set_total(1)
             progress.update(tracker.overall, completed=1)
 
-    prefix = "would " if dry_run else ""
-    table = Table(title="Sync Complete", show_header=False, title_style="bold")
-    table.add_column("Metric", style="bold")
-    table.add_column("Value")
-    table.add_row("Added", f"[green]{stats.added}[/green]")
-    table.add_row(f"{prefix.title()}Changed", f"[yellow]{stats.changed}[/yellow]")
-    table.add_row(f"{prefix.title()}Deleted", f"[red]{stats.deleted}[/red]" if stats.deleted else "0")
-    table.add_row("Unchanged", str(stats.unchanged))
-    table.add_row("Errors", f"[red]{len(stats.errors)}[/red]" if stats.errors else "0")
-    console.print(Panel(table))
+    _print_run_summary(
+        title="sync complete",
+        elapsed=tracker.total_elapsed(),
+        stats_line=_stats_line_sync(stats, dry_run),
+        errors=stats.errors,
+    )
 
     if stats.errors:
-        for err in stats.errors:
-            console.print(f"  [red]failed:[/red] {err}")
         raise typer.Exit(code=1)
 
 

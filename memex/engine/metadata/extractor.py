@@ -399,7 +399,10 @@ class MetadataExtractor:
         )
 
         try:
-            response = self._chat(prompt, num_predict=400)
+            # 1200 tokens: a batch of 10 chunks with entities+topics JSON needs
+            # far more than 400 — truncation caused JSON parse failures and
+            # 10x slower per-chunk fallback calls.
+            response = self._chat(prompt, num_predict=1200)
             parsed = json.loads(self._strip_code_fences(response))
             if not isinstance(parsed, list):
                 parsed = [parsed]

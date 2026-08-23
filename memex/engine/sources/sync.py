@@ -147,14 +147,11 @@ def _convert_file(
     progress_cb: ProgressCallback | None = None,
     file_idx: int = 0,
     total_files: int = 0,
-    defer_ocr: bool = True,
 ) -> dict:
-    """Convert a single file WITHOUT ingesting. OCR is deferred when requested.
+    """Convert a single file WITHOUT ingesting. OCR runs inline if needed.
 
     Returns:
-        {"markdown": str, "chunks": list | None, "needs_ocr": bool}
-        When ``needs_ocr=True`` the caller must run OCR (in the OCR lane)
-        before ingesting.
+        {"markdown": str, "chunks": list | None}
     """
 
     def _emit_pipeline(stage: str, msg: str, pct: int) -> None:
@@ -177,14 +174,10 @@ def _convert_file(
 
         _emit_pipeline("Converting", f"Converting + chunking ({config.CONVERTER_ENGINE.title()})...", 70)
         try:
-            result = chunk_file(file_path, include_doc=True, defer_ocr=defer_ocr)
-            if result.get("needs_ocr"):
-                return {"markdown": "", "chunks": None, "needs_ocr": True}
+            result = chunk_file(file_path, include_doc=True)
             markdown = result.get("markdown", "")
             chunks = result.get("chunks", [])
         except Exception as exc:
-            if isinstance(exc, ConversionTimeoutError) and config.DOCLING_SKIP_ON_TIMEOUT:
-                raise
             if isinstance(exc, MemexError):
                 log.warning(
                     "Hybrid chunking failed for %s (%s: %s), falling back to parse+chunk",
@@ -197,9 +190,7 @@ def _convert_file(
             log.debug("Hybrid chunking fallback detail for %s", file_path, exc_info=True)
             from memex.engine.ingestion.loader import parse_file
 
-            parse_result = parse_file(file_path, defer_ocr=defer_ocr)
-            if parse_result.status == "needs_ocr":
-                return {"markdown": "", "chunks": None, "needs_ocr": True}
+            parse_result = parse_file(file_path)
             if not parse_result.ok:
                 raise IngestionError(
                     file_path,
@@ -213,9 +204,7 @@ def _convert_file(
         if not markdown:
             from memex.engine.ingestion.loader import parse_file
 
-            parse_result = parse_file(file_path, defer_ocr=defer_ocr)
-            if parse_result.status == "needs_ocr":
-                return {"markdown": "", "chunks": None, "needs_ocr": True}
+            parse_result = parse_file(file_path)
             if not parse_result.ok:
                 raise IngestionError(
                     file_path,
@@ -227,9 +216,7 @@ def _convert_file(
         from memex.engine.ingestion.loader import parse_file
 
         _emit_pipeline("Converting", f"Converting ({config.CONVERTER_ENGINE.title()})...", 70)
-        parse_result = parse_file(file_path, defer_ocr=defer_ocr)
-        if parse_result.status == "needs_ocr":
-            return {"markdown": "", "chunks": None, "needs_ocr": True}
+        parse_result = parse_file(file_path)
         if not parse_result.ok:
             raise IngestionError(
                 file_path,
@@ -239,25 +226,7 @@ def _convert_file(
         markdown = parse_result.markdown
         chunks = None
 
-    return {"markdown": markdown, "chunks": chunks, "needs_ocr": False}
-
-
-def _ocr_convert_file(local_path: str) -> str:
-    """Run OCR on a local file (bounded by the OCR concurrency lane)."""
-    from memex.engine.ingestion.ocr_client import convert_with_ocr
-
-    p = Path(local_path)
-    file_bytes = p.read_bytes()
-    result = convert_with_ocr(file_bytes, p.name)
-    if not result.ok:
-        raise IngestionError(
-            local_path,
-            "OCR fallback returned no text",
-            stage=PipelineStage.OCR,
-            hint="The document may be fully image-based without extractable text.",
-        )
-    log.info("OCR produced %d chars for %s", len(result.markdown), local_path)
-    return result.markdown
+    return {"markdown": markdown, "chunks": chunks}
 
 
 def _ingest_markdown(
@@ -325,17 +294,12 @@ def _ingest_file(
     """Convert and ingest a single file (OCR inline). Returns chunk count.
 
     Kept for compatibility with single-file callers and tests. The sync
-    engine itself uses the staged _convert_file / _ocr_convert_file /
-    _ingest_markdown flow so OCR runs in its own concurrency lane.
+    engine itself uses the staged _convert_file / _ingest_markdown flow.
     """
-    conv = _convert_file(engine, file_path, source_identifier, progress_cb, file_idx, total_files, defer_ocr=False)
-    if conv["needs_ocr"]:
-        markdown = _ocr_convert_file(file_path)
-        chunks = None
-    else:
-        markdown = conv["markdown"]
-        chunks = conv["chunks"]
-    return _ingest_markdown(engine, markdown, chunks, source_identifier, file_path, source_name, progress_cb)
+    conv = _convert_file(engine, file_path, source_identifier, progress_cb, file_idx, total_files)
+    return _ingest_markdown(
+        engine, conv["markdown"], conv["chunks"], source_identifier, file_path, source_name, progress_cb
+    )
 
 
 def _int_setting(value, default: int, minimum: int = 0) -> int:
@@ -477,16 +441,11 @@ async def sync(
         total_files = len(new_paths) + len(common_paths) + len(deleted_paths)
 
         # ── Phase 3: Concurrent file processing ──────────────────────────
-        # Two concurrency lanes:
-        #   - `semaphore`      (MarkItDown conversion + ingest, N workers)
-        #   - `ocr_semaphore`  (OCR jobs, bounded separately)
-        # A worker that hits a scanned PDF hands the file to the OCR lane and
-        # releases the main lane — MarkItDown keeps converting other files
-        # while OCR churns (multi-minute jobs) in the background.
+        # Files are processed by a bounded worker pool. MarkItDown and OCR
+        # are separate containers with their own FIFO queues — a scanned
+        # PDF falls back to OCR inline, the converters never block the pool.
         tasks: list[asyncio.Task] = []
         file_idx_counter = 0
-
-        ocr_semaphore = asyncio.Semaphore(_int_setting(config.OCR_MAX_CONCURRENT, 2, 1))
 
         def _schedule_auto_retry(path: str, error: str) -> None:
             """Queue a failed file for automatic retry on the next sync run."""
@@ -518,7 +477,7 @@ async def sync(
 
         def _skip_timeout(path: str, exc: BaseException, idx: int, total: int) -> tuple | None:
             """Return a Skipped tuple when the exception is a timeout-skip."""
-            if isinstance(exc, ConversionTimeoutError) and config.DOCLING_SKIP_ON_TIMEOUT:
+            if isinstance(exc, ConversionTimeoutError):
                 stats.skipped += 1
                 _emit(path, "Skipped", idx, total)
                 status_store.mark_skipped(path, reason="timeout")
@@ -535,35 +494,32 @@ async def sync(
             _source: Source = source,
             _download_dir: Path = download_dir,
             _src_name: str = src_name,
-            _ocr_semaphore: asyncio.Semaphore = ocr_semaphore,
             *,
             kind: str,
         ) -> tuple[str, str] | tuple[str, str, str]:
-            """Convert → (OCR lane) → ingest for one file."""
+            """Convert → ingest for one file."""
             try:
                 if kind == "added":
                     status_store.mark_pending(path, source_name=_src_name)
-                # ── Phase 1: download + convert (MarkItDown lane) ─────────
+                # ── Phase 1: download + convert (MarkItDown + OCR inline) ──
                 async with semaphore:
                     _emit(path, "Converting", idx, total)
                     status_store.update_stage(path, PipelineStage.CONVERTING)
                     local = await asyncio.to_thread(_source.download, sf, _download_dir)
                     conv = await asyncio.to_thread(
-                        _convert_file, engine, str(local), path, progress_cb, idx, total, True
+                        _convert_file, engine, str(local), path, progress_cb, idx, total
                     )
-                # ── Phase 2: OCR (separate lane — MarkItDown continues) ──
-                markdown = conv["markdown"]
-                chunks = conv["chunks"]
-                if conv.get("needs_ocr"):
-                    _emit(path, "OCR", idx, total)
-                    status_store.update_stage(path, PipelineStage.OCR)
-                    async with _ocr_semaphore:
-                        markdown = await asyncio.to_thread(_ocr_convert_file, str(local))
-                    chunks = None
-                # ── Phase 3: ingest (embed + store, MarkItDown lane) ──────
+                # ── Phase 2: ingest (embed + store) ──────────────────────
                 async with semaphore:
                     chunk_count = await asyncio.to_thread(
-                        _ingest_markdown, engine, markdown, chunks, path, str(local), _src_name, progress_cb
+                        _ingest_markdown,
+                        engine,
+                        conv["markdown"],
+                        conv["chunks"],
+                        path,
+                        str(local),
+                        _src_name,
+                        progress_cb,
                     )
                 _emit(path, "Done", idx, total, chunks=chunk_count)
                 status_store.mark_done(path, chunks=chunk_count)

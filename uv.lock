@@ -640,6 +640,22 @@ wheels = [
 ]
 
 [[package]]
+name = "fastapi"
+version = "0.141.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "annotated-doc" },
+    { name = "pydantic" },
+    { name = "starlette" },
+    { name = "typing-extensions" },
+    { name = "typing-inspection" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8a/02/91e3416a8fdd715abb903a952a6bec7cdd8d14eed55d415fc8595524c319/fastapi-0.141.1.tar.gz", hash = "sha256:e8822fc40db1e1858054d7a949a888695bc9bdce70139178e33bd2871a453ca1", size = 425799, upload-time = "2026-07-29T17:18:05.568Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cb/03/10388a42375ee7e4ac9b94eb2c5c569c8b5795e377e701c9ac3ad63de890/fastapi-0.141.1-py3-none-any.whl", hash = "sha256:bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3", size = 131954, upload-time = "2026-07-29T17:18:04.364Z" },
+]
+
+[[package]]
 name = "fastembed"
 version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1639,15 +1655,18 @@ local = [
     { name = "sentence-transformers" },
 ]
 test = [
+    { name = "fastapi" },
     { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
+    { name = "python-multipart" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "datasets", marker = "extra == 'eval'", specifier = ">=3,<4" },
+    { name = "fastapi", marker = "extra == 'test'", specifier = ">=0.115,<1" },
     { name = "fastembed", marker = "extra == 'local'", specifier = ">=0.4,<1" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.27,<1" },
@@ -1661,6 +1680,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.25,<1" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6,<7" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=6,<7" },
+    { name = "python-multipart", marker = "extra == 'test'", specifier = ">=0.0.9,<1" },
     { name = "pyyaml", specifier = ">=6,<7" },
     { name = "qdrant-client", specifier = ">=1.18,<2" },
     { name = "ragas", marker = "extra == 'eval'", specifier = ">=0.2,<1" },

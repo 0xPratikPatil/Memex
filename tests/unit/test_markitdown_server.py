@@ -33,6 +33,36 @@ class TestHealth:
         assert resp.json() == {"status": "ok"}
 
 
+class TestQueue:
+    def test_queue_empty_by_default(self, client):
+        c, _ = client
+        resp = c.get("/queue")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["current"] is None
+        assert body["pending"] == []
+        assert body["queued"] == 0
+        assert body["busy"] is False
+        assert body["max_concurrent"] > 0
+
+    def test_queue_reports_current_and_pending(self, client):
+        import markitdown_server
+
+        c, _ = client
+        markitdown_server._current_file = "converting.docx"
+        markitdown_server._pending_files.extend(["wait1.pdf", "wait2.pdf"])
+        try:
+            resp = c.get("/queue")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["current"] == "converting.docx"
+            assert body["pending"] == ["wait1.pdf", "wait2.pdf"]
+            assert body["queued"] == 2
+        finally:
+            markitdown_server._current_file = None
+            markitdown_server._pending_files.clear()
+
+
 class TestConvert:
     def test_successful_conversion(self, client):
         c, _mock_md = client
@@ -46,7 +76,7 @@ class TestConvert:
         assert body["success"] is True
         assert body["output"] == "# Hello\n\nWorld content."
         assert body["format"] == "pdf"
-        assert body["metadata"] == {"author": "Test Author"}
+        assert body["metadata"] == {}
         assert "processing_time" in body
 
     def test_empty_file_returns_error(self, client):

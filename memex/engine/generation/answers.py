@@ -88,7 +88,7 @@ class Answer:
 
 def _pack_context(
     chunks: list[dict],
-    max_context_chars: int = 12000,
+    max_context_chars: int = 8000,
 ) -> tuple[str, list[dict]]:
     """Pack retrieved chunks into a numbered source block within a character budget.
 
@@ -224,7 +224,7 @@ async def generate_answer(
     query: str,
     chunks: list[dict[str, Any]],
     ollama_chat_fn: Callable[[str], Awaitable[str]],
-    max_context_chars: int = 12000,
+    max_context_chars: int = 8000,
     system_prompt: str | None = None,
     refusal_sentinel: str = REFUSAL_SENTINEL,
 ) -> Answer:

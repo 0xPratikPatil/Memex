@@ -291,7 +291,7 @@ async def rag_ingest_file(input: IngestFileInput, ctx: Context) -> str:
         result = parse_file(file_path_or_url)
 
         if not result.ok:
-            return f"Error: Docling conversion returned status '{result.status}' with errors: {result.errors}"
+            return f"Error: Conversion returned status '{result.status}' with errors: {result.errors}"
 
         await ctx.report_progress(progress=10, total=100, message="Checking content hash...")
         content_hash = engine.compute_file_hash(result.markdown.encode())
@@ -303,7 +303,7 @@ async def rag_ingest_file(input: IngestFileInput, ctx: Context) -> str:
                 f"File unchanged — skipping."
             )
 
-        await ctx.report_progress(progress=15, total=100, message="Converting with Docling...")
+        await ctx.report_progress(progress=15, total=100, message="Converting with MarkItDown...")
         count = engine.ingest_text(
             result.markdown,
             source_identifier=file_path_or_url,
@@ -332,7 +332,7 @@ async def rag_ingest_file(input: IngestFileInput, ctx: Context) -> str:
     title="Ingest URL",
     description="""Parse and index a document from a URL into the RAG vector database.
 
-Fetches the document from the URL and converts it using Docling.
+Fetches the document from the URL and converts it using MarkItDown.
 Supports PDF, Word (docx), Markdown, HTML, and images.
 
 Args:
@@ -383,7 +383,7 @@ async def rag_ingest_url(input: IngestUrlInput, ctx: Context) -> str:
                 f"File unchanged — skipping."
             )
 
-        await ctx.report_progress(progress=15, total=100, message="Converting with Docling...")
+        await ctx.report_progress(progress=15, total=100, message="Converting with MarkItDown...")
         count = engine.ingest_text(
             result.markdown,
             source_identifier=url,
@@ -915,11 +915,14 @@ async def rag_service_status() -> str:
 
     import httpx
 
-    converter_name = "marker" if config.CONVERTER_ENGINE == "marker" else "docling"
+    converter_name = "marker" if config.CONVERTER_ENGINE == "marker" else "markitdown"
     services = {
         "qdrant": config.QDRANT_URL,
         "ollama": config.OLLAMA_EMBED_URL,
-        converter_name: config.DOCLING_URL if config.CONVERTER_ENGINE == "docling" else f"{config.MARKER_URL}/health",
+        converter_name: f"{config.MARKITDOWN_URL}/health"
+        if config.CONVERTER_ENGINE == "markitdown"
+        else f"{config.MARKER_URL}/health",
+        "ocr": config.OCR_URL,
     }
 
     statuses: dict[str, dict[str, Any]] = {}
@@ -943,6 +946,33 @@ async def rag_service_status() -> str:
                     "url": health_url,
                     "latency_ms": round(latency_ms, 2),
                 }
+
+                if name == "ocr" and response.status_code == 200:
+                    data = response.json()
+                    statuses[name]["model"] = data.get("model")
+                    statuses[name]["provider"] = data.get("provider")
+                    statuses[name]["loaded"] = data.get("loaded")
+                    try:
+                        queue_resp = await client.get(f"{base}/queue")
+                        queue_data = queue_resp.json()
+                        statuses[name]["queue"] = {
+                            "current": queue_data.get("current"),
+                            "pending": queue_data.get("pending", []),
+                        }
+                    except httpx.RequestError as qe:
+                        statuses[name]["queue"] = {"error": str(qe)}
+
+                if name == converter_name and name == "markitdown" and response.status_code == 200:
+                    try:
+                        queue_resp = await client.get(f"{base}/queue")
+                        queue_data = queue_resp.json()
+                        statuses[name]["queue"] = {
+                            "current": queue_data.get("current"),
+                            "pending": queue_data.get("pending", []),
+                            "max_concurrent": queue_data.get("max_concurrent"),
+                        }
+                    except httpx.RequestError as qe:
+                        statuses[name]["queue"] = {"error": str(qe)}
             except httpx.RequestError as e:
                 statuses[name] = {
                     "healthy": False,

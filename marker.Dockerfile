@@ -87,13 +87,13 @@ ENV HF_HOME=/app/.cache/huggingface \
 # without this the container downloads 1.35GB+ on every fresh start.
 # NOTE: this stage must NOT fail silently — a failed pre-cache defeats the
 # entire purpose (instant startup, no runtime downloads).
-RUN --network=host python -c \
+RUN python -c \
     "from marker.models import create_model_dict; \
      m = create_model_dict(); \
      print('Marker models cached: %s' % sorted(m.keys()))"
 
 # ── Pre-cache the rendering font (marker downloads it at runtime otherwise) ──
-RUN --network=host sh -c "mkdir -p /opt/venv/lib/python3.11/site-packages/static/fonts && \
+RUN sh -c "mkdir -p /opt/venv/lib/python3.11/site-packages/static/fonts && \
     curl -sfL -o /opt/venv/lib/python3.11/site-packages/static/fonts/GoNotoCurrent-Regular.ttf \
       https://models.datalab.to/artifacts/GoNotoCurrent-Regular.ttf && \
     echo 'Font pre-cached: \$(ls -la /opt/venv/lib/python3.11/site-packages/static/fonts/ | tail -1)'"

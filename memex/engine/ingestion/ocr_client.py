@@ -1,9 +1,10 @@
 """OCR fallback client — calls the lightweight OCR Docker service.
 
-Used when Marker fails with OOM on scanned PDFs. Sends the PDF to the
-OCR service which runs PP-OCRv6 small (ONNX) for text extraction.
+Used when MarkItDown output is poor (scanned PDFs). Sends the PDF to the
+OCR service which runs the configured PP-OCRv6 model (rapidocr, GPU/CPU
+auto-detect) for text extraction.
 
-Architecture mirrors marker_client.py: HTTP client with retry, structured errors.
+Architecture mirrors markitdown_client.py: HTTP client with retry, structured errors.
 """
 
 from __future__ import annotations
@@ -93,12 +94,30 @@ def _post(url: str, files: list[tuple[str, tuple[str, bytes, str]]]) -> httpx.Re
 
 
 def is_ocr_available() -> bool:
-    """Check if the OCR service is reachable."""
+    """Check if the OCR service is reachable and a model is loaded."""
     try:
         resp = _get_client().get(f"{_base_url()}/health")
-        return resp.status_code == 200
+        if resp.status_code != 200:
+            return False
+        data = resp.json()
+        return data.get("loaded", False)
     except Exception:
         return False
+
+
+def get_queue_status() -> dict[str, Any]:
+    """Live OCR queue state: which file is being OCR'd, which are waiting.
+
+    Returns:
+        {"current": str|None, "pending": [...], "queued": int, "busy": bool}
+        or {"error": ...} when the OCR service is unreachable.
+    """
+    try:
+        resp = _get_client().get(f"{_base_url()}/queue", timeout=3.0)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 def convert_with_ocr(file_bytes: bytes, filename: str) -> OcrResult:

@@ -109,6 +109,8 @@ class TestMetadataDefaults:
 
 
 class TestDoclingEnrichmentDefaults:
+    """Legacy Docling settings — kept as stubs for backward compat."""
+
     def test_enrich_code_default_false(self):
         reload(config)
         assert config.DOCLING_ENRICH_CODE is False

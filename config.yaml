@@ -24,7 +24,7 @@ embedding:
   # model: snowflake-arctic-embed2:latest  #   alt ollama (1024d)
   # model: nomic-embed-text:latest         #   alt ollama (768d)
   # model: text-embedding-3-small          #   for openai provider
-  fallback_model: bge-m3                   # used if primary model fails
+  fallback_model: ""                      # "" = disabled (only bge-m3 installed)
   dimensions: 1024                         # must match model output dims
   batch_size: 64                           # texts per sub-batch
   base_url: "http://localhost:11434"       # ollama API
@@ -49,42 +49,15 @@ llm:
   timeout: 180.0                           # total per-LLM-call budget (seconds)
   read_timeout: 60.0                       # max wait for one response body
 
-# ── Document Conversion (Marker) ──────────────────────────────────────────────
+# ── Document Conversion ────────────────────────────────────────────────────
 converter:
-  engine: markitdown                           # marker (recommended) | markitdown (CPU-only, multi-format)
-  marker_url: "http://localhost:5001"
-  # fast = CPU layout + minimal VLM (fits 8GB GPUs for digital PDFs)
-  # balanced = full VLM (needs ≥16GB VRAM; required for scanned books)
-  marker_mode: fast  # auto-detected by setup.sh
-  marker_force_ocr: false                  # force OCR on all pages (scanned-only corpora)
-  marker_timeout: 300.0                    # seconds per conversion
-  max_concurrent: 2                        # cap parallel conversions — keep <= GPU capacity
-  # ── MarkItDown (CPU-only alternative — PDF, DOCX, PPTX, XLSX, HTML, EPUB, etc.) ──
+  engine: markitdown                        # markitdown (CPU-only, multi-format)
   markitdown_url: "http://localhost:5003"
-  markitdown_timeout: 30.0                 # seconds per conversion
-  # ── OCR fallback (PP-OCRv6 small for scanned PDFs that OOM on Marker) ─────
-  ocr_fallback: true                        # auto-retry via OCR when Marker OOMs
+  markitdown_timeout: 600.0                # seconds per conversion (audio/whisper + big files are slow; must exceed server conversion time or clients abandon mid-job)
+  # ── OCR (scanned PDFs that MarkItDown can't extract) ───────────────────
   ocr_url: "http://localhost:5004"
-  ocr_model: pp-ocrv6-small                 # pp-ocrv6-small (default) | lightonocr-2-1b
-  ocr_timeout: 600.0                        # seconds per conversion (scanned PDFs can take minutes)
-  ocr_max_concurrent: 2                     # parallel OCR jobs — MarkItDown keeps converting meanwhile
-  # ── Legacy Docling settings (only used when engine: docling) ──────────
-  docling_url: "http://localhost:5001/v1/convert/source"
-  docling_api_key: ${DOCLING_API_KEY}
-  docling_timeout: 300.0                   # seconds
-  docling_poll_interval: 5.0               # seconds between status polls
-  docling_max_retries: 4                   # max retry attempts on failure
-  docling_retry_backoff: [60.0, 300.0, 1800.0, 7200.0]  # seconds between retries
-  docling_picture_classify: true           # classify images in docs
-  docling_enrich_code: false               # extract code blocks (needs serve-side model)
-  docling_enrich_formula: false            # extract formulas (needs serve-side model)
-  docling_chart_extract: false             # extract chart data (needs serve-side model)
-  docling_ocr: true                        # OCR for scanned PDFs/images (false = ~60% faster, only if no scans)
-  docling_table_structure: true            # table recognition (false = ~16-24% faster, only if no tables matter)
-  docling_table_mode: accurate             # accurate | fast
-  docling_max_concurrent: 2                # cap parallel conversions — keep <= docling ENG_LOC_NUM_WORKERS
-  docling_image_export: embedded           # embedded | referenced | placeholder
-  docling_pdf_backend: "docling_parse"   # docling_parse (recommended) | pypdfium2 | "" (auto)
+  ocr_model: pp-ocrv6-medium                   # auto-detects GPU, falls back to CPU
+  ocr_timeout: 600.0                         # seconds per conversion
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
 chunking:
@@ -107,8 +80,8 @@ reranker:
   # enabled: false                         #   skip reranking entirely
   provider: docker                         # docker (ml-services container) | local (sentence-transformers)
   # provider: local                        #   in-process, GPU if available
-  model: BAAI/bge-reranker-base
-  fallback_model: BAAI/bge-reranker-base
+  model: Qwen/Qwen3-Reranker-0.6B          # what ml-services actually runs
+  fallback_model: BAAI/bge-reranker-base   # used if primary fails
   type: auto                               # auto | cross-encoder | causal-lm
 
 # ── Query Expansion ───────────────────────────────────────────────────────────
@@ -128,7 +101,7 @@ contextual_retrieval:
   strategy: summary                        # summary (only option currently)
   model: ""                                # "" = use llm.model
   max_tokens: 50                           # max tokens in context prefix
-  batch_size: 10                           # chunks per LLM call
+  batch_size: 20                           # chunks per LLM call (20x500-char truncation fits 4k context)
   max_batches: 8                           # cap LLM batches per doc; rest use header fallback
 
 # ── GPU Coordination ──────────────────────────────────────────────────────────
@@ -171,7 +144,7 @@ ingestion:
   timeout_parse: 120.0                     # max seconds per document parse
   timeout_total: 300.0                     # max seconds per document ingestion
   max_concurrent_parses: 3                 # parallel document conversions
-  max_concurrent_sync: 4                   # files processed in parallel during sync
+  max_concurrent_sync: 8                   # files processed in parallel during sync
                                            # (MarkItDown conversion is CPU+RAM heavy; 8+ parallel
                                            #  conversions can OOM the markitdown container)
 
@@ -235,7 +208,7 @@ sync:
 # ── Answer Generation ─────────────────────────────────────────────────────────
 answer:
   enabled: true                            # generate cited answers from search results
-  max_context_chars: 12000                 # max chars fed to LLM for answer
+  max_context_chars: 8000                  # max chars fed to LLM for answer (fits ollama 4k context)
   system_prompt: null                      # null = default prompt
   refusal_sentinel: "INSUFFICIENT_CONTEXT" # returned when context insufficient
 
