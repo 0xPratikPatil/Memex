@@ -15,7 +15,7 @@ from memex.engine.metadata.extractor import MetadataExtractor
 def mock_llm() -> MagicMock:
     provider = MagicMock()
 
-    def _chat_sync(prompt: str, *, model: str | None = None) -> str:
+    def _chat_sync(prompt: str, *, model: str | None = None, num_predict: int | None = None) -> str:
         if "document classifier" in prompt:
             return "report"
         elif "named-entity extractor" in prompt:

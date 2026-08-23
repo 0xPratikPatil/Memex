@@ -513,4 +513,4 @@ class MetadataExtractor:
         if not self._llm:
             return ""
         model = config.METADATA_MODEL or config.CHAT_MODEL
-        return self._llm.chat_sync(prompt, model=model)
+        return self._llm.chat_sync(prompt, model=model, num_predict=num_predict)

@@ -156,9 +156,9 @@ class TestOllamaLLM:
 
     @pytest.mark.asyncio
     async def test_chat_after_chat_sync_rebinds_client_to_loop(self) -> None:
-        """chat_sync() runs in a temporary event loop; the next await chat()
-        must recreate the httpx client for the current loop instead of
-        reusing the one bound to the closed loop."""
+        """chat_sync() runs on a per-thread loop with a per-thread client;
+        a chat() on another loop/thread must get its own client — never the
+        one bound to the other thread's loop."""
         mock_response = MagicMock()
         mock_response.json.return_value = {"message": {"content": "ok"}}
         mock_response.raise_for_status = MagicMock()
@@ -177,11 +177,10 @@ class TestOllamaLLM:
             llm.chat_sync("sync test")
             await llm.chat("async test")
 
-        # chat_sync (temp loop) and chat (current loop) must each get a
-        # fresh client — never the dead one from the closed loop.
+        # chat_sync (worker thread) and chat (test thread) each get a
+        # dedicated client — never shared across threads/loops.
         assert len(clients) == 2
-        assert llm._client is clients[-1]
-        assert llm._client_loop is not None
+        assert llm._client_local.client is clients[-1]
 
 
 # ── Ollama Embedder ────────────────────────────────────────────────────────

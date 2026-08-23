@@ -357,9 +357,6 @@ async def sync(
 
     status_store = FileStatusStore(qdrant_client=engine._get_qdrant())
 
-    max_concurrent = config.MAX_CONCURRENT_SYNC
-    semaphore = asyncio.Semaphore(max_concurrent)
-
     # 2-3. List files from each source
     all_source_files: dict[str, list[SourceFile]] = {}
     for src_cfg in source_configs:
@@ -441,10 +438,10 @@ async def sync(
         total_files = len(new_paths) + len(common_paths) + len(deleted_paths)
 
         # ── Phase 3: Concurrent file processing ──────────────────────────
-        # Files are processed by a bounded worker pool. MarkItDown and OCR
-        # are separate containers with their own FIFO queues — a scanned
-        # PDF falls back to OCR inline, the converters never block the pool.
-        tasks: list[asyncio.Task] = []
+        # Files are processed by a bounded synchronous thread pool.
+        # MarkItDown and OCR are separate containers with their own FIFO
+        # queues — a scanned PDF falls back to OCR inline, the converters
+        # never block the pool.
         file_idx_counter = 0
 
         def _schedule_auto_retry(path: str, error: str) -> None:
@@ -486,7 +483,7 @@ async def sync(
                 return ("skipped", path)
             return None
 
-        async def _convert_and_ingest(
+        def _convert_and_ingest(
             path: str,
             sf: SourceFile,
             idx: int,
@@ -497,30 +494,25 @@ async def sync(
             *,
             kind: str,
         ) -> tuple[str, str] | tuple[str, str, str]:
-            """Convert → ingest for one file."""
+            """Convert → ingest for one file (runs in a pool thread)."""
             try:
                 if kind == "added":
                     status_store.mark_pending(path, source_name=_src_name)
                 # ── Phase 1: download + convert (MarkItDown + OCR inline) ──
-                async with semaphore:
-                    _emit(path, "Converting", idx, total)
-                    status_store.update_stage(path, PipelineStage.CONVERTING)
-                    local = await asyncio.to_thread(_source.download, sf, _download_dir)
-                    conv = await asyncio.to_thread(
-                        _convert_file, engine, str(local), path, progress_cb, idx, total
-                    )
+                _emit(path, "Converting", idx, total)
+                status_store.update_stage(path, PipelineStage.CONVERTING)
+                local = _source.download(sf, _download_dir)
+                conv = _convert_file(engine, str(local), path, progress_cb, idx, total)
                 # ── Phase 2: ingest (embed + store) ──────────────────────
-                async with semaphore:
-                    chunk_count = await asyncio.to_thread(
-                        _ingest_markdown,
-                        engine,
-                        conv["markdown"],
-                        conv["chunks"],
-                        path,
-                        str(local),
-                        _src_name,
-                        progress_cb,
-                    )
+                chunk_count = _ingest_markdown(
+                    engine,
+                    conv["markdown"],
+                    conv["chunks"],
+                    path,
+                    str(local),
+                    _src_name,
+                    progress_cb,
+                )
                 _emit(path, "Done", idx, total, chunks=chunk_count)
                 status_store.mark_done(path, chunks=chunk_count)
                 completed.increment()
@@ -532,7 +524,7 @@ async def sync(
                     return skipped
                 return _fail(path, exc, idx, total, msg="Failed to ingest '%s': %s")
 
-        async def _process_new(
+        def _process_new(
             path: str,
             sf: SourceFile,
             idx: int,
@@ -543,55 +535,53 @@ async def sync(
                 _emit(path, "Done", idx, total)
                 completed.increment()
                 return ("added", path)
-            return await _convert_and_ingest(path, sf, idx, total, kind="added")
+            return _convert_and_ingest(path, sf, idx, total, kind="added")
 
-        async def _process_changed(
+        def _process_changed(
             path: str,
             sf: SourceFile,
             idx: int,
             total: int,
         ) -> tuple[str, str] | tuple[str, str, str]:
             try:
-                async with semaphore:
-                    _emit(path, "Deleting", idx, total)
-                    status_store.update_stage(path, PipelineStage.DELETING)
-                    await asyncio.to_thread(engine.delete_by_source, path)
+                _emit(path, "Deleting", idx, total)
+                status_store.update_stage(path, PipelineStage.DELETING)
+                engine.delete_by_source(path)
             except Exception as exc:
                 return _fail(path, exc, idx, total, msg="Failed to update '%s': %s")
-            return await _convert_and_ingest(path, sf, idx, total, kind="changed")
+            return _convert_and_ingest(path, sf, idx, total, kind="changed")
 
-        async def _process_deleted(path: str, idx: int, total: int) -> tuple[str, str] | tuple[str, str, str]:
-            async with semaphore:
-                if suppress_deletions:
-                    log.warning(
-                        "Suppressing deletion for '%s' (source listing failed or empty)",
-                        path,
-                    )
-                    _emit(path, "Done", idx, total)
-                    completed.increment()
-                    return ("unchanged", path)
-                if dry_run:
-                    log.info("[dry-run] Would delete: %s", path)
-                    _emit(path, "Done", idx, total)
-                    completed.increment()
-                    return ("deleted", path)
-                try:
-                    _emit(path, "Deleting", idx, total)
-                    status_store.update_stage(path, PipelineStage.DELETING)
-                    await asyncio.to_thread(engine.delete_by_source, path)
-                    status_store.mark_deleted(path)
-                    _emit(path, "Done", idx, total)
-                    completed.increment()
-                    log.info("Deleted '%s'", path)
-                    return ("deleted", path)
-                except Exception as exc:
-                    _log_file_error("Failed to delete '%s': %s", path, exc, stage=PipelineStage.ERROR)
-                    _emit(path, "Error", idx, total, error=str(exc))
-                    status_store.mark_failed(path, str(exc), exc=exc)
-                    completed.increment()
-                    return ("error", path, str(exc))
+        def _process_deleted(path: str, idx: int, total: int) -> tuple[str, str] | tuple[str, str, str]:
+            if suppress_deletions:
+                log.warning(
+                    "Suppressing deletion for '%s' (source listing failed or empty)",
+                    path,
+                )
+                _emit(path, "Done", idx, total)
+                completed.increment()
+                return ("unchanged", path)
+            if dry_run:
+                log.info("[dry-run] Would delete: %s", path)
+                _emit(path, "Done", idx, total)
+                completed.increment()
+                return ("deleted", path)
+            try:
+                _emit(path, "Deleting", idx, total)
+                status_store.update_stage(path, PipelineStage.DELETING)
+                engine.delete_by_source(path)
+                status_store.mark_deleted(path)
+                _emit(path, "Done", idx, total)
+                completed.increment()
+                log.info("Deleted '%s'", path)
+                return ("deleted", path)
+            except Exception as exc:
+                _log_file_error("Failed to delete '%s': %s", path, exc, stage=PipelineStage.ERROR)
+                _emit(path, "Error", idx, total, error=str(exc))
+                status_store.mark_failed(path, str(exc), exc=exc)
+                completed.increment()
+                return ("error", path, str(exc))
 
-        async def _process_unchanged(
+        def _process_unchanged(
             path: str,
             sf: SourceFile,
             idx: int,
@@ -599,62 +589,79 @@ async def sync(
             _source: Source = source,
             _stored_hashes: dict[str, str] = stored_hashes,
         ) -> tuple[str, str] | tuple[str, str, str]:
-            async with semaphore:
+            try:
+                current_hash = _source.get_content_hash(sf)
+            except Exception as exc:
+                _log_file_error("Failed to hash '%s': %s", path, exc, stage=PipelineStage.HASHING)
+                _emit(path, "Error", idx, total, error=str(exc))
+                status_store.mark_failed(path, str(exc), exc=exc)
+                completed.increment()
+                return ("error", path, str(exc))
+
+            stored_hash = _stored_hashes.get(path, "")
+            if current_hash == stored_hash:
+                # Hash unchanged — but the stored metadata may be stale
+                # (e.g. METADATA_VERSION bumped). Re-ingest in that case
+                # so new metadata fields/prompts reach the collection.
                 try:
-                    current_hash = await asyncio.to_thread(_source.get_content_hash, sf)
-                except Exception as exc:
-                    _log_file_error("Failed to hash '%s': %s", path, exc, stage=PipelineStage.HASHING)
-                    _emit(path, "Error", idx, total, error=str(exc))
-                    status_store.mark_failed(path, str(exc), exc=exc)
-                    completed.increment()
-                    return ("error", path, str(exc))
+                    already, _ = engine.is_already_ingested(path, current_hash)
+                except Exception:
+                    already = True
+                if not already:
+                    log.info("Metadata version changed for %s — re-ingesting", path)
+                    return _process_changed(path, sf, idx, total)
+                _emit(path, "Done", idx, total)
+                # Already ingested & unchanged — the file is done, no state
+                # change. Marking 'skipped' here would be an illegal
+                # transition from 'done' (and semantically wrong).
+                completed.increment()
+                return ("unchanged", path)
 
-                stored_hash = _stored_hashes.get(path, "")
-                if current_hash == stored_hash:
-                    _emit(path, "Done", idx, total)
-                    # Already ingested & unchanged — the file is done, no state
-                    # change. Marking 'skipped' here would be an illegal
-                    # transition from 'done' (and semantically wrong).
-                    completed.increment()
-                    return ("unchanged", path)
-
-                if dry_run:
-                    log.info("[dry-run] Would update: %s", path)
-                    _emit(path, "Done", idx, total)
-                    completed.increment()
-                    return ("changed", path)
+            if dry_run:
+                log.info("[dry-run] Would update: %s", path)
+                _emit(path, "Done", idx, total)
+                completed.increment()
+                return ("changed", path)
 
             # Changed file — delete old chunks, then convert + ingest
-            try:
-                async with semaphore:
-                    _emit(path, "Deleting", idx, total)
-                    status_store.update_stage(path, PipelineStage.DELETING)
-                    await asyncio.to_thread(engine.delete_by_source, path)
-            except Exception as exc:
-                return _fail(path, exc, idx, total, msg="Failed to update '%s': %s")
-            return await _convert_and_ingest(path, sf, idx, total, kind="changed")
+            return _process_changed(path, sf, idx, total)
 
-        # Build task list
+        # Build work list (path, fn, args)
+        work_items: list[tuple[str, object, tuple]] = []
         for path in new_paths:
             file_idx_counter += 1
-            tasks.append(asyncio.create_task(_process_new(path, current_map[path], file_idx_counter, total_files)))
+            work_items.append((path, _process_new, (path, current_map[path], file_idx_counter, total_files)))
 
         for path in common_paths:
             file_idx_counter += 1
-            tasks.append(
-                asyncio.create_task(_process_unchanged(path, current_map[path], file_idx_counter, total_files))
-            )
+            work_items.append((path, _process_unchanged, (path, current_map[path], file_idx_counter, total_files)))
 
         for path in deleted_paths:
             file_idx_counter += 1
-            tasks.append(asyncio.create_task(_process_deleted(path, file_idx_counter, total_files)))
+            work_items.append((path, _process_deleted, (path, file_idx_counter, total_files)))
 
-        # Run all tasks concurrently
-        if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Run all files through a synchronous thread pool. The per-file
+        # pipeline (parse → context → metadata → embed → store) is written
+        # with sync calls and proven stable in plain threads; the async
+        # task/semaphore orchestration was racy (orphaned to_thread futures
+        # froze the whole sync), so the pool is the only concurrency here.
+        results: list[tuple | BaseException] = []
+        if work_items:
+            max_workers = int(getattr(config, "MAX_CONCURRENT_SYNC", 4) or 1)
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures: list[concurrent.futures.Future] = []
+                for _path, fn, args in work_items:
+                    futures.append(pool.submit(fn, *args))  # type: ignore[arg-type]
+                for future in futures:
+                    try:
+                        results.append(future.result())
+                    except BaseException as exc:
+                        results.append(exc)
 
             for r in results:
-                if isinstance(r, Exception):
+                if isinstance(r, BaseException):
                     stats.errors.append(str(r))
                 elif isinstance(r, tuple):
                     tag = r[0]

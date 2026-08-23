@@ -6,8 +6,8 @@ backed by a local or remote Ollama instance.
 
 from __future__ import annotations
 
-import asyncio
 import logging
+import threading
 from typing import Any
 
 import httpx
@@ -27,19 +27,18 @@ class OllamaLLM(LLMProvider):
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._timeout = timeout
-        self._client: httpx.AsyncClient | None = None
-        self._client_loop: asyncio.AbstractEventLoop | None = None
+        self._client_local = threading.local()
 
     def _get_client(self) -> httpx.AsyncClient:
-        # Track the event loop that created the client. chat_sync() runs
-        # asyncio.run() in a worker thread, so the client is bound to a
-        # temporary loop that closes afterwards. Recreate the client for
-        # the current loop instead of reusing the dead one.
-        loop = asyncio.get_running_loop()
-        if self._client is None or self._client.is_closed or self._client_loop is not loop:
+        # Per-thread client, paired with the per-thread event loop from
+        # base.py's chat_sync. A shared client across threads is fatal:
+        # thread B's _get_client() would replace the client thread A is
+        # mid-request on, orphaning A's await forever.
+        client = getattr(self._client_local, "client", None)
+        if client is None or client.is_closed:
             from memex.engine.core import config
 
-            self._client = httpx.AsyncClient(
+            client = httpx.AsyncClient(
                 # Phase-split timeouts: a single read must not burn the whole
                 # total budget (a transient stall fails fast and retries).
                 timeout=httpx.Timeout(
@@ -50,8 +49,8 @@ class OllamaLLM(LLMProvider):
                 ),
                 limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
             )
-            self._client_loop = loop
-        return self._client
+            self._client_local.client = client
+        return client
 
     async def chat(self, prompt: str, *, model: str | None = None, num_predict: int | None = None) -> str:
         """Post to ``/api/chat`` and return assistant content.
@@ -78,9 +77,11 @@ class OllamaLLM(LLMProvider):
         return content
 
     async def close(self) -> None:
-        if self._client is not None and not self._client.is_closed:
-            await self._client.aclose()
-            self._client = None
+        clients = [getattr(self._client_local, "client", None)]
+        for client in clients:
+            if client is not None and not client.is_closed:
+                await client.aclose()
+        self._client_local.client = None
 
 
 class OllamaEmbedder(EmbedProvider):

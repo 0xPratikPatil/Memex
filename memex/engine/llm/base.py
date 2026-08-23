@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from abc import ABC, abstractmethod
 
 import httpx
@@ -19,6 +20,26 @@ _RETRYABLE_LLM_ERRORS = (httpx.TimeoutException, httpx.TransportError)
 
 # 1 initial attempt + 2 retries, 2s/4s backoff.
 _LLM_MAX_ATTEMPTS = 3
+
+# Per-thread event loop for sync LLM calls. asyncio.run() per call creates a
+# fresh loop every time; async clients (httpx) bound to a previous loop
+# deadlock on the next call (await never resolves). One persistent loop per
+# thread keeps clients stable and calls reliable.
+_thread_loop_local = threading.local()
+
+# Serializes sync LLM calls across worker threads. One model on one GPU can
+# only serve one request at a time anyway, and concurrent async clients
+# across threads race on the shared provider instance — a second thread's
+# client swap orphans the first thread's in-flight request forever.
+_llm_sync_lock = threading.Lock()
+
+
+def _get_thread_loop() -> asyncio.AbstractEventLoop:
+    loop = getattr(_thread_loop_local, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        _thread_loop_local.loop = loop
+    return loop
 
 
 def _llm_retry(fn, *args, **kwargs):
@@ -66,7 +87,11 @@ class LLMProvider(ABC):
         try:
             _ = asyncio.get_running_loop()
         except RuntimeError:
-            result, _attempts = _llm_retry(lambda: asyncio.run(self.chat(prompt, model=model, num_predict=num_predict)))
+            loop = _get_thread_loop()
+            with _llm_sync_lock:
+                result, _attempts = _llm_retry(
+                    lambda: loop.run_until_complete(self.chat(prompt, model=model, num_predict=num_predict))
+                )
             return result
         import concurrent.futures
 
@@ -83,7 +108,11 @@ class LLMProvider(ABC):
         try:
             _ = asyncio.get_running_loop()
         except RuntimeError:
-            return _llm_retry(lambda: asyncio.run(self.chat(prompt, model=model, num_predict=num_predict)))
+            loop = _get_thread_loop()
+            with _llm_sync_lock:
+                return _llm_retry(
+                    lambda: loop.run_until_complete(self.chat(prompt, model=model, num_predict=num_predict))
+                )
 
         import concurrent.futures
 
