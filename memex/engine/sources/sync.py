@@ -650,15 +650,27 @@ async def sync(
             max_workers = int(getattr(config, "MAX_CONCURRENT_SYNC", 4) or 1)
             import concurrent.futures
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-                futures: list[concurrent.futures.Future] = []
-                for _path, fn, args in work_items:
-                    futures.append(pool.submit(fn, *args))  # type: ignore[arg-type]
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+            futures: list[concurrent.futures.Future] = []
+            for _path, fn, args in work_items:
+                futures.append(pool.submit(fn, *args))  # type: ignore[arg-type]
+            try:
                 for future in futures:
                     try:
                         results.append(future.result())
                     except BaseException as exc:
                         results.append(exc)
+            except KeyboardInterrupt:
+                # Ctrl+C must stop the sync promptly. Cancel queued work and
+                # don't wait for in-flight files (shutdown(wait=True) would
+                # block minutes on LLM-heavy files). Per-file statuses are
+                # checkpointed; the next sync resumes pending files.
+                log.info("Sync interrupted — cancelling queued work")
+                for future in futures:
+                    future.cancel()
+                pool.shutdown(wait=False, cancel_futures=True)
+                raise
+            pool.shutdown(wait=True)
 
             for r in results:
                 if isinstance(r, BaseException):

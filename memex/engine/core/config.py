@@ -206,7 +206,7 @@ ENABLE_CONTEXTUAL_RETRIEVAL: bool = _cfg_bool("contextual_retrieval.enabled", Tr
 CONTEXT_STRATEGY: str = _cfg_str("contextual_retrieval.strategy", "summary")
 CONTEXT_MODEL: str = _cfg_str("contextual_retrieval.model", "")
 CONTEXT_PREFIX_MAX_TOKENS: int = _cfg_int("contextual_retrieval.max_tokens", 50)
-CONTEXT_BATCH_SIZE: int = _cfg_int("contextual_retrieval.batch_size", 20)
+CONTEXT_BATCH_SIZE: int = _cfg_int("contextual_retrieval.batch_size", 5)
 # Cap sequential LLM batches per document — beyond this, remaining batches get
 # section-header fallback (prevents pathological docs from dozens of LLM calls).
 CONTEXT_MAX_BATCHES: int = _cfg_int("contextual_retrieval.max_batches", 8)

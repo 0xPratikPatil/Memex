@@ -32,20 +32,21 @@ console = Console()
 
 _TERMINAL_STAGES = ("Done", "Skipped", "Error")
 
+# Icons use only widely-supported glyphs (DejaVu/Noto/common terminal fonts).
 _STAGE_ICONS: dict[str, str] = {
     "Checking": "?",
     "Scanning": "≡",
-    "Reconciling": "⇄",
+    "Reconciling": "↻",
     "Hashing": "#",
-    "Parsing": "⇣",
+    "Parsing": "↓",
     "Converting": "⚙",
     "OCR": "◎",
-    "Chunking": "▤",
-    "Context": "⌁",
-    "Metadata": "▦",
+    "Chunking": "▶",
+    "Context": ">",
+    "Metadata": "✦",
     "Embedding": "◆",
-    "Storing": "⇧",
-    "Deleting": "✂",
+    "Storing": "↑",
+    "Deleting": "✕",
     "Done": "✓",
     "Skipped": "↷",
     "Error": "✗",
@@ -151,12 +152,16 @@ def _make_progress() -> Progress:
     line wrapping breaks live redraw and causes duplicated rows.
     """
 
-    def _ellipsis_col(text_format: str, style: str = "none") -> TextColumn:
-        return TextColumn(text_format, style=style, table_column=Column(overflow="ellipsis"))
+    def _ellipsis_col(text_format: str, style: str = "none", min_width: int = 0) -> TextColumn:
+        return TextColumn(
+            text_format,
+            style=style,
+            table_column=Column(overflow="ellipsis", min_width=min_width or None),
+        )
 
     return Progress(
         _ellipsis_col("[bold]{task.description}"),
-        _ellipsis_col("{task.fields[stage]}", style="cyan"),
+        _ellipsis_col("{task.fields[stage]}", style="cyan", min_width=16),
         TimeElapsedColumn(),
         BarColumn(
             bar_width=16,
@@ -176,7 +181,8 @@ class _QueueDisplay:
 
     Polls ``GET {service}/queue`` (MarkItDown + OCR) in background threads
     and updates one Progress row per service. Rows sit right after the
-    Overall row and are always visible: "idle" when the queue is empty.
+    Overall row and are always visible: "· idle" when the queue is empty,
+    "◎ now: file" + "waiting: …" while busy.
     """
 
     POLL_INTERVAL_S = 1.0
@@ -197,7 +203,7 @@ class _QueueDisplay:
             task = self._progress.add_task(
                 f"[bold]{label} queue",
                 total=None,
-                stage="idle",
+                stage="· idle",
                 detail="",
             )
             self._tasks[label] = task
@@ -227,11 +233,11 @@ class _QueueDisplay:
                 detail = f"waiting: {', '.join(pending)}" if pending else ""
                 self._progress.update(
                     task,
-                    stage=f"now: {current}" if current else "starting…",
+                    stage=f"◎ now: {current}" if current else "◎ starting…",
                     detail=detail,
                 )
             else:
-                self._progress.update(task, stage="idle", detail="")
+                self._progress.update(task, stage="· idle", detail="")
 
     def stop(self) -> None:
         self._stop.set()
@@ -251,6 +257,66 @@ def _progress_columns() -> list:
         TaskProgressColumn(),
         TimeElapsedColumn(),
     ]
+
+
+def _stop_running_syncs() -> None:
+    """Stop every running `memex sync` process.
+
+    Escalation: SIGINT (graceful, finishes the current file) → wait 10s →
+    SIGTERM → wait 5s → SIGKILL. Per-file statuses are checkpointed, so a
+    hard kill loses at most the file being processed at that moment.
+    """
+    import signal
+    import subprocess
+
+    me = os.getpid()
+
+    def _pids() -> list[int]:
+        try:
+            out = subprocess.run(
+                ["pgrep", "-f", "memex sync"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            pids = []
+            for p in out.stdout.split():
+                pid = p.strip()
+                if not pid or pid == str(me):
+                    continue
+                try:
+                    cmd = Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="ignore")
+                except OSError:
+                    continue
+                if "--stop" in cmd:  # never signal ourselves
+                    continue
+                pids.append(int(pid))
+            return pids
+        except Exception:
+            return []
+
+    for sig, grace in ((signal.SIGINT, 10), (signal.SIGTERM, 5), (signal.SIGKILL, 0)):
+        pids = _pids()
+        if not pids:
+            break
+        for pid in pids:
+            try:
+                os.kill(pid, sig)
+            except (ProcessLookupError, PermissionError, ValueError):
+                continue
+        console.print(
+            f"  [dim]{sig.name} sent to {len(pids)} process(es)…[/dim]"
+        )
+        if grace:
+            time.sleep(grace)
+
+    remaining = _pids()
+    if remaining:
+        console.print(f"[red]✗ {len(remaining)} sync process(es) still running — check manually[/red]")
+        raise typer.Exit(code=1)
+    console.print("[bold green]✓ sync stopped[/]")
+    console.print("  Run `memex sync` again to resume (pending files are re-processed).")
+    raise typer.Exit(code=0)
 
 
 def _print_run_summary(
@@ -422,9 +488,18 @@ def sync(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would change without writing"),
     config_path: str = typer.Option("config.yaml", "--config", "-c", help="Path to config.yaml"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    stop: bool = typer.Option(False, "--stop", help="Stop a running sync gracefully (SIGINT) and exit"),
 ) -> None:
-    """Sync collection against configured document sources."""
+    """Sync collection against configured document sources.
+
+    Use --stop to terminate a running sync from another terminal — the
+    sync finishes the in-flight file and exits (progress is saved).
+    """
     _setup_logging(verbose, quiet=True)
+
+    if stop:
+        _stop_running_syncs()
+        return
 
     from memex.engine.core.yaml_config import YamlConfig
     from memex.engine.sources.sync import SyncStats
@@ -457,7 +532,35 @@ def sync(
             async def _run() -> SyncStats:
                 return await rag_sync(yaml_config, source_name=source_name, dry_run=dry_run, progress_cb=_on_progress)  # type: ignore[return-value]
 
-            stats = asyncio.run(_run())
+            # Run the sync in a worker thread with its own event loop. The
+            # main thread waits on interruptible time.sleep(), so Ctrl+C
+            # raises KeyboardInterrupt here instantly even while the sync
+            # is blocked inside C-level futures (future.result() would
+            # swallow the signal until the file finished).
+            sync_holder: dict[str, SyncStats] = {}
+
+            def _run_sync_thread() -> None:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    sync_holder["stats"] = loop.run_until_complete(_run())
+                finally:
+                    loop.close()
+
+            worker = threading.Thread(target=_run_sync_thread, daemon=True, name="sync-worker")
+            worker.start()
+            try:
+                while worker.is_alive():
+                    time.sleep(0.5)
+                stats = sync_holder["stats"]
+            except KeyboardInterrupt:
+                # Force-exit: pool threads may still be mid-LLM-call and the
+                # interpreter would wait on them. Per-file statuses are
+                # checkpointed — the next sync resumes pending files.
+                console.print()
+                console.print("[yellow]! sync interrupted — progress saved[/]")
+                console.print("[yellow]  run `memex sync` again to resume[/]")
+                os._exit(130)
         finally:
             queue_display.stop()
         if seen_total == 0:

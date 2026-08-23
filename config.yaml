@@ -101,7 +101,7 @@ contextual_retrieval:
   strategy: summary                        # summary (only option currently)
   model: ""                                # "" = use llm.model
   max_tokens: 50                           # max tokens in context prefix
-  batch_size: 20                           # chunks per LLM call (20x500-char truncation fits 4k context)
+  batch_size: 5                            # chunks per LLM call (small models truncate larger batches; 5 keeps prompts reliable)
   max_batches: 8                           # cap LLM batches per doc; rest use header fallback
 
 # ── GPU Coordination ──────────────────────────────────────────────────────────
