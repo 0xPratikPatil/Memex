@@ -1626,6 +1626,7 @@ version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
+    { name = "langdetect" },
     { name = "mcp" },
     { name = "pyyaml" },
     { name = "qdrant-client" },
@@ -1647,7 +1648,6 @@ dev = [
 ]
 eval = [
     { name = "datasets" },
-    { name = "langdetect" },
     { name = "ragas" },
 ]
 local = [
@@ -1670,7 +1670,7 @@ requires-dist = [
     { name = "fastembed", marker = "extra == 'local'", specifier = ">=0.4,<1" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.27,<1" },
-    { name = "langdetect", marker = "extra == 'eval'", specifier = ">=1.0.9" },
+    { name = "langdetect", specifier = ">=1.0.9" },
     { name = "mcp", specifier = ">=1.20,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.15,<2" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4,<5" },

@@ -519,7 +519,10 @@ class RAGEngine:
     def is_already_ingested(self, source_identifier: str, content_hash: str) -> tuple[bool, int]:
         """Check if a file with the same hash is already ingested.
 
-        Returns (already_ingested, chunk_count).
+        Returns (already_ingested, chunk_count). A stored chunk whose
+        metadata_version is missing or older than the current extraction
+        version counts as NOT ingested — the file is re-ingested so new
+        metadata fields/prompts actually reach the collection.
         """
         qdrant = self._get_qdrant()
         result = qdrant.scroll(
@@ -531,12 +534,25 @@ class RAGEngine:
                     FieldCondition(key="content_hash", match=MatchValue(value=content_hash)),
                 ]
             ),
-            with_payload=["total_chunks"],
+            with_payload=["total_chunks", "metadata_version"],
             with_vectors=False,
         )
         points, _ = result
-        if points:
-            return True, (points[0].payload or {}).get("total_chunks", 0)
+        if not points:
+            return False, 0
+        payload = points[0].payload or {}
+        if config.ENABLE_METADATA_EXTRACTION:
+            from memex.engine.metadata.extractor import METADATA_VERSION
+
+            if payload.get("metadata_version") != METADATA_VERSION:
+                logger.info(
+                    "metadata_version mismatch for %s (stored=%s, current=%s) — re-ingesting",
+                    source_identifier,
+                    payload.get("metadata_version"),
+                    METADATA_VERSION,
+                )
+                return False, 0
+        return True, payload.get("total_chunks", 0)
         return False, 0
 
     def source_exists(self, source_identifier: str) -> tuple[bool, int, float | None, int | None]:
@@ -711,6 +727,10 @@ class RAGEngine:
                 **(chunk.get("metadata", {})),
                 **base_meta,
             }
+            if config.ENABLE_METADATA_EXTRACTION:
+                from memex.engine.metadata.extractor import METADATA_VERSION
+
+                point_meta["metadata_version"] = METADATA_VERSION
             if file_mtime is not None:
                 point_meta["file_mtime"] = file_mtime
             if file_size is not None:

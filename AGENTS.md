@@ -94,6 +94,8 @@ All features are controlled via `config.yaml`. The master toggle for each group 
 ### Metadata Extraction (`metadata.extraction_enabled`)
 - Entity extraction, doc classification, topic tagging, language detection (each individually togglable).
 - Parameters: `metadata.max_entities_per_chunk`=10, `metadata.max_topics_per_chunk`=5.
+- Chunks are batch-processed (batch of 4 — small models truncate larger JSON arrays); a short array forces per-chunk fallback so metadata is never silently dropped.
+- `METADATA_VERSION` (extractor.py) is stored on every chunk; on bump, `is_already_ingested` returns False so the next sync re-extracts metadata for the whole collection.
 
 ### Answer Generation (`answer.enabled`)
 - Cited Answers with `[N]` citations, refusal detection (`answer.refusal_sentinel="INSUFFICIENT_CONTEXT"`), citation confidence scoring.

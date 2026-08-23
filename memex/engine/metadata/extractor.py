@@ -17,6 +17,12 @@ from memex.engine.llm.base import LLMProvider
 
 logger = logging.getLogger("metadata-extractor")
 
+# Version of the metadata extraction schema/prompts. Bump whenever the
+# extraction logic changes — stored chunks with an older (or missing)
+# metadata_version are re-ingested on the next sync, so new fields/prompts
+# actually reach the collection.
+METADATA_VERSION = 3
+
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 _URL_RE = re.compile(r"https?://[^\s<>\"']+")
 _PHONE_RE = re.compile(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}")
@@ -85,15 +91,17 @@ class MetadataExtractor:
             return {}
 
         prompt = (
-            "Extract named entities from this text. Return JSON with these keys:\n"
-            "- people: full names of people mentioned\n"
-            "- organizations: company, agency, or institution names\n"
-            "- locations: cities, countries, addresses, or place names\n"
-            "- products: product names, model numbers, or brand names\n"
-            '- dates: all dates mentioned, as readable strings (e.g. "January 15, 2026", '
+            "You are a precise named-entity extractor.\n"
+            "Return a JSON object with exactly these keys:\n"
+            '- "people": full names of people mentioned\n'
+            '- "organizations": company, agency, or institution names\n'
+            '- "locations": cities, countries, addresses, or place names\n'
+            '- "products": product names, model numbers, or brand names\n'
+            '- "dates": all dates mentioned, as readable strings (e.g. "January 15, 2026", '
             '"Q3 2025", "2024"). Normalize partial dates (e.g. "Jan" -> "January"). '
-            "Deduplicate: if the same date appears multiple ways, keep the most complete form.\n\n"
-            "Each value is a list of unique strings. Only output JSON.\n\n"
+            "Deduplicate: if the same date appears multiple ways, keep the most complete form.\n"
+            "Each value is a list of unique strings. Use empty arrays when there are no "
+            "matches — never omit keys. Raw JSON only, no markdown fences.\n\n"
             f"Text: {text[:1000]}"
         )
         try:
@@ -116,10 +124,13 @@ class MetadataExtractor:
             return "unknown"
 
         prompt = (
-            "Classify this document into one of these types: "
+            "You are a document classifier.\n"
+            "Classify the document type. Choose exactly one of: "
             "report, email, article, code, documentation, presentation, "
-            "resume, contract, invoice, meeting_notes, other. "
-            "Only output the type.\n\n"
+            "resume, contract, invoice, meeting_notes, other.\n"
+            "Prefer 'contract' for legal agreements, deeds, trusts, and signed "
+            "documents with clauses and parties. Prefer 'report' for structured "
+            "analyses with findings. Output the type only — no punctuation, no quotes.\n\n"
             f"Text: {text[:2000]}"
         )
         try:
@@ -158,10 +169,11 @@ class MetadataExtractor:
             return []
 
         prompt = (
-            f"Extract up to {config.MAX_TOPICS_PER_CHUNK} topic labels from this text. "
-            "Topics should be short noun phrases (2-4 words) that describe the main subjects. "
-            'Avoid generic labels like "information" or "details". '
-            "Return as JSON array of strings. Only output JSON.\n\n"
+            f"You are a topic tagger. Extract up to {config.MAX_TOPICS_PER_CHUNK} topic labels "
+            "from this text. Topics must be short noun phrases (2-4 words) that describe the "
+            "main subjects. Avoid generic labels like 'information' or 'details'. "
+            "Return a JSON array of strings. Use [] if no clear topics. "
+            "Raw JSON only, no markdown fences.\n\n"
             f"Text: {text[:1000]}"
         )
         try:
@@ -312,9 +324,13 @@ class MetadataExtractor:
         chunks: list[dict[str, Any]],
         document_text: str = "",
         source_identifier: str = "",
-        batch_size: int = 10,
+        batch_size: int = 4,
     ) -> list[dict[str, Any]]:
         """Extract metadata for multiple chunks in batches to reduce LLM calls.
+
+        Batch size 4: small models (qwen2.5:1.5b) cannot reliably emit a
+        JSON array of 10 objects — they truncate after 1-2 and the rest are
+        silently lost. 4 objects per call stays well within output limits.
 
         Combines entity extraction and topic tagging into a single prompt per batch.
         Returns a list of metadata dicts, one per chunk.
@@ -329,6 +345,7 @@ class MetadataExtractor:
                 source_identifier,
                 doc_type=True,
                 batch_start=0,
+                total_chunks=len(chunks),
             )
 
         results: list[dict[str, Any]] = [{} for _ in range(len(chunks))]
@@ -347,6 +364,7 @@ class MetadataExtractor:
                 source_identifier,
                 doc_type=need_doc_type,
                 batch_start=batch_start,
+                total_chunks=len(chunks),
             )
             if need_doc_type and batch_meta and batch_meta[0].get("doc_type"):
                 doc_type_found = True
@@ -362,6 +380,7 @@ class MetadataExtractor:
         source_identifier: str,
         doc_type: bool = True,
         batch_start: int = 0,
+        total_chunks: int = 0,
     ) -> list[dict[str, Any]]:
         """Extract metadata for a batch of chunks in a single LLM call."""
         if not self._llm:
@@ -391,26 +410,40 @@ class MetadataExtractor:
             return [{} for _ in batch]
 
         prompt = (
-            f"Extract metadata from each chunk below. For each chunk, return a JSON object "
-            f"with keys matching these tasks: {'; '.join(tasks)}.\n\n"
-            f"Return a JSON array of objects, one per chunk, in order. "
-            f"Only output JSON.\n\n"
+            "You are a precise metadata extraction engine for a document corpus.\n"
+            "Extract metadata from each chunk below.\n\n"
+            "OUTPUT CONTRACT (strict):\n"
+            "- Return exactly ONE JSON array with one object per chunk, in the same order.\n"
+            f"- Every object must contain ALL keys: {', '.join(tasks)}.\n"
+            "- Use empty arrays for fields with no matches — never omit a key.\n"
+            "- Never add keys beyond the requested ones.\n"
+            "- Output raw JSON only — no markdown fences, no commentary.\n\n"
+            "Example for a single chunk:\n"
+            '{"entities": {"people": ["Jane Doe"], "organizations": ["Acme Corp"], '
+            '"locations": ["Mumbai"], "products": [], "dates": ["January 15, 2026"]}, '
+            '"topics": ["corporate governance"], "doc_type": "contract"}\n\n'
             f"Chunks:\n{chunks_text}"
         )
 
         try:
-            # 1200 tokens: a batch of 10 chunks with entities+topics JSON needs
+            # 1200 tokens: a batch of chunks with entities+topics JSON needs
             # far more than 400 — truncation caused JSON parse failures and
             # 10x slower per-chunk fallback calls.
             response = self._chat(prompt, num_predict=1200)
             parsed = json.loads(self._strip_code_fences(response))
             if not isinstance(parsed, list):
                 parsed = [parsed]
+            if len(parsed) < len(batch):
+                # Model truncated the array — padding would silently drop
+                # metadata for the missing chunks. Force per-chunk instead.
+                raise json.JSONDecodeError(
+                    f"short array: {len(parsed)}/{len(batch)} objects", response, 0
+                )
             while len(parsed) < len(batch):
                 parsed.append({})
             normalized = [self._normalize_metadata(m) for m in parsed[: len(batch)]]
             for i, (chunk, meta) in enumerate(zip(batch, normalized, strict=True)):
-                chunk_with_index = {**chunk, "chunk_index": batch_start + i}
+                chunk_with_index = {**chunk, "chunk_index": batch_start + i, "total_chunks": total_chunks}
                 if config.ENABLE_LANGUAGE_DETECTION:
                     lang = self.detect_language(chunk["content"])
                     if lang:
@@ -420,7 +453,9 @@ class MetadataExtractor:
             return normalized
         except (json.JSONDecodeError, Exception) as exc:
             logger.debug("Batch metadata extraction failed, falling back to per-chunk: %s", exc)
-            return self._fallback_per_chunk(batch, document_text, source_identifier, doc_type)
+            return self._fallback_per_chunk(
+                batch, document_text, source_identifier, doc_type, batch_start, total_chunks
+            )
 
     def _fallback_per_chunk(
         self,
@@ -428,12 +463,14 @@ class MetadataExtractor:
         document_text: str,
         source_identifier: str,
         doc_type: bool,
+        batch_start: int = 0,
+        total_chunks: int = 0,
     ) -> list[dict[str, Any]]:
         """Fallback to per-chunk extraction when batch fails."""
         results = []
         for i, chunk in enumerate(batch):
             meta: dict[str, Any] = {}
-            chunk_with_index = {**chunk, "chunk_index": i}
+            chunk_with_index = {**chunk, "chunk_index": batch_start + i, "total_chunks": total_chunks}
             if config.ENABLE_ENTITY_EXTRACTION:
                 meta["entities"] = self.extract_entities(chunk["content"])
             if doc_type and config.ENABLE_DOC_CLASSIFICATION and i == 0:

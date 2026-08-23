@@ -16,9 +16,9 @@ def mock_llm() -> MagicMock:
     provider = MagicMock()
 
     def _chat_sync(prompt: str, *, model: str | None = None) -> str:
-        if "Classify this document" in prompt:
+        if "document classifier" in prompt:
             return "report"
-        elif "Extract named entities" in prompt:
+        elif "named-entity extractor" in prompt:
             return json.dumps(
                 {
                     "people": ["Alice Smith"],
