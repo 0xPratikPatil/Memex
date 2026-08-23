@@ -17,6 +17,20 @@ from memex.engine.llm.base import LLMProvider
 
 logger = logging.getLogger("metadata-extractor")
 
+_DOC_TYPES = {
+    "report",
+    "email",
+    "article",
+    "code",
+    "documentation",
+    "presentation",
+    "resume",
+    "contract",
+    "invoice",
+    "meeting_notes",
+    "other",
+}
+
 # Version of the metadata extraction schema/prompts. Bump whenever the
 # extraction logic changes — stored chunks with an older (or missing)
 # metadata_version are re-ingested on the next sync, so new fields/prompts
@@ -135,22 +149,9 @@ class MetadataExtractor:
         )
         try:
             doc_type = self._chat(prompt).strip().lower()
-            valid = {
-                "report",
-                "email",
-                "article",
-                "code",
-                "documentation",
-                "presentation",
-                "resume",
-                "contract",
-                "invoice",
-                "meeting_notes",
-                "other",
-            }
-            if doc_type in valid:
+            if doc_type in _DOC_TYPES:
                 return doc_type
-            for v in valid:
+            for v in _DOC_TYPES:
                 if v in doc_type:
                     return v
             return "other"
@@ -496,7 +497,8 @@ class MetadataExtractor:
         if "topics" in meta and isinstance(meta["topics"], list):
             result["topics"] = [str(t) for t in meta["topics"][: config.MAX_TOPICS_PER_CHUNK]]
         if "doc_type" in meta:
-            result["doc_type"] = str(meta["doc_type"]).strip().lower()
+            doc_type = str(meta["doc_type"]).strip().lower()
+            result["doc_type"] = doc_type if doc_type in _DOC_TYPES else "other"
         return result
 
     # ── Internal helpers ──────────────────────────────────────────────────
