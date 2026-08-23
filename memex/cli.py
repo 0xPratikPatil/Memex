@@ -58,6 +58,14 @@ def _stage_label(stage: str) -> str:
     return f"{_STAGE_ICONS.get(stage, '·')} {stage}"
 
 
+def _short_name(path: str, max_len: int = 40) -> str:
+    """Basename truncated to max_len — long names must never wrap the row."""
+    name = os.path.basename(path)
+    if len(name) <= max_len:
+        return name
+    return f"{name[: max_len - 3]}..."
+
+
 def _fmt_dur(seconds: float) -> str:
     """Human duration: 2.3s / 1m05s / 1h02m."""
     if seconds < 60:
@@ -119,7 +127,7 @@ class _ProgressTracker:
         tid = self._file_tasks.get(src)
         if tid is None:
             tid = self._file_tasks[src] = self._progress.add_task(
-                os.path.basename(src), total=None, stage=_stage_label(stage), detail=""
+                _short_name(src), total=None, stage=_stage_label(stage), detail=""
             )
             self._evict()
         self._progress.update(tid, stage=_stage_label(stage))
@@ -131,7 +139,7 @@ class _ProgressTracker:
         tid = self._file_tasks.get(src)
         if tid is None:
             tid = self._file_tasks[src] = self._progress.add_task(
-                os.path.basename(src), total=None, stage=_stage_label(stage), detail=detail
+                _short_name(src), total=None, stage=_stage_label(stage), detail=detail
             )
         self._progress.update(tid, total=1, completed=1, stage=_stage_label(stage), detail=detail)
         self._terminal_order[src] = tid
@@ -164,7 +172,7 @@ def _make_progress() -> Progress:
         _ellipsis_col("{task.fields[stage]}", style="cyan", min_width=16),
         TimeElapsedColumn(),
         BarColumn(
-            bar_width=16,
+            bar_width=12,
             complete_style="green",
             finished_style="green",
             pulse_style="grey50",
@@ -181,16 +189,21 @@ class _QueueDisplay:
 
     Polls ``GET {service}/queue`` (MarkItDown + OCR) in background threads
     and updates one Progress row per service. Rows sit right after the
-    Overall row and are always visible: "· idle" when the queue is empty,
-    "◎ now: file" + "waiting: …" while busy.
+    Overall row and are always visible. Conversions can finish in under a
+    second, so the poll is fast and the last activity is remembered for a
+    few seconds — the row shows "◎ now: file" while busy and "· done:
+    file" right after, so work is always visible.
     """
 
-    POLL_INTERVAL_S = 1.0
+    POLL_INTERVAL_S = 0.25
+    LAST_ACTIVITY_HOLD_S = 5.0
 
     def __init__(self, progress: Progress) -> None:
         self._progress = progress
         self._stop = threading.Event()
         self._tasks: dict[str, TaskID] = {}
+        self._last_seen: dict[str, float] = {}
+        self._last_file: dict[str, str] = {}
 
     def start(self) -> None:
         from memex.engine.core import config as engine_config
@@ -230,14 +243,24 @@ class _QueueDisplay:
             current = data.get("current")
             pending = list(data.get("pending") or [])
             if current or pending:
+                self._last_seen[label] = time.monotonic()
+                self._last_file[label] = current or (pending[0] if pending else "")
                 detail = f"waiting: {', '.join(pending)}" if pending else ""
                 self._progress.update(
                     task,
-                    stage=f"◎ now: {current}" if current else "◎ starting…",
+                    stage=f"◎ now: {_short_name(self._last_file[label])}" if current else "◎ starting…",
                     detail=detail,
                 )
             else:
-                self._progress.update(task, stage="· idle", detail="")
+                last = self._last_seen.get(label, 0.0)
+                if last and time.monotonic() - last < self.LAST_ACTIVITY_HOLD_S:
+                    self._progress.update(
+                        task,
+                        stage=f"· done: {_short_name(self._last_file.get(label, ''))}",
+                        detail="",
+                    )
+                else:
+                    self._progress.update(task, stage="· idle", detail="")
 
     def stop(self) -> None:
         self._stop.set()
