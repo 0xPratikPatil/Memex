@@ -302,12 +302,14 @@ All CLI commands use Rich live progress bars (description · stage · green bar 
 
 Display rules (ingest + sync):
 - **Fixed row pool** — all rows (Overall + 2 queue rows + file-slot pool) are created before the Live starts and are never added/removed mid-run; slots are recycled in place. Constant render height is required for Rich's Live — add/remove between refreshes breaks cursor-up math and duplicates rows (Textualize/rich #1144). `no_wrap=True` on all text columns — a wrapped row changes height and corrupts redraws.
+- **Pool sizing** — ingest sizes the pool to the file count (bars never exceed the file count); sync uses a rolling window. Unused slots carry the `unused` task field and render as empty lines (no bar, no clock, no percent).
 - **Colors** — Overall row is bold cyan; MarkItDown/OCR queue rows are bold magenta (description column parses markup); file rows plain.
-- **Single run clock** — the Overall row shows run elapsed (updated 1s by `_ProgressTracker` ticker). Per-file rows show duration once, on completion (`3 chunks · 13.1s`).
+- **Per-row clocks** — every row shows its own live elapsed (TimeElapsedColumn), like the original layout. File rows show chunk count once on completion (`✓ Done … 100% 6 chunks`).
 - **Queue rows** show `idle` / `now: file · waiting: …` / `done: file` (polled from `GET /queue`, `recently_completed` ring buffer, 100ms poll).
 - **Log buffering** — during a live display, WARNING+ logs are buffered (`_suspend_live_logs`) and replayed after the run; log lines printed mid-display corrupt Rich's Live redraw (issue #1052, logger uses its own stderr console).
 - **Transient** — the display is erased on exit before the summary prints.
 - **Ingest prefetch** — conversions (MarkItDown/OCR) run up to 3 files ahead of the LLM pipeline (`ThreadPoolExecutor`, `MAX_AHEAD=3`): while a file is embedding/storing, the converter already works on the next files so queue rows stay busy.
+- **Sync two-stage pipeline** — `sync.py` splits conversion from ingestion: a convert pool (≥3 workers) converts ahead while a single serialized consumer runs the LLM phases (context/metadata/embedding, serialized by the global LLM lock). Converter queues never idle while other files are mid-LLM.
 
 The `sync` command exposes a `progress_cb` callback for per-file stage reporting:
 

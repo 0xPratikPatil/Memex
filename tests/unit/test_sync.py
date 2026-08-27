@@ -449,3 +449,77 @@ class TestSync:
         # Only "docs" source should have been processed
         assert stats.added == 0
         assert stats.deleted == 0
+
+
+class TestConversionAhead:
+    """Two-stage pipeline: conversions run ahead of the serialized ingest stage."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_status_store(self) -> MagicMock:
+        store = MagicMock()
+        store.get_due_retries.return_value = []
+        with patch("memex.engine.sources.sync.FileStatusStore", return_value=store):
+            yield store
+
+    @pytest.mark.asyncio
+    async def test_conversions_run_ahead_of_ingest(self) -> None:
+        """With 2 worker slots, all 3 conversions must start before the first
+        ingest finishes — conversions are NOT inlined with the LLM ingest
+        stage (which is what left the converter queues idle)."""
+        import threading
+        import time
+
+        from memex.engine.sources.sync import sync
+
+        started: list[str] = []
+        started_lock = threading.Lock()
+        ingest_seen: list[int] = []
+        ingest_lock = threading.Lock()
+
+        def fake_convert(engine, file_path, source_identifier, progress_cb=None, file_idx=0, total_files=0):
+            with started_lock:
+                started.append(source_identifier)
+            time.sleep(0.05)
+            return {"markdown": f"# {source_identifier}", "chunks": None}
+
+        def fake_ingest(engine, markdown, chunks, source_identifier, file_path, source_name, progress_cb=None):
+            with started_lock:
+                n = len(started)
+            with ingest_lock:
+                ingest_seen.append(n)
+            time.sleep(0.3)
+            return 1
+
+        cfg = MagicMock()
+        cfg.get_list.return_value = [{"type": "local", "name": "docs", "path": "/tmp/docs"}]
+
+        mock_source = MagicMock()
+        files = [MagicMock() for _ in range(5)]
+        for i, f in enumerate(files):
+            f.path = f"/tmp/docs/doc{i}.pdf"
+            f.name = f"doc{i}.pdf"
+        mock_source.list_files.return_value = files
+        mock_source.download.side_effect = [Path(f"/tmp/docs/doc{i}.pdf") for i in range(5)]
+
+        mock_qdrant = MagicMock()
+        mock_qdrant.scroll.return_value = ([], None)
+
+        mock_engine = MagicMock()
+        mock_engine._get_qdrant.return_value = mock_qdrant
+        mock_engine.compute_file_hash.return_value = "hash"
+
+        with (
+            patch("memex.engine.sources.sync.get_source", return_value=mock_source),
+            patch("memex.engine.core.pipeline.RAGEngine", return_value=mock_engine),
+            patch("memex.engine.sources.sync._convert_file", side_effect=fake_convert),
+            patch("memex.engine.sources.sync._ingest_markdown", side_effect=fake_ingest),
+            patch("memex.engine.sources.sync.config") as mock_config,
+        ):
+            mock_config.COLLECTION_NAME = "memex"
+            mock_config.MAX_CONCURRENT_SYNC = 2
+            stats = await sync(cfg)
+
+        assert stats.added == 5
+        # The first ingest must not have started until all conversions were
+        # underway — conversions are a separate, parallel stage.
+        assert ingest_seen[0] >= 3, f"only {ingest_seen[0]} conversions started before first ingest (inline design)"

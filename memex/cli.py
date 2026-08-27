@@ -122,6 +122,11 @@ class _ProgressTracker:
     a fixed pool of slots that are recycled (oldest done first) — the
     render height is constant for the whole run.
 
+    The pool is sized to the number of files where known (ingest), so
+    the visible bar count matches the file count — no phantom bars.
+    Unused slots carry ``unused=True`` so the time/bar/percent columns
+    render empty lines instead of pulsing ghost bars.
+
     Also tracks per-file wall time (first activity → terminal stage)
     and the total run time for the final summary.
     """
@@ -139,37 +144,21 @@ class _ProgressTracker:
         self.file_stage: dict[str, str] = {}
         self.done_files: set[str] = set()
         self._started_ts = time.monotonic()
-        self._stop_evt = threading.Event()
 
-    def start_elapsed_ticker(self) -> None:
-        """Show the run clock on the Overall row, once per second.
+    def add_slots(self, count: int) -> None:
+        """Pre-allocate exactly `count` file-slot rows.
 
-        The clock lives only here — file/queue rows never show live
-        elapsed (per-row clocks repeat the same value everywhere).
+        Called BEFORE the Live display starts, after the queue rows
+        exist, so the render order matches the layout: Overall → queue
+        rows → file rows. Nothing is ever added or removed during the
+        run. Unused slots render as empty lines (``unused`` field).
         """
-
-        def _tick() -> None:
-            while not self._stop_evt.wait(1.0):
-                elapsed = time.monotonic() - self._started_ts
-                self._progress.update(self.overall, detail=_fmt_dur(elapsed))
-
-        threading.Thread(target=_tick, daemon=True, name="elapsed-ticker").start()
-
-    def stop(self) -> None:
-        """Stop the elapsed ticker (rows are never removed)."""
-        self._stop_evt.set()
-
-    def add_slots(self) -> None:
-        """Pre-allocate the file-slot pool (FIFO — first file takes the
-        top slot, directly under the queue rows).
-
-        Called AFTER the queue rows exist so the render order matches the
-        old layout: Overall → queue rows → file rows. Every slot is
-        created before the Live display starts; nothing is ever added or
-        removed during the run.
-        """
-        for _ in range(self._row_pool_size()):
-            self._free_slots.append(self._progress.add_task("", total=None, stage="", detail=""))
+        for _ in range(count):
+            self._free_slots.append(
+                self._progress.add_task(
+                    "", total=None, completed=0, stage="", detail="", unused=True
+                )
+            )
 
     def set_total(self, total: int) -> None:
         self._progress.update(self.overall, total=total)
@@ -178,7 +167,8 @@ class _ProgressTracker:
         return time.monotonic() - self._started_ts
 
     def _row_pool_size(self) -> int:
-        """Fixed number of file-slot rows.
+        """Max file-slot rows for sync's rolling window (ingest sizes the
+        pool to the file count instead).
 
         Total live rows = Overall + 2 queue rows + this pool. Kept small
         so the region always fits below the startup banner and above the
@@ -211,6 +201,7 @@ class _ProgressTracker:
                 completed=0,
                 stage=_stage_label(stage),
                 detail="",
+                unused=False,
             )
         else:
             self._progress.update(tid, stage=_stage_label(stage))
@@ -222,8 +213,6 @@ class _ProgressTracker:
         tid = self._file_tasks.get(src)
         if tid is None:
             tid = self._file_tasks[src] = self._alloc()
-        if stage == "Done" and detail:
-            detail = f"{detail} · {_fmt_dur(self.file_times[src])}"
         self._progress.update(
             tid,
             description=_short_name(src),
@@ -238,16 +227,43 @@ class _ProgressTracker:
             self._progress.update(self.overall, completed=len(self.done_files))
 
 
+class _SlotTimeElapsed(TimeElapsedColumn):
+    """Per-row elapsed clock that renders nothing for unused pool slots."""
+
+    def render(self, task):
+        if task.fields.get("unused"):
+            return ""
+        return super().render(task)
+
+
+class _SlotBar(BarColumn):
+    """Bar that renders nothing for unused pool slots (no pulsing ghosts)."""
+
+    def render(self, task):
+        if task.fields.get("unused"):
+            return ""
+        return super().render(task)
+
+
+class _SlotPercent(TaskProgressColumn):
+    """Percent that renders nothing for unused pool slots."""
+
+    def render(self, task):
+        if task.fields.get("unused"):
+            return ""
+        return super().render(task)
+
+
 def _make_progress() -> Progress:
     """Progress with per-file rows + overall bar (determinate).
 
-    Minimal pip/git-style layout — description · stage · bar · percent ·
-    detail. No spinner, no red pulse: per-file rows are indeterminate
-    (total=None) and pulse in dim gray; the overall bar fills green as
-    files finish. A single run-clock lives on the Overall row (updated
-    once per second by _ProgressTracker); per-file rows show their
-    duration once, on completion, in the detail column — no per-row
-    clocks (repeated elapsed times are noise).
+    Minimal pip/git-style layout — description · stage · live elapsed ·
+    bar · percent · detail. No spinner, no red pulse: per-file rows are
+    indeterminate (total=None) and pulse in dim gray; the overall bar
+    fills green as files finish. Every row shows its own live elapsed
+    clock (TimeElapsedColumn). Unused file-slot rows carry the
+    ``unused`` field and render as empty lines (no bar, no clock, no
+    percent) so the visible bar count always matches the file count.
 
     Text columns use Column(overflow="ellipsis", no_wrap=True) so rows
     are always exactly one line — wrapping (fold) breaks live redraw and
@@ -276,13 +292,14 @@ def _make_progress() -> Progress:
     return Progress(
         _ellipsis_col("[bold]{task.description}", markup=True),
         _ellipsis_col("{task.fields[stage]}", style="cyan", min_width=16),
-        BarColumn(
+        _SlotTimeElapsed(),
+        _SlotBar(
             bar_width=12,
             complete_style="green",
             finished_style="green",
             pulse_style="grey50",
         ),
-        TaskProgressColumn(),
+        _SlotPercent(),
         _ellipsis_col("{task.fields[detail]}"),
         console=console,
         refresh_per_second=10,
@@ -528,8 +545,9 @@ def ingest(
     tracker = _ProgressTracker(progress, total=total)
     queue_display = _QueueDisplay(progress)
     queue_display.start()
-    tracker.add_slots()
-    tracker.start_elapsed_ticker()
+    # Pool sized to the file count — visible bars match the file count,
+    # never more (no phantom rows).
+    tracker.add_slots(min(len(files), tracker._row_pool_size()))
     # All rows (overall + queue + fixed file-slot pool) exist before the
     # Live starts — Rich's Live cannot track height changes made by
     # add/remove between refreshes (duplicated rows). Only in-place
@@ -635,7 +653,6 @@ def ingest(
                 _submit_next()
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
-            tracker.stop()
             queue_display.stop()
 
     for msg in live_logs:
@@ -680,8 +697,8 @@ def sync(
     tracker = _ProgressTracker(progress, total=None)
     queue_display = _QueueDisplay(progress)
     queue_display.start()
-    tracker.add_slots()
-    tracker.start_elapsed_ticker()
+    # Rolling window pool; unused slots render as empty lines.
+    tracker.add_slots(tracker._row_pool_size())
     # All rows pre-created before Live starts (see ingest — fixed row
     # pool; Rich's Live breaks when rows are added/removed mid-display).
     live_logs: list[str] = []
@@ -738,7 +755,6 @@ def sync(
                 os._exit(130)
         finally:
             queue_display.stop()
-            tracker.stop()
         if seen_total == 0:
             tracker.set_total(1)
             progress.update(tracker.overall, completed=1)

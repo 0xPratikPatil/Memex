@@ -483,40 +483,130 @@ async def sync(
                 return ("skipped", path)
             return None
 
-        def _convert_and_ingest(
+        def _convert_stage(
             path: str,
-            sf: SourceFile,
+            sf: SourceFile | None,
             idx: int,
             total: int,
+            kind: str,
             _source: Source = source,
             _download_dir: Path = download_dir,
             _src_name: str = src_name,
-            *,
-            kind: str,
-        ) -> tuple[str, str] | tuple[str, str, str]:
-            """Convert → ingest for one file (runs in a pool thread)."""
+            _suppress: bool = suppress_deletions,
+            _stored: dict[str, str] = stored_hashes,
+        ) -> tuple:
+            """Stage 1 (convert pool): hash-check / delete / convert — NO LLM work.
+
+            Returns ("ingest", kind, path, local, markdown, chunks, idx, total)
+            when the file must go through the ingest stage, or a result-tag
+            tuple for short-circuit paths (dry-run, unchanged, deleted).
+            Conversions run ahead of the ingest stage, so the MarkItDown/OCR
+            queues stay busy while other files are in their LLM phases.
+            """
             try:
                 if kind == "added":
                     status_store.mark_pending(path, source_name=_src_name)
+                if kind == "unchanged":
+                    try:
+                        current_hash = _source.get_content_hash(sf)
+                    except Exception as exc:
+                        return _fail(path, exc, idx, total, msg="Failed to hash '%s': %s")
+                    stored_hash = _stored.get(path, "")
+                    if current_hash == stored_hash:
+                        # Hash unchanged — but the stored metadata may be stale
+                        # (e.g. METADATA_VERSION bumped). Re-ingest in that case
+                        # so new metadata fields/prompts reach the collection.
+                        try:
+                            already, _ = engine.is_already_ingested(path, current_hash)
+                        except Exception:
+                            already = True
+                        if already:
+                            _emit(path, "Done", idx, total)
+                            completed.increment()
+                            return ("unchanged", path)
+                        log.info("Metadata version changed for %s — re-ingesting", path)
+                        kind = "changed"
+                    elif dry_run:
+                        log.info("[dry-run] Would update: %s", path)
+                        _emit(path, "Done", idx, total)
+                        completed.increment()
+                        return ("changed", path)
+                    # Changed file — delete old chunks, then convert + ingest
+                    kind = "changed"
+                if kind == "deleted":
+                    if _suppress:
+                        log.warning(
+                            "Suppressing deletion for '%s' (source listing failed or empty)",
+                            path,
+                        )
+                        _emit(path, "Done", idx, total)
+                        completed.increment()
+                        return ("unchanged", path)
+                    if dry_run:
+                        log.info("[dry-run] Would delete: %s", path)
+                        _emit(path, "Done", idx, total)
+                        completed.increment()
+                        return ("deleted", path)
+                    _emit(path, "Deleting", idx, total)
+                    status_store.update_stage(path, PipelineStage.DELETING)
+                    engine.delete_by_source(path)
+                    status_store.mark_deleted(path)
+                    _emit(path, "Done", idx, total)
+                    completed.increment()
+                    log.info("Deleted '%s'", path)
+                    return ("deleted", path)
+                if kind == "changed":
+                    _emit(path, "Deleting", idx, total)
+                    status_store.update_stage(path, PipelineStage.DELETING)
+                    engine.delete_by_source(path)
+                if dry_run:
+                    log.info("[dry-run] Would add: %s", path)
+                    _emit(path, "Done", idx, total)
+                    completed.increment()
+                    return ("added", path)
                 # ── Phase 1: download + convert (MarkItDown + OCR inline) ──
                 _emit(path, "Converting", idx, total)
                 status_store.update_stage(path, PipelineStage.CONVERTING)
                 local = _source.download(sf, _download_dir)
                 conv = _convert_file(engine, str(local), path, progress_cb, idx, total)
+                return ("ingest", kind, path, str(local), conv["markdown"], conv["chunks"], idx, total)
+            except Exception as exc:
+                skipped = _skip_timeout(path, exc, idx, total)
+                if skipped is not None:
+                    return skipped
+                return _fail(path, exc, idx, total, msg="Failed to convert '%s': %s")
+
+        def _ingest_stage(
+            item: tuple, _src_name: str = src_name
+        ) -> tuple[str, str] | tuple[str, str, str]:
+            """Stage 2 (serialized): embed + store. Runs only for converted files.
+
+            Runs one file at a time — the LLM phases (context, metadata,
+            embedding) are serialized by the global LLM lock anyway, and
+            keeping a single consumer means conversions (stage 1) never
+            stall behind a file that is mid-LLM.
+            """
+            _, kind, path, local, markdown, chunks, idx, total = item
+            try:
                 # ── Phase 2: ingest (embed + store) ──────────────────────
                 chunk_count = _ingest_markdown(
                     engine,
-                    conv["markdown"],
-                    conv["chunks"],
+                    markdown,
+                    chunks,
                     path,
-                    str(local),
+                    local,
                     _src_name,
                     progress_cb,
                 )
                 _emit(path, "Done", idx, total, chunks=chunk_count)
                 status_store.mark_done(path, chunks=chunk_count)
                 completed.increment()
-                log.info("%s '%s' (%d chunks)", "Added" if kind == "added" else "Updated", path, chunk_count)
+                log.info(
+                    "%s '%s' (%d chunks)",
+                    "Added" if kind == "added" else "Updated",
+                    path,
+                    chunk_count,
+                )
                 return (kind, path)
             except Exception as exc:
                 skipped = _skip_timeout(path, exc, idx, total)
@@ -524,142 +614,59 @@ async def sync(
                     return skipped
                 return _fail(path, exc, idx, total, msg="Failed to ingest '%s': %s")
 
-        def _process_new(
-            path: str,
-            sf: SourceFile,
-            idx: int,
-            total: int,
-        ) -> tuple[str, str] | tuple[str, str, str]:
-            if dry_run:
-                log.info("[dry-run] Would add: %s", path)
-                _emit(path, "Done", idx, total)
-                completed.increment()
-                return ("added", path)
-            return _convert_and_ingest(path, sf, idx, total, kind="added")
-
-        def _process_changed(
-            path: str,
-            sf: SourceFile,
-            idx: int,
-            total: int,
-        ) -> tuple[str, str] | tuple[str, str, str]:
-            try:
-                _emit(path, "Deleting", idx, total)
-                status_store.update_stage(path, PipelineStage.DELETING)
-                engine.delete_by_source(path)
-            except Exception as exc:
-                return _fail(path, exc, idx, total, msg="Failed to update '%s': %s")
-            return _convert_and_ingest(path, sf, idx, total, kind="changed")
-
-        def _process_deleted(path: str, idx: int, total: int) -> tuple[str, str] | tuple[str, str, str]:
-            if suppress_deletions:
-                log.warning(
-                    "Suppressing deletion for '%s' (source listing failed or empty)",
-                    path,
-                )
-                _emit(path, "Done", idx, total)
-                completed.increment()
-                return ("unchanged", path)
-            if dry_run:
-                log.info("[dry-run] Would delete: %s", path)
-                _emit(path, "Done", idx, total)
-                completed.increment()
-                return ("deleted", path)
-            try:
-                _emit(path, "Deleting", idx, total)
-                status_store.update_stage(path, PipelineStage.DELETING)
-                engine.delete_by_source(path)
-                status_store.mark_deleted(path)
-                _emit(path, "Done", idx, total)
-                completed.increment()
-                log.info("Deleted '%s'", path)
-                return ("deleted", path)
-            except Exception as exc:
-                _log_file_error("Failed to delete '%s': %s", path, exc, stage=PipelineStage.ERROR)
-                _emit(path, "Error", idx, total, error=str(exc))
-                status_store.mark_failed(path, str(exc), exc=exc)
-                completed.increment()
-                return ("error", path, str(exc))
-
-        def _process_unchanged(
-            path: str,
-            sf: SourceFile,
-            idx: int,
-            total: int,
-            _source: Source = source,
-            _stored_hashes: dict[str, str] = stored_hashes,
-        ) -> tuple[str, str] | tuple[str, str, str]:
-            try:
-                current_hash = _source.get_content_hash(sf)
-            except Exception as exc:
-                _log_file_error("Failed to hash '%s': %s", path, exc, stage=PipelineStage.HASHING)
-                _emit(path, "Error", idx, total, error=str(exc))
-                status_store.mark_failed(path, str(exc), exc=exc)
-                completed.increment()
-                return ("error", path, str(exc))
-
-            stored_hash = _stored_hashes.get(path, "")
-            if current_hash == stored_hash:
-                # Hash unchanged — but the stored metadata may be stale
-                # (e.g. METADATA_VERSION bumped). Re-ingest in that case
-                # so new metadata fields/prompts reach the collection.
-                try:
-                    already, _ = engine.is_already_ingested(path, current_hash)
-                except Exception:
-                    already = True
-                if not already:
-                    log.info("Metadata version changed for %s — re-ingesting", path)
-                    return _process_changed(path, sf, idx, total)
-                _emit(path, "Done", idx, total)
-                # Already ingested & unchanged — the file is done, no state
-                # change. Marking 'skipped' here would be an illegal
-                # transition from 'done' (and semantically wrong).
-                completed.increment()
-                return ("unchanged", path)
-
-            if dry_run:
-                log.info("[dry-run] Would update: %s", path)
-                _emit(path, "Done", idx, total)
-                completed.increment()
-                return ("changed", path)
-
-            # Changed file — delete old chunks, then convert + ingest
-            return _process_changed(path, sf, idx, total)
-
-        # Build work list (path, fn, args)
-        work_items: list[tuple[str, object, tuple]] = []
+        # Build work list (kind, path, SourceFile, idx, total)
+        work_items: list[tuple] = []
         for path in new_paths:
             file_idx_counter += 1
-            work_items.append((path, _process_new, (path, current_map[path], file_idx_counter, total_files)))
+            work_items.append(("added", path, current_map[path], file_idx_counter, total_files))
 
         for path in common_paths:
             file_idx_counter += 1
-            work_items.append((path, _process_unchanged, (path, current_map[path], file_idx_counter, total_files)))
+            work_items.append(("unchanged", path, current_map[path], file_idx_counter, total_files))
 
         for path in deleted_paths:
             file_idx_counter += 1
-            work_items.append((path, _process_deleted, (path, file_idx_counter, total_files)))
+            work_items.append(("deleted", path, None, file_idx_counter, total_files))
 
-        # Run all files through a synchronous thread pool. The per-file
-        # pipeline (parse → context → metadata → embed → store) is written
-        # with sync calls and proven stable in plain threads; the async
-        # task/semaphore orchestration was racy (orphaned to_thread futures
-        # froze the whole sync), so the pool is the only concurrency here.
+        # Two-stage pipeline: a convert pool sized ahead of the ingest
+        # stage, plus a single serialized consumer for the LLM phases.
+        # Conversions (MarkItDown/OCR) proceed while the consumer is busy
+        # inside a file's context/metadata/embedding stages, so the
+        # converter queues never sit idle. The per-file pipeline is
+        # written with sync calls and proven stable in plain threads.
         results: list[tuple | BaseException] = []
         if work_items:
-            max_workers = int(getattr(config, "MAX_CONCURRENT_SYNC", 4) or 1)
             import concurrent.futures
 
-            pool = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-            futures: list[concurrent.futures.Future] = []
-            for _path, fn, args in work_items:
-                futures.append(pool.submit(fn, *args))  # type: ignore[arg-type]
+            convert_workers = max(
+                3, int(getattr(config, "MAX_CONCURRENT_SYNC", 2) or 1) + 1
+            )
+            convert_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=convert_workers, thread_name_prefix="convert"
+            )
+            futures: dict[concurrent.futures.Future, str] = {
+                convert_pool.submit(_convert_stage, path, sf, idx, total, kind): path
+                for kind, path, sf, idx, total in work_items
+            }
             try:
-                for future in futures:
-                    try:
-                        results.append(future.result())
-                    except BaseException as exc:
-                        results.append(exc)
+                while futures:
+                    done, _ = concurrent.futures.wait(
+                        futures, return_when=concurrent.futures.FIRST_COMPLETED
+                    )
+                    for fut in done:
+                        futures.pop(fut)
+                        try:
+                            item = fut.result()
+                        except BaseException as exc:
+                            results.append(exc)
+                            continue
+                        if isinstance(item, BaseException):
+                            results.append(item)
+                            continue
+                        if item[0] == "ingest":
+                            results.append(_ingest_stage(item))
+                        else:
+                            results.append(item)
             except KeyboardInterrupt:
                 # Ctrl+C must stop the sync promptly. Cancel queued work and
                 # don't wait for in-flight files (shutdown(wait=True) would
@@ -668,9 +675,9 @@ async def sync(
                 log.info("Sync interrupted — cancelling queued work")
                 for future in futures:
                     future.cancel()
-                pool.shutdown(wait=False, cancel_futures=True)
+                convert_pool.shutdown(wait=False, cancel_futures=True)
                 raise
-            pool.shutdown(wait=True)
+            convert_pool.shutdown(wait=True)
 
             for r in results:
                 if isinstance(r, BaseException):

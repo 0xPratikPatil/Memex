@@ -406,3 +406,56 @@ class TestStatusCommand:
         result = runner.invoke(app, ["status"])
         assert result.exit_code == 0
         assert "3" in result.output
+
+
+class TestProgressTrackerDisplay:
+    """Display pool + slot rendering + per-row time column (Rich Live correctness)."""
+
+    def _tracker(self, files: int = 3, budget: int = 10):
+        from rich.progress import Progress
+
+        from memex.cli import _ProgressTracker
+
+        progress = Progress()
+        tracker = _ProgressTracker(progress, total=files)
+        tracker.add_slots(min(files, budget))
+        return progress, tracker
+
+    def test_pool_sized_to_file_count_no_phantom_bars(self) -> None:
+        """Few files → exactly that many slot rows (plus Overall). No phantom bars."""
+        progress, tracker = self._tracker(files=3)
+        # Overall + 3 slots — NOT the full budget of 10
+        assert len(progress.tasks) == 4
+        assert all(t.description == "" for t in progress.tasks[1:])
+
+    def test_unused_slots_marked_unused(self) -> None:
+        """Unused slots carry the unused field so columns render empty."""
+        progress, tracker = self._tracker(files=2)
+        unused = [t for t in progress.tasks if t.fields.get("unused")]
+        assert len(unused) == 2
+        for t in unused:
+            assert t.total is None and t.completed == 0
+
+    def test_claiming_slot_clears_unused(self) -> None:
+        progress, tracker = self._tracker(files=2)
+        tracker.mark_active("/docs/a.pdf", "Embedding")
+        claimed = [t for t in progress.tasks if t.description == "a.pdf"]
+        assert len(claimed) == 1
+        assert not claimed[0].fields.get("unused")
+
+    def test_per_row_time_column_present(self) -> None:
+        """Per-row elapsed time (like previous behavior) — TimeElapsedColumn in columns."""
+        from rich.progress import TimeElapsedColumn
+
+        from memex.cli import _make_progress
+
+        progress = _make_progress()
+        assert any(isinstance(c, TimeElapsedColumn) for c in progress.columns)
+
+    def test_mark_done_detail_not_augmented(self) -> None:
+        """Done detail is the caller's text ('3 chunks') — no duration appended."""
+        progress, tracker = self._tracker(files=1)
+        tracker.mark_active("/docs/a.pdf", "Embedding")
+        tracker.mark_done("/docs/a.pdf", "Done", "3 chunks")
+        done = [t for t in progress.tasks if t.description == "a.pdf"]
+        assert done[0].fields["detail"] == "3 chunks"
