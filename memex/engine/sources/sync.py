@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -569,6 +570,9 @@ async def sync(
                 status_store.update_stage(path, PipelineStage.CONVERTING)
                 local = _source.download(sf, _download_dir)
                 conv = _convert_file(engine, str(local), path, progress_cb, idx, total)
+                # Converted but not yet consumed by the LLM stage — say so on
+                # the row instead of leaving a stale "Converting".
+                _emit(path, "Queued", idx, total)
                 return ("ingest", kind, path, str(local), conv["markdown"], conv["chunks"], idx, total)
             except Exception as exc:
                 skipped = _skip_timeout(path, exc, idx, total)
@@ -628,26 +632,49 @@ async def sync(
             file_idx_counter += 1
             work_items.append(("deleted", path, None, file_idx_counter, total_files))
 
-        # Two-stage pipeline: a convert pool sized ahead of the ingest
-        # stage, plus a single serialized consumer for the LLM phases.
-        # Conversions (MarkItDown/OCR) proceed while the consumer is busy
-        # inside a file's context/metadata/embedding stages, so the
-        # converter queues never sit idle. The per-file pipeline is
-        # written with sync calls and proven stable in plain threads.
+        # Two-stage pipeline: a convert pool plus a single serialized
+        # consumer for the LLM phases. Conversions are fed in bounded
+        # just-in-time waves — the consumer tops the pipeline up before
+        # each file's LLM phases, so the MarkItDown/OCR queues keep
+        # converting the next files while the LLM works on the current
+        # one (no upfront burst, no long converter idle). The per-file
+        # pipeline is written with sync calls and proven stable in plain
+        # threads.
         results: list[tuple | BaseException] = []
         if work_items:
             import concurrent.futures
 
+            CONVERT_AHEAD = 8
             convert_workers = max(
-                3, int(getattr(config, "MAX_CONCURRENT_SYNC", 2) or 1) + 1
+                4, int(getattr(config, "MAX_CONCURRENT_SYNC", 2) or 1) + 2
             )
             convert_pool = concurrent.futures.ThreadPoolExecutor(
                 max_workers=convert_workers, thread_name_prefix="convert"
             )
-            futures: dict[concurrent.futures.Future, str] = {
-                convert_pool.submit(_convert_stage, path, sf, idx, total, kind): path
-                for kind, path, sf, idx, total in work_items
-            }
+            work_iter = iter(work_items)
+            futures: dict[concurrent.futures.Future, str] = {}
+
+            def _in_flight(
+                _futures: dict[concurrent.futures.Future, str] = futures,
+            ) -> int:
+                return sum(1 for f in _futures if not f.done())
+
+            def _top_up(
+                _futures: dict[concurrent.futures.Future, str] = futures,
+                _work_iter: Iterator[tuple] = work_iter,
+                _convert_pool: concurrent.futures.ThreadPoolExecutor = convert_pool,
+                _ahead: int = CONVERT_AHEAD,
+            ) -> None:
+                """Submit conversions until CONVERT_AHEAD are in flight."""
+                while sum(1 for f in _futures if not f.done()) < _ahead:
+                    try:
+                        kind, path, sf, idx, total = next(_work_iter)
+                    except StopIteration:
+                        return
+                    fut = _convert_pool.submit(_convert_stage, path, sf, idx, total, kind)
+                    _futures[fut] = path
+
+            _top_up()
             try:
                 while futures:
                     done, _ = concurrent.futures.wait(
@@ -664,9 +691,13 @@ async def sync(
                             results.append(item)
                             continue
                         if item[0] == "ingest":
+                            # Top up BEFORE the LLM phases — the next wave
+                            # converts while this file is mid-LLM.
+                            _top_up()
                             results.append(_ingest_stage(item))
                         else:
                             results.append(item)
+                    _top_up()
             except KeyboardInterrupt:
                 # Ctrl+C must stop the sync promptly. Cancel queued work and
                 # don't wait for in-flight files (shutdown(wait=True) would

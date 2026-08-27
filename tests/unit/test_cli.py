@@ -459,3 +459,38 @@ class TestProgressTrackerDisplay:
         tracker.mark_done("/docs/a.pdf", "Done", "3 chunks")
         done = [t for t in progress.tasks if t.description == "a.pdf"]
         assert done[0].fields["detail"] == "3 chunks"
+
+
+class TestIngestLookahead:
+    @pytest.fixture(autouse=True)
+    def _mock_status_store(self) -> MagicMock:
+        store = MagicMock()
+        with patch("memex.engine.ingestion.status.FileStatusStore", return_value=store):
+            yield store
+
+    @patch("memex.engine.core.pipeline.RAGEngine")
+    @patch("memex.engine.ingestion.loader.parse_file")
+    def test_ingests_more_files_than_lookahead(self, mock_parse_file, mock_engine_cls, tmp_path) -> None:
+        """8 files (> MAX_AHEAD): every file is ingested despite wave topping."""
+        sub = tmp_path / "bulk"
+        sub.mkdir()
+        for i in range(8):
+            (sub / f"f{i}.md").write_text(f"# Doc {i}")
+
+        mock_result = MagicMock()
+        mock_result.ok = True
+        mock_result.markdown = "# content"
+        mock_parse_file.return_value = mock_result
+
+        mock_engine = MagicMock()
+        mock_engine.compute_file_hash.return_value = "hash"
+        mock_engine.ingest_text.return_value = 1
+        mock_engine_cls.return_value = mock_engine
+        mock_engine.check_unmodified_local.return_value = (False, 0)
+        mock_engine.is_already_ingested.return_value = (False, 0)
+
+        result = runner.invoke(app, ["ingest", str(sub), "--recursive"])
+        assert result.exit_code == 0
+        assert "ingest complete" in result.output
+        assert "8 ingested" in result.output
+        assert mock_engine.ingest_text.call_count == 8

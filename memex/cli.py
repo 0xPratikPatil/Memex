@@ -74,6 +74,7 @@ _STAGE_ICONS: dict[str, str] = {
     "Hashing": "#",
     "Parsing": "↓",
     "Converting": "⚙",
+    "Queued": "…",
     "OCR": "◎",
     "Chunking": "▶",
     "Context": ">",
@@ -555,11 +556,11 @@ def ingest(
     from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 
     # Pipeline parallelism: conversions (MarkItDown/OCR) run up to
-    # MAX_AHEAD files ahead of the LLM stages. While the main thread is
-    # embedding/storing file N, the converter already works on N+1..N+k
-    # — the queue rows stay busy instead of idling during metadata and
-    # embedding stages.
-    MAX_AHEAD = 3
+    # MAX_AHEAD files ahead of the LLM stages. The pipeline is topped up
+    # before each file's LLM phases — while the main thread embeds/stores
+    # file N, the converter already works on N+1..N+8, so the queue rows
+    # stay busy instead of idling during metadata/embedding stages.
+    MAX_AHEAD = 8
     live_logs: list[str] = []
     with _suspend_live_logs(live_logs), progress:
         try:
@@ -580,31 +581,36 @@ def ingest(
                 max_workers=MAX_AHEAD, thread_name_prefix="convert"
             )
 
-            def _submit_next() -> None:
-                """Cheap checks in the main thread; conversions go to the pool."""
-                try:
-                    file_path = next(file_iter)
-                except StopIteration:
-                    return
-                src = str(file_path)
-                status_store.mark_pending(src, source_name=source_name or target.name)
-                tracker.mark_active(src, "Checking")
-                try:
-                    can_skip, chunk_count = engine.check_unmodified_local(src)
-                except Exception as exc:
-                    errors.append(f"{src}: {exc}")
-                    status_store.mark_failed(src, str(exc), exc=exc)
-                    tracker.mark_done(src, "Error", str(exc)[:60])
-                    return
-                if can_skip:
-                    status_store.mark_skipped(src, reason="unchanged")
-                    tracker.mark_done(src, "Skipped", f"{chunk_count} chunks")
-                    return
-                tracker.mark_active(src, "Parsing")
-                pending[executor.submit(parse_file, src)] = src
+            def _top_up() -> None:
+                """Submit conversions until MAX_AHEAD are in flight.
 
-            for _ in range(MAX_AHEAD):
-                _submit_next()
+                Counts only futures not yet completed — a full wave is
+                submitted at each LLM-phase boundary, so conversions run
+                during the whole LLM phase instead of a startup burst.
+                """
+                while sum(1 for f in pending if not f.done()) < MAX_AHEAD:
+                    try:
+                        file_path = next(file_iter)
+                    except StopIteration:
+                        return
+                    src = str(file_path)
+                    status_store.mark_pending(src, source_name=source_name or target.name)
+                    tracker.mark_active(src, "Checking")
+                    try:
+                        can_skip, chunk_count = engine.check_unmodified_local(src)
+                    except Exception as exc:
+                        errors.append(f"{src}: {exc}")
+                        status_store.mark_failed(src, str(exc), exc=exc)
+                        tracker.mark_done(src, "Error", str(exc)[:60])
+                        continue
+                    if can_skip:
+                        status_store.mark_skipped(src, reason="unchanged")
+                        tracker.mark_done(src, "Skipped", f"{chunk_count} chunks")
+                        continue
+                    tracker.mark_active(src, "Parsing")
+                    pending[executor.submit(parse_file, src)] = src
+
+            _top_up()
 
             while pending:
                 done, _ = wait(pending, return_when=FIRST_COMPLETED)
@@ -630,6 +636,9 @@ def ingest(
                             status_store.mark_skipped(src, reason="dedup")
                             tracker.mark_done(src, "Skipped", f"{existing_chunks} chunks")
                             continue
+                        # Top up BEFORE the LLM phases — the next wave
+                        # converts while this file is embedding/storing.
+                        _top_up()
                         tracker.mark_active(src, "Converting")
                         chunks = engine.ingest_text(
                             result.markdown,
@@ -650,7 +659,7 @@ def ingest(
                         errors.append(f"{src}: {exc}")
                         status_store.mark_failed(src, str(exc), exc=exc)
                         tracker.mark_done(src, "Error", str(exc)[:60])
-                _submit_next()
+                _top_up()
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
             queue_display.stop()

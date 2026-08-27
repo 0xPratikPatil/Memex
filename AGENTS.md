@@ -308,8 +308,8 @@ Display rules (ingest + sync):
 - **Queue rows** show `idle` / `now: file · waiting: …` / `done: file` (polled from `GET /queue`, `recently_completed` ring buffer, 100ms poll).
 - **Log buffering** — during a live display, WARNING+ logs are buffered (`_suspend_live_logs`) and replayed after the run; log lines printed mid-display corrupt Rich's Live redraw (issue #1052, logger uses its own stderr console).
 - **Transient** — the display is erased on exit before the summary prints.
-- **Ingest prefetch** — conversions (MarkItDown/OCR) run up to 3 files ahead of the LLM pipeline (`ThreadPoolExecutor`, `MAX_AHEAD=3`): while a file is embedding/storing, the converter already works on the next files so queue rows stay busy.
-- **Sync two-stage pipeline** — `sync.py` splits conversion from ingestion: a convert pool (≥3 workers) converts ahead while a single serialized consumer runs the LLM phases (context/metadata/embedding, serialized by the global LLM lock). Converter queues never idle while other files are mid-LLM.
+- **Ingest prefetch** — conversions (MarkItDown/OCR) run up to 8 files ahead of the LLM pipeline (`ThreadPoolExecutor`, `MAX_AHEAD=8`), topped up before each file's LLM phases: while a file is embedding/storing, the converter already works on the next files so queue rows stay busy.
+- **Sync two-stage pipeline** — `sync.py` splits conversion from ingestion: a convert pool (≥4 workers) fed in bounded just-in-time waves (`CONVERT_AHEAD=8` in-flight, topped up before each file's LLM phases) plus a single serialized consumer running the LLM phases (context/metadata/embedding, serialized by the global LLM lock). Converter queues never idle while files remain to convert; converted files waiting for the LLM show a `… Queued` stage (not a stale `Converting`).
 
 The `sync` command exposes a `progress_cb` callback for per-file stage reporting:
 
@@ -321,7 +321,7 @@ async def my_callback(progress: FileProgress) -> None:
     print(f"[{progress.stage.value}] {progress.file_path} ({progress.file_idx}/{progress.total_files})")
 ```
 
-Sync stages: `Scanning` → `Reconciling` → `Hashing` → `Parsing` → `Ingesting` → `Done` | `Error` | `Deleting`
+Sync stages: `Scanning` → `Reconciling` → `Hashing` → `Parsing` → `Converting` → `Queued` → `Done` | `Error` | `Deleting`
 
 Completion prints a single minimal line (`✓ sync complete in 1m32s — …added · changed · deleted · unchanged · errors`) — no table.
 

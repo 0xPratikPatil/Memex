@@ -523,3 +523,140 @@ class TestConversionAhead:
         # The first ingest must not have started until all conversions were
         # underway — conversions are a separate, parallel stage.
         assert ingest_seen[0] >= 3, f"only {ingest_seen[0]} conversions started before first ingest (inline design)"
+
+
+class TestBoundedConversionWaves:
+    """Conversions run in bounded just-in-time waves, not an upfront burst."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_status_store(self) -> MagicMock:
+        store = MagicMock()
+        store.get_due_retries.return_value = []
+        with patch("memex.engine.sources.sync.FileStatusStore", return_value=store):
+            yield store
+
+    @pytest.mark.asyncio
+    async def test_wave_is_bounded_no_upfront_burst(self) -> None:
+        """12 files: at most 8 conversions submitted before the first ingest —
+        conversions are paced in waves, not all submitted at once."""
+        from memex.engine.sources.sync import sync as sync_fn
+
+        submissions: list[str] = []
+        ingest_seen: list[int] = []
+        started: list[str] = []
+        import threading
+        import time
+        import concurrent.futures
+
+        start_lock = threading.Lock()
+        ingest_lock = threading.Lock()
+
+        def fake_convert(engine, file_path, source_identifier, progress_cb=None, file_idx=0, total_files=0):
+            with start_lock:
+                started.append(source_identifier)
+            time.sleep(0.02)
+            return {"markdown": f"# {source_identifier}", "chunks": None}
+
+        def fake_ingest(engine, markdown, chunks, source_identifier, file_path, source_name, progress_cb=None):
+            with ingest_lock:
+                ingest_seen.append(len(submissions))
+            time.sleep(0.05)
+            return 1
+
+        cfg = MagicMock()
+        cfg.get_list.return_value = [{"type": "local", "name": "docs", "path": "/tmp/docs"}]
+        mock_source = MagicMock()
+        files = [MagicMock() for _ in range(12)]
+        for i, f in enumerate(files):
+            f.path = f"/tmp/docs/doc{i}.pdf"
+            f.name = f"doc{i}.pdf"
+        mock_source.list_files.return_value = files
+        mock_source.download.side_effect = [Path(f"/tmp/docs/doc{i}.pdf") for i in range(12)]
+        mock_qdrant = MagicMock()
+        mock_qdrant.scroll.return_value = ([], None)
+        mock_engine = MagicMock()
+        mock_engine._get_qdrant.return_value = mock_qdrant
+        mock_engine.compute_file_hash.return_value = "hash"
+
+        orig_executor = concurrent.futures.ThreadPoolExecutor
+
+        class _SpyExecutor(orig_executor):
+            def submit(self, fn, *args, **kwargs):
+                if args:
+                    submissions.append(args[0])
+                return super().submit(fn, *args, **kwargs)
+
+        with (
+            patch("memex.engine.sources.sync.get_source", return_value=mock_source),
+            patch("memex.engine.core.pipeline.RAGEngine", return_value=mock_engine),
+            patch("memex.engine.sources.sync._convert_file", side_effect=fake_convert),
+            patch("memex.engine.sources.sync._ingest_markdown", side_effect=fake_ingest),
+            patch("memex.engine.sources.sync.config") as mock_config,
+            patch.object(concurrent.futures, "ThreadPoolExecutor", _SpyExecutor),
+        ):
+            mock_config.COLLECTION_NAME = "memex"
+            mock_config.MAX_CONCURRENT_SYNC = 2
+            stats = await sync_fn(cfg)
+
+        assert stats.added == 12
+        assert ingest_seen, "no ingest ran"
+        # Bounded wave: a wave of 8 in-flight conversions (plus the slot
+        # refill for the popped file) at first ingest — NOT all 12 submitted
+        # upfront (the upfront burst submitted everything at once).
+        assert ingest_seen[0] <= 9, (
+            f"{ingest_seen[0]} conversions submitted before first ingest — "
+            "unbounded upfront burst"
+        )
+        assert ingest_seen[0] >= 3, "conversions must run ahead of ingest"
+
+    @pytest.mark.asyncio
+    async def test_converted_files_emit_queued_stage(self) -> None:
+        """Converted files waiting for the LLM consumer emit 'Queued', not a
+        stale 'Converting' — so rows show the truth while queues work ahead."""
+        import threading
+        import time
+
+        from memex.engine.sources.sync import sync
+
+        stages: list[str] = []
+
+        def cb(p):
+            stages.append(p.stage)
+
+        def fake_convert(engine, file_path, source_identifier, progress_cb=None, file_idx=0, total_files=0):
+            time.sleep(0.01)
+            return {"markdown": f"# {source_identifier}", "chunks": None}
+
+        def fake_ingest(engine, markdown, chunks, source_identifier, file_path, source_name, progress_cb=None):
+            return 1
+
+        cfg = MagicMock()
+        cfg.get_list.return_value = [{"type": "local", "name": "docs", "path": "/tmp/docs"}]
+        mock_source = MagicMock()
+        files = [MagicMock() for _ in range(3)]
+        for i, f in enumerate(files):
+            f.path = f"/tmp/docs/doc{i}.pdf"
+            f.name = f"doc{i}.pdf"
+        mock_source.list_files.return_value = files
+        mock_source.download.side_effect = [Path(f"/tmp/docs/doc{i}.pdf") for i in range(3)]
+        mock_qdrant = MagicMock()
+        mock_qdrant.scroll.return_value = ([], None)
+        mock_engine = MagicMock()
+        mock_engine._get_qdrant.return_value = mock_qdrant
+        mock_engine.compute_file_hash.return_value = "hash"
+
+        with (
+            patch("memex.engine.sources.sync.get_source", return_value=mock_source),
+            patch("memex.engine.core.pipeline.RAGEngine", return_value=mock_engine),
+            patch("memex.engine.sources.sync._convert_file", side_effect=fake_convert),
+            patch("memex.engine.sources.sync._ingest_markdown", side_effect=fake_ingest),
+            patch("memex.engine.sources.sync.config") as mock_config,
+        ):
+            mock_config.COLLECTION_NAME = "memex"
+            mock_config.MAX_CONCURRENT_SYNC = 2
+            await sync(cfg, progress_cb=cb)
+
+        assert "Queued" in stages, f"no Queued stage emitted; saw {stages}"
+        conv_idx = stages.index("Converting")
+        queued_idx = stages.index("Queued")
+        assert queued_idx > conv_idx
