@@ -8,7 +8,8 @@ import logging
 import os
 import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
+from collections.abc import Iterator
 from pathlib import Path
 
 import typer
@@ -31,6 +32,39 @@ app = typer.Typer(help="Memex RAG — CLI commands")
 console = Console()
 
 _TERMINAL_STAGES = ("Done", "Skipped", "Error")
+
+
+@contextlib.contextmanager
+def _suspend_live_logs(buffer: list[str]) -> Iterator[None]:
+    """Route WARNING+ log records into a buffer while a Live display runs.
+
+    Log lines written to the terminal mid-display corrupt Rich's Live
+    redraw (Textualize/rich issue #1052): the logger uses its own
+    stderr console, so Live's stdout interception never sees the
+    records. They print inside the live region, shift the cursor
+    position, and leave duplicated/leftover rows. Serious Rich users
+    (pip) keep log output away from the live region — here records are
+    buffered and replayed after the display closes.
+    """
+    root = logging.getLogger()
+    old_handlers = list(root.handlers)
+    old_level = root.level
+
+    class _BufferHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            with contextlib.suppress(Exception):
+                buffer.append(record.getMessage())
+
+    handler = _BufferHandler()
+    handler.setLevel(logging.WARNING)
+    root.handlers[:] = [handler]
+    root.setLevel(logging.WARNING)
+    try:
+        yield
+    finally:
+        root.handlers[:] = old_handlers
+        root.setLevel(old_level)
+
 
 # Icons use only widely-supported glyphs (DejaVu/Noto/common terminal fonts).
 _STAGE_ICONS: dict[str, str] = {
@@ -78,22 +112,43 @@ def _fmt_dur(seconds: float) -> str:
 
 
 class _ProgressTracker:
-    """Overall + per-file tasks with a bounded rolling terminal-row window.
+    """Overall + per-file rows over a FIXED pre-allocated row pool.
 
-    Tracks per-file wall time (first activity → terminal stage) and the
-    total run time for the final summary.
+    Rich's Live cannot handle tasks being added/removed between
+    refreshes — the region height changes mid-display and the cursor-up
+    math breaks, leaving duplicated/leftover rows (Textualize/rich
+    issue #1144). The pip-style fix: create every row ONCE before the
+    Live display starts, then only update in place. File rows come from
+    a fixed pool of slots that are recycled (oldest done first) — the
+    render height is constant for the whole run.
+
+    Also tracks per-file wall time (first activity → terminal stage)
+    and the total run time for the final summary.
     """
 
     def __init__(self, progress: Progress, total: int | None) -> None:
         self._progress = progress
         self.overall = progress.add_task("[bold]Overall", total=total, stage="", detail="")
         self._file_tasks: dict[str, TaskID] = {}
-        self._terminal_order: OrderedDict[str, TaskID] = OrderedDict()
+        self._done_order: OrderedDict[str, TaskID] = OrderedDict()
+        self._free_slots: deque[TaskID] = deque()
         self._start_times: dict[str, float] = {}
         self.file_times: dict[str, float] = {}
         self.file_stage: dict[str, str] = {}
         self.done_files: set[str] = set()
         self._started_ts = time.monotonic()
+
+    def add_slots(self) -> None:
+        """Pre-allocate the file-slot pool (FIFO — first file takes the
+        top slot, directly under the queue rows).
+
+        Called AFTER the queue rows exist so the render order matches the
+        old layout: Overall → queue rows → file rows. Every slot is
+        created before the Live display starts; nothing is ever added or
+        removed during the run.
+        """
+        for _ in range(self._row_pool_size()):
+            self._free_slots.append(self._progress.add_task("", total=None, stage="", detail=""))
 
     def set_total(self, total: int) -> None:
         self._progress.update(self.overall, total=total)
@@ -101,36 +156,43 @@ class _ProgressTracker:
     def total_elapsed(self) -> float:
         return time.monotonic() - self._started_ts
 
-    def _display_budget(self) -> int:
-        """Max rows this display can show without scrolling the terminal.
+    def _row_pool_size(self) -> int:
+        """Fixed number of file-slot rows.
 
-        Overall + 2 queue rows are fixed; the rest is shared by active and
-        terminal file rows. Eviction keeps the total inside the budget so
-        the live region always redraws in place (never appends).
+        Total live rows = Overall + 2 queue rows + this pool. Kept small
+        so the region always fits below the startup banner and above the
+        summary — if the terminal ever scrolls, Live's cursor-up stops
+        tracking correctly and rows duplicate.
         """
         height = console.size.height or 24
-        return max(6, height - 4)
+        return max(4, min(10, height - 15))
 
-    def _evict(self) -> None:
-        while len(self._file_tasks) > self._display_budget():
-            if not self._terminal_order:
-                break
-            src, tid = self._terminal_order.popitem(last=False)
-            if src in self._file_tasks:
-                with contextlib.suppress(Exception):
-                    self._progress.remove_task(tid)
-                del self._file_tasks[src]
+    def _alloc(self) -> TaskID:
+        """Claim a slot: reuse a free one, else recycle the oldest done row."""
+        if self._free_slots:
+            return self._free_slots.popleft()
+        if self._done_order:
+            src, tid = self._done_order.popitem(last=False)
+            del self._file_tasks[src]
+            return tid
+        raise RuntimeError("row pool exhausted with no recyclable rows")
 
     def mark_active(self, src: str, stage: str) -> None:
         if src not in self._start_times:
             self._start_times[src] = time.monotonic()
         tid = self._file_tasks.get(src)
         if tid is None:
-            tid = self._file_tasks[src] = self._progress.add_task(
-                _short_name(src), total=None, stage=_stage_label(stage), detail=""
+            tid = self._file_tasks[src] = self._alloc()
+            self._progress.update(
+                tid,
+                description=_short_name(src),
+                total=None,
+                completed=0,
+                stage=_stage_label(stage),
+                detail="",
             )
-            self._evict()
-        self._progress.update(tid, stage=_stage_label(stage))
+        else:
+            self._progress.update(tid, stage=_stage_label(stage))
 
     def mark_done(self, src: str, stage: str, detail: str = "") -> None:
         start = self._start_times.setdefault(src, time.monotonic())
@@ -138,12 +200,16 @@ class _ProgressTracker:
         self.file_stage[src] = stage
         tid = self._file_tasks.get(src)
         if tid is None:
-            tid = self._file_tasks[src] = self._progress.add_task(
-                _short_name(src), total=None, stage=_stage_label(stage), detail=detail
-            )
-        self._progress.update(tid, total=1, completed=1, stage=_stage_label(stage), detail=detail)
-        self._terminal_order[src] = tid
-        self._evict()
+            tid = self._file_tasks[src] = self._alloc()
+        self._progress.update(
+            tid,
+            description=_short_name(src),
+            total=1,
+            completed=1,
+            stage=_stage_label(stage),
+            detail=detail,
+        )
+        self._done_order[src] = tid
         if src not in self.done_files:
             self.done_files.add(src)
             self._progress.update(self.overall, completed=len(self.done_files))
@@ -186,6 +252,7 @@ def _make_progress() -> Progress:
         _ellipsis_col("{task.fields[detail]}"),
         console=console,
         refresh_per_second=10,
+        transient=True,
     )
 
 
@@ -423,10 +490,17 @@ def ingest(
 
     status_store = FileStatusStore(engine._get_qdrant())
 
-    with _make_progress() as progress:
-        tracker = _ProgressTracker(progress, total=total)
-        queue_display = _QueueDisplay(progress)
-        queue_display.start()
+    progress = _make_progress()
+    tracker = _ProgressTracker(progress, total=total)
+    queue_display = _QueueDisplay(progress)
+    queue_display.start()
+    tracker.add_slots()
+    # All rows (overall + queue + fixed file-slot pool) exist before the
+    # Live starts — Rich's Live cannot track height changes made by
+    # add/remove between refreshes (duplicated rows). Only in-place
+    # updates happen once the display is live.
+    live_logs: list[str] = []
+    with _suspend_live_logs(live_logs), progress:
         try:
             def _on_progress(p: FileProgress) -> None:
                 if p.stage in _TERMINAL_STAGES:
@@ -491,6 +565,8 @@ def ingest(
         finally:
             queue_display.stop()
 
+    for msg in live_logs:
+        console.print(f"[yellow]  {msg}[/]")
     _print_run_summary(
         title="ingest complete",
         elapsed=tracker.total_elapsed(),
@@ -527,10 +603,15 @@ def sync(
 
     yaml_config = YamlConfig(config_path)
 
-    with _make_progress() as progress:
-        tracker = _ProgressTracker(progress, total=None)
-        queue_display = _QueueDisplay(progress)
-        queue_display.start()
+    progress = _make_progress()
+    tracker = _ProgressTracker(progress, total=None)
+    queue_display = _QueueDisplay(progress)
+    queue_display.start()
+    tracker.add_slots()
+    # All rows pre-created before Live starts (see ingest — fixed row
+    # pool; Rich's Live breaks when rows are added/removed mid-display).
+    live_logs: list[str] = []
+    with _suspend_live_logs(live_logs), progress:
         try:
             seen_total = 0
 
@@ -583,10 +664,12 @@ def sync(
                 os._exit(130)
         finally:
             queue_display.stop()
-        if seen_total == 0:
-            tracker.set_total(1)
-            progress.update(tracker.overall, completed=1)
+            if seen_total == 0:
+                tracker.set_total(1)
+                progress.update(tracker.overall, completed=1)
 
+    for msg in live_logs:
+        console.print(f"[yellow]  {msg}[/]")
     _print_run_summary(
         title="sync complete",
         elapsed=tracker.total_elapsed(),

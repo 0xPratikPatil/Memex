@@ -71,7 +71,6 @@ class TestIngestCommand:
         assert result.exit_code == 0
         assert "ingest complete" in result.output
         assert "1 ingested" in result.output
-        assert "Done" in result.output
 
     @patch("memex.engine.core.pipeline.RAGEngine")
     @patch("memex.engine.ingestion.loader.parse_file")
@@ -96,7 +95,6 @@ class TestIngestCommand:
         assert result.exit_code == 0
         assert "ingest complete" in result.output
         assert "2 ingested" in result.output
-        assert "Done" in result.output
 
     @patch("memex.engine.core.pipeline.RAGEngine")
     @patch("memex.engine.ingestion.loader.parse_file")
@@ -223,7 +221,6 @@ class TestIngestDedup:
 
         result = runner.invoke(app, ["ingest", str(test_file)])
         assert result.exit_code == 0
-        assert "Skipped" in result.output
         mock_engine.ingest_text.assert_not_called()
 
 

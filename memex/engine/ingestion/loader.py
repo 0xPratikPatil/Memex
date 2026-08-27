@@ -151,19 +151,7 @@ def parse_url(url: str) -> ConversionResult:
     """Fetch a URL, convert via MarkItDown, OCR fallback if poor quality."""
     from memex.engine.utils.cache import cache_parse_result, get_cached_parse_result
 
-    file_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
-    cached = get_cached_parse_result(file_hash)
-    if cached is not None:
-        logger.info("Converter cache hit for URL: %s", url)
-        return ConversionResult(
-            markdown=cached["markdown"],
-            json_content=cached.get("json_content", {}),
-            status=cached.get("status", "success"),
-            processing_time=cached.get("processing_time", 0.0),
-            errors=cached.get("errors", []),
-        )
-
-    # Fetch the URL
+    # Fetch the URL first — we need the content to compute a content-based cache key
     try:
         resp = httpx.get(url, timeout=config.HTTP_TIMEOUT, follow_redirects=True)
         resp.raise_for_status()
@@ -181,6 +169,19 @@ def parse_url(url: str) -> ConversionResult:
             hint="Check the URL is reachable from this host.",
             cause=exc,
         ) from exc
+
+    # Content-based cache key — different content → different key → fresh conversion
+    file_hash = hashlib.sha256(resp.content).hexdigest()[:16]
+    cached = get_cached_parse_result(file_hash)
+    if cached is not None:
+        logger.info("Converter cache hit for URL: %s", url)
+        return ConversionResult(
+            markdown=cached["markdown"],
+            json_content=cached.get("json_content", {}),
+            status=cached.get("status", "success"),
+            processing_time=cached.get("processing_time", 0.0),
+            errors=cached.get("errors", []),
+        )
 
     filename = url.split("/")[-1].split("?")[0] or "document"
 
@@ -227,7 +228,17 @@ def parse_local_file(file_path: str) -> ConversionResult:
     """Read a local file, convert via MarkItDown, OCR fallback if poor quality."""
     from memex.engine.utils.cache import cache_parse_result, get_cached_parse_result
 
-    file_hash = hashlib.sha256(file_path.encode()).hexdigest()[:16]
+    p = Path(file_path)
+    if not p.is_file():
+        raise FileNotFoundError(f"File not found: {file_path}")
+    file_bytes = p.read_bytes()
+    if len(file_bytes) > 200 * 1024 * 1024:
+        raise ValueError(
+            f"File too large ({len(file_bytes) / 1024 / 1024:.0f}MB > 200MB). Use chunking module for large files."
+        )
+
+    # Content-based cache key — different content → different key → fresh conversion
+    file_hash = hashlib.sha256(file_bytes).hexdigest()[:16]
     cached = get_cached_parse_result(file_hash)
     if cached is not None:
         logger.info("Converter cache hit for local file: %s", file_path)
@@ -239,14 +250,6 @@ def parse_local_file(file_path: str) -> ConversionResult:
             errors=cached.get("errors", []),
         )
 
-    p = Path(file_path)
-    if not p.is_file():
-        raise FileNotFoundError(f"File not found: {file_path}")
-    file_bytes = p.read_bytes()
-    if len(file_bytes) > 200 * 1024 * 1024:
-        raise ValueError(
-            f"File too large ({len(file_bytes) / 1024 / 1024:.0f}MB > 200MB). Use chunking module for large files."
-        )
     filename = p.name
 
     # MarkItDown conversion
