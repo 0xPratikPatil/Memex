@@ -156,15 +156,20 @@ def _make_progress() -> Progress:
     bar · percent. No spinner, no red pulse: per-file rows are
     indeterminate (total=None) and pulse in dim gray; the overall bar
     fills green as files finish. Elapsed time shows live on every row.
-    Text columns use Column(overflow="ellipsis") so rows never wrap —
-    line wrapping breaks live redraw and causes duplicated rows.
+    Text columns use Column(overflow="ellipsis", no_wrap=True) so rows
+    are always exactly one line — wrapping (fold) breaks live redraw and
+    causes duplicated rows when the rendered height changes mid-display.
     """
 
     def _ellipsis_col(text_format: str, style: str = "none", min_width: int = 0) -> TextColumn:
         return TextColumn(
             text_format,
             style=style,
-            table_column=Column(overflow="ellipsis", min_width=min_width or None),
+            table_column=Column(
+                overflow="ellipsis",
+                no_wrap=True,
+                min_width=min_width or None,
+            ),
         )
 
     return Progress(
