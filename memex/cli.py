@@ -128,7 +128,9 @@ class _ProgressTracker:
 
     def __init__(self, progress: Progress, total: int | None) -> None:
         self._progress = progress
-        self.overall = progress.add_task("[bold]Overall", total=total, stage="", detail="")
+        self.overall = progress.add_task(
+            "[bold cyan]Overall", total=total, stage="", detail=""
+        )
         self._file_tasks: dict[str, TaskID] = {}
         self._done_order: OrderedDict[str, TaskID] = OrderedDict()
         self._free_slots: deque[TaskID] = deque()
@@ -137,6 +139,25 @@ class _ProgressTracker:
         self.file_stage: dict[str, str] = {}
         self.done_files: set[str] = set()
         self._started_ts = time.monotonic()
+        self._stop_evt = threading.Event()
+
+    def start_elapsed_ticker(self) -> None:
+        """Show the run clock on the Overall row, once per second.
+
+        The clock lives only here — file/queue rows never show live
+        elapsed (per-row clocks repeat the same value everywhere).
+        """
+
+        def _tick() -> None:
+            while not self._stop_evt.wait(1.0):
+                elapsed = time.monotonic() - self._started_ts
+                self._progress.update(self.overall, detail=_fmt_dur(elapsed))
+
+        threading.Thread(target=_tick, daemon=True, name="elapsed-ticker").start()
+
+    def stop(self) -> None:
+        """Stop the elapsed ticker (rows are never removed)."""
+        self._stop_evt.set()
 
     def add_slots(self) -> None:
         """Pre-allocate the file-slot pool (FIFO — first file takes the
@@ -201,6 +222,8 @@ class _ProgressTracker:
         tid = self._file_tasks.get(src)
         if tid is None:
             tid = self._file_tasks[src] = self._alloc()
+        if stage == "Done" and detail:
+            detail = f"{detail} · {_fmt_dur(self.file_times[src])}"
         self._progress.update(
             tid,
             description=_short_name(src),
@@ -218,19 +241,31 @@ class _ProgressTracker:
 def _make_progress() -> Progress:
     """Progress with per-file rows + overall bar (determinate).
 
-    Minimal pip/git-style layout — description · stage · live elapsed ·
-    bar · percent. No spinner, no red pulse: per-file rows are
-    indeterminate (total=None) and pulse in dim gray; the overall bar
-    fills green as files finish. Elapsed time shows live on every row.
+    Minimal pip/git-style layout — description · stage · bar · percent ·
+    detail. No spinner, no red pulse: per-file rows are indeterminate
+    (total=None) and pulse in dim gray; the overall bar fills green as
+    files finish. A single run-clock lives on the Overall row (updated
+    once per second by _ProgressTracker); per-file rows show their
+    duration once, on completion, in the detail column — no per-row
+    clocks (repeated elapsed times are noise).
+
     Text columns use Column(overflow="ellipsis", no_wrap=True) so rows
     are always exactly one line — wrapping (fold) breaks live redraw and
     causes duplicated rows when the rendered height changes mid-display.
+    The description column parses markup so Overall/queue rows can be
+    color-coded; file rows stay plain text.
     """
 
-    def _ellipsis_col(text_format: str, style: str = "none", min_width: int = 0) -> TextColumn:
+    def _ellipsis_col(
+        text_format: str,
+        style: str = "none",
+        min_width: int = 0,
+        markup: bool = False,
+    ) -> TextColumn:
         return TextColumn(
             text_format,
             style=style,
+            markup=markup,
             table_column=Column(
                 overflow="ellipsis",
                 no_wrap=True,
@@ -239,9 +274,8 @@ def _make_progress() -> Progress:
         )
 
     return Progress(
-        _ellipsis_col("[bold]{task.description}"),
+        _ellipsis_col("[bold]{task.description}", markup=True),
         _ellipsis_col("{task.fields[stage]}", style="cyan", min_width=16),
-        TimeElapsedColumn(),
         BarColumn(
             bar_width=12,
             complete_style="green",
@@ -283,7 +317,7 @@ class _QueueDisplay:
         }
         for label, base_url in services.items():
             task = self._progress.add_task(
-                f"[bold]{label} queue",
+                f"[bold magenta]{label} queue",
                 total=None,
                 stage="· idle",
                 detail="",
@@ -495,10 +529,19 @@ def ingest(
     queue_display = _QueueDisplay(progress)
     queue_display.start()
     tracker.add_slots()
+    tracker.start_elapsed_ticker()
     # All rows (overall + queue + fixed file-slot pool) exist before the
     # Live starts — Rich's Live cannot track height changes made by
     # add/remove between refreshes (duplicated rows). Only in-place
     # updates happen once the display is live.
+    from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+
+    # Pipeline parallelism: conversions (MarkItDown/OCR) run up to
+    # MAX_AHEAD files ahead of the LLM stages. While the main thread is
+    # embedding/storing file N, the converter already works on N+1..N+k
+    # — the queue rows stay busy instead of idling during metadata and
+    # embedding stages.
+    MAX_AHEAD = 3
     live_logs: list[str] = []
     with _suspend_live_logs(live_logs), progress:
         try:
@@ -513,56 +556,86 @@ def ingest(
                 else:
                     tracker.mark_active(p.path, p.stage)
 
-            for file_path in files:
+            pending: dict[Future[str], str] = {}
+            file_iter = iter(files)
+            executor = ThreadPoolExecutor(
+                max_workers=MAX_AHEAD, thread_name_prefix="convert"
+            )
+
+            def _submit_next() -> None:
+                """Cheap checks in the main thread; conversions go to the pool."""
+                try:
+                    file_path = next(file_iter)
+                except StopIteration:
+                    return
                 src = str(file_path)
                 status_store.mark_pending(src, source_name=source_name or target.name)
                 tracker.mark_active(src, "Checking")
-
                 try:
                     can_skip, chunk_count = engine.check_unmodified_local(src)
-                    if can_skip:
-                        status_store.mark_skipped(src, reason="unchanged")
-                        tracker.mark_done(src, "Skipped", f"{chunk_count} chunks")
-                        continue
+                except Exception as exc:
+                    errors.append(f"{src}: {exc}")
+                    status_store.mark_failed(src, str(exc), exc=exc)
+                    tracker.mark_done(src, "Error", str(exc)[:60])
+                    return
+                if can_skip:
+                    status_store.mark_skipped(src, reason="unchanged")
+                    tracker.mark_done(src, "Skipped", f"{chunk_count} chunks")
+                    return
+                tracker.mark_active(src, "Parsing")
+                pending[executor.submit(parse_file, src)] = src
 
-                    tracker.mark_active(src, "Parsing")
-                    result = parse_file(src)
+            for _ in range(MAX_AHEAD):
+                _submit_next()
+
+            while pending:
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    src = pending.pop(fut)
+                    try:
+                        result = fut.result()
+                    except Exception as exc:
+                        errors.append(f"{src}: {exc}")
+                        status_store.mark_failed(src, str(exc), exc=exc)
+                        tracker.mark_done(src, "Error", str(exc)[:60])
+                        continue
                     if not result.ok:
-                        err = f"{file_path}: {result.status} — {result.errors}"
-                        errors.append(err)
+                        errors.append(f"{src}: {result.status} — {result.errors}")
                         status_store.mark_failed(src, str(result.errors))
                         tracker.mark_done(src, "Error", str(result.errors)[:60])
                         continue
-
-                    tracker.mark_active(src, "Hashing")
-                    content_hash = engine.compute_file_hash(result.markdown.encode())
-                    already, existing_chunks = engine.is_already_ingested(src, content_hash)
-                    if already:
-                        status_store.mark_skipped(src, reason="dedup")
-                        tracker.mark_done(src, "Skipped", f"{existing_chunks} chunks")
-                        continue
-
-                    tracker.mark_active(src, "Converting")
-                    chunks = engine.ingest_text(
-                        result.markdown,
-                        source_identifier=src,
-                        metadata={
-                            "content_type": file_path.suffix.lstrip("."),
-                            "content_hash": content_hash,
-                            "source_name": source_name or target.name,
-                        },
-                        content_hash=content_hash,
-                        progress_cb=_on_progress,
-                    )
-                    ingested += 1
-                    total_chunks += chunks
-                    status_store.mark_done(src, chunks=chunks)
-                    tracker.mark_done(src, "Done", f"{chunks} chunks")
-                except Exception as exc:
-                    errors.append(f"{file_path}: {exc}")
-                    status_store.mark_failed(src, str(exc), exc=exc)
-                    tracker.mark_done(src, "Error", str(exc)[:60])
+                    try:
+                        tracker.mark_active(src, "Hashing")
+                        content_hash = engine.compute_file_hash(result.markdown.encode())
+                        already, existing_chunks = engine.is_already_ingested(src, content_hash)
+                        if already:
+                            status_store.mark_skipped(src, reason="dedup")
+                            tracker.mark_done(src, "Skipped", f"{existing_chunks} chunks")
+                            continue
+                        tracker.mark_active(src, "Converting")
+                        chunks = engine.ingest_text(
+                            result.markdown,
+                            source_identifier=src,
+                            metadata={
+                                "content_type": Path(src).suffix.lstrip("."),
+                                "content_hash": content_hash,
+                                "source_name": source_name or target.name,
+                            },
+                            content_hash=content_hash,
+                            progress_cb=_on_progress,
+                        )
+                        ingested += 1
+                        total_chunks += chunks
+                        status_store.mark_done(src, chunks=chunks)
+                        tracker.mark_done(src, "Done", f"{chunks} chunks")
+                    except Exception as exc:
+                        errors.append(f"{src}: {exc}")
+                        status_store.mark_failed(src, str(exc), exc=exc)
+                        tracker.mark_done(src, "Error", str(exc)[:60])
+                _submit_next()
         finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+            tracker.stop()
             queue_display.stop()
 
     for msg in live_logs:
@@ -608,6 +681,7 @@ def sync(
     queue_display = _QueueDisplay(progress)
     queue_display.start()
     tracker.add_slots()
+    tracker.start_elapsed_ticker()
     # All rows pre-created before Live starts (see ingest — fixed row
     # pool; Rich's Live breaks when rows are added/removed mid-display).
     live_logs: list[str] = []
@@ -664,9 +738,10 @@ def sync(
                 os._exit(130)
         finally:
             queue_display.stop()
-            if seen_total == 0:
-                tracker.set_total(1)
-                progress.update(tracker.overall, completed=1)
+            tracker.stop()
+        if seen_total == 0:
+            tracker.set_total(1)
+            progress.update(tracker.overall, completed=1)
 
     for msg in live_logs:
         console.print(f"[yellow]  {msg}[/]")
