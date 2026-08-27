@@ -63,6 +63,11 @@ _ocr_semaphore = asyncio.Semaphore(1)
 _current_file: str | None = None
 _pending_files: deque[str] = deque()
 
+# Recently completed conversions — ring buffer so the CLI poller can see
+# work that finished between polls.  Each entry is (filename, end_time).
+_RECENTLY_COMPLETED: deque[tuple[str, float]] = deque(maxlen=20)
+_RECENTLY_COMPLETED_TTL_S = 5.0
+
 
 # ── Backend protocol ────────────────────────────────────────────────────────
 class OcrBackend(abc.ABC):
@@ -454,6 +459,12 @@ async def swap_model(req: ModelSwapRequest):
 @app.get("/queue")
 async def queue_status():
     """Live queue state: which file is being OCR'd now, which are waiting."""
+    now = time.monotonic()
+    recent = [
+        name
+        for name, ts in _RECENTLY_COMPLETED
+        if now - ts < _RECENTLY_COMPLETED_TTL_S
+    ]
     return {
         "current": _current_file,
         "pending": list(_pending_files),
@@ -461,6 +472,7 @@ async def queue_status():
         "busy": _ocr_semaphore.locked(),
         "model": _current.name if _current and _current.loaded else ACTIVE_MODEL,
         "provider": _current.backend.provider if _current and _current.loaded else "none",
+        "recently_completed": recent,
     }
 
 
@@ -528,6 +540,7 @@ async def convert(files: list[UploadFile] = File(...)):  # noqa: B008
 
         elapsed = time.time() - start
         _current_file = None
+        _RECENTLY_COMPLETED.append((filenames[0] if len(filenames) == 1 else label, time.monotonic()))
         return {
             "markdown": markdown,
             "pages": pages,

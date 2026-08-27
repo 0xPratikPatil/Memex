@@ -958,6 +958,7 @@ async def rag_service_status() -> str:
                         statuses[name]["queue"] = {
                             "current": queue_data.get("current"),
                             "pending": queue_data.get("pending", []),
+                            "recently_completed": queue_data.get("recently_completed", []),
                         }
                     except httpx.RequestError as qe:
                         statuses[name]["queue"] = {"error": str(qe)}
@@ -970,6 +971,7 @@ async def rag_service_status() -> str:
                             "current": queue_data.get("current"),
                             "pending": queue_data.get("pending", []),
                             "max_concurrent": queue_data.get("max_concurrent"),
+                            "recently_completed": queue_data.get("recently_completed", []),
                         }
                     except httpx.RequestError as qe:
                         statuses[name]["queue"] = {"error": str(qe)}

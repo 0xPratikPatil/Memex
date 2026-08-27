@@ -195,15 +195,12 @@ class _QueueDisplay:
     file" right after, so work is always visible.
     """
 
-    POLL_INTERVAL_S = 0.25
-    LAST_ACTIVITY_HOLD_S = 5.0
+    POLL_INTERVAL_S = 0.1
 
     def __init__(self, progress: Progress) -> None:
         self._progress = progress
         self._stop = threading.Event()
         self._tasks: dict[str, TaskID] = {}
-        self._last_seen: dict[str, float] = {}
-        self._last_file: dict[str, str] = {}
 
     def start(self) -> None:
         from memex.engine.core import config as engine_config
@@ -242,25 +239,20 @@ class _QueueDisplay:
 
             current = data.get("current")
             pending = list(data.get("pending") or [])
+            recent = list(data.get("recently_completed") or [])
+
             if current or pending:
-                self._last_seen[label] = time.monotonic()
-                self._last_file[label] = current or (pending[0] if pending else "")
                 detail = f"waiting: {', '.join(pending)}" if pending else ""
                 self._progress.update(
                     task,
-                    stage=f"◎ now: {_short_name(self._last_file[label])}" if current else "◎ starting…",
+                    stage=f"◎ now: {_short_name(current)}" if current else "◎ starting…",
                     detail=detail,
                 )
+            elif recent:
+                names = ", ".join(_short_name(n) for n in recent[-2:])
+                self._progress.update(task, stage=f"· done: {names}", detail="")
             else:
-                last = self._last_seen.get(label, 0.0)
-                if last and time.monotonic() - last < self.LAST_ACTIVITY_HOLD_S:
-                    self._progress.update(
-                        task,
-                        stage=f"· done: {_short_name(self._last_file.get(label, ''))}",
-                        detail="",
-                    )
-                else:
-                    self._progress.update(task, stage="· idle", detail="")
+                self._progress.update(task, stage="· idle", detail="")
 
     def stop(self) -> None:
         self._stop.set()

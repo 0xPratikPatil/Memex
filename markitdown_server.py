@@ -45,6 +45,11 @@ _convert_semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 _current_file: str | None = None
 _pending_files: deque[str] = deque()
 
+# Recently completed conversions — ring buffer so the CLI poller can see
+# work that finished between polls.  Each entry is (filename, end_time).
+_RECENTLY_COMPLETED: deque[tuple[str, float]] = deque(maxlen=20)
+_RECENTLY_COMPLETED_TTL_S = 5.0
+
 
 def _get_markitdown():
     global _markitdown_instance
@@ -70,12 +75,19 @@ async def health() -> dict[str, str]:
 @app.get("/queue")
 async def queue_status() -> dict:
     """Live queue state: which file is converting now, which are waiting."""
+    now = time.monotonic()
+    recent = [
+        name
+        for name, ts in _RECENTLY_COMPLETED
+        if now - ts < _RECENTLY_COMPLETED_TTL_S
+    ]
     return {
         "current": _current_file,
         "pending": list(_pending_files),
         "queued": len(_pending_files),
         "busy": _convert_semaphore.locked(),
         "max_concurrent": MAX_CONCURRENT,
+        "recently_completed": recent,
     }
 
 
@@ -134,6 +146,7 @@ async def convert(
             )
         finally:
             _current_file = None
+            _RECENTLY_COMPLETED.append((name, time.monotonic()))
 
 
 def _detect_format(filename: str) -> str:
