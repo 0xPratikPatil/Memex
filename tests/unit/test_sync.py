@@ -557,11 +557,20 @@ class TestBoundedConversionWaves:
             time.sleep(0.02)
             return {"markdown": f"# {source_identifier}", "chunks": None}
 
+        max_inflight = [0]
+
         def fake_ingest(engine, markdown, chunks, source_identifier, file_path, source_name, progress_cb=None):
             with ingest_lock:
                 ingest_seen.append(len(submissions))
             time.sleep(0.05)
             return 1
+
+        def fake_convert_wrapped(engine, file_path, source_identifier, progress_cb=None, file_idx=0, total_files=0):
+            try:
+                return fake_convert(engine, file_path, source_identifier, progress_cb, file_idx, total_files)
+            finally:
+                with ingest_lock:
+                    max_inflight[0] = max(max_inflight[0], len(submissions) - len(started))
 
         cfg = MagicMock()
         cfg.get_list.return_value = [{"type": "local", "name": "docs", "path": "/tmp/docs"}]
@@ -582,14 +591,16 @@ class TestBoundedConversionWaves:
 
         class _SpyExecutor(orig_executor):
             def submit(self, fn, *args, **kwargs):
-                if args:
+                # conversion submits pass a path str; ingest submits pass a
+                # tuple — only count conversions
+                if args and isinstance(args[0], str):
                     submissions.append(args[0])
                 return super().submit(fn, *args, **kwargs)
 
         with (
             patch("memex.engine.sources.sync.get_source", return_value=mock_source),
             patch("memex.engine.core.pipeline.RAGEngine", return_value=mock_engine),
-            patch("memex.engine.sources.sync._convert_file", side_effect=fake_convert),
+            patch("memex.engine.sources.sync._convert_file", side_effect=fake_convert_wrapped),
             patch("memex.engine.sources.sync._ingest_markdown", side_effect=fake_ingest),
             patch("memex.engine.sources.sync.config") as mock_config,
             patch.object(concurrent.futures, "ThreadPoolExecutor", _SpyExecutor),
@@ -600,12 +611,10 @@ class TestBoundedConversionWaves:
 
         assert stats.added == 12
         assert ingest_seen, "no ingest ran"
-        # Bounded wave: a wave of 8 in-flight conversions (plus the slot
-        # refill for the popped file) at first ingest — NOT all 12 submitted
-        # upfront (the upfront burst submitted everything at once).
-        assert ingest_seen[0] <= 9, (
-            f"{ingest_seen[0]} conversions submitted before first ingest — "
-            "unbounded upfront burst"
+        # Bounded wave: in-flight conversions never exceed the wave size —
+        # the upfront burst submitted ALL 12 at once.
+        assert max_inflight[0] <= 8, (
+            f"max {max_inflight[0]} conversions in flight — unbounded upfront burst"
         )
         assert ingest_seen[0] >= 3, "conversions must run ahead of ingest"
 
@@ -660,3 +669,71 @@ class TestBoundedConversionWaves:
         conv_idx = stages.index("Converting")
         queued_idx = stages.index("Queued")
         assert queued_idx > conv_idx
+
+
+class TestParallelIngestStage:
+    """The ingest stage runs concurrently — multiple files through the LLM
+    pipeline at once (bounded by workers), so conversion queues never idle."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_status_store(self) -> MagicMock:
+        store = MagicMock()
+        store.get_due_retries.return_value = []
+        with patch("memex.engine.sources.sync.FileStatusStore", return_value=store):
+            yield store
+
+    @pytest.mark.asyncio
+    async def test_ingest_stage_runs_concurrently(self) -> None:
+        import threading
+        import time
+
+        from memex.engine.sources.sync import sync
+
+        cur = [0]
+        max_concurrent = [0]
+        state_lock = threading.Lock()
+
+        def fake_convert(engine, file_path, source_identifier, progress_cb=None, file_idx=0, total_files=0):
+            time.sleep(0.01)
+            return {"markdown": f"# {source_identifier}", "chunks": None}
+
+        def fake_ingest(engine, markdown, chunks, source_identifier, file_path, source_name, progress_cb=None):
+            with state_lock:
+                cur[0] += 1
+                max_concurrent[0] = max(max_concurrent[0], cur[0])
+            time.sleep(0.1)
+            with state_lock:
+                cur[0] -= 1
+            return 1
+
+        cfg = MagicMock()
+        cfg.get_list.return_value = [{"type": "local", "name": "docs", "path": "/tmp/docs"}]
+        mock_source = MagicMock()
+        files = [MagicMock() for _ in range(4)]
+        for i, f in enumerate(files):
+            f.path = f"/tmp/docs/doc{i}.pdf"
+            f.name = f"doc{i}.pdf"
+        mock_source.list_files.return_value = files
+        mock_source.download.side_effect = [Path(f"/tmp/docs/doc{i}.pdf") for i in range(4)]
+        mock_qdrant = MagicMock()
+        mock_qdrant.scroll.return_value = ([], None)
+        mock_engine = MagicMock()
+        mock_engine._get_qdrant.return_value = mock_qdrant
+        mock_engine.compute_file_hash.return_value = "hash"
+
+        with (
+            patch("memex.engine.sources.sync.get_source", return_value=mock_source),
+            patch("memex.engine.core.pipeline.RAGEngine", return_value=mock_engine),
+            patch("memex.engine.sources.sync._convert_file", side_effect=fake_convert),
+            patch("memex.engine.sources.sync._ingest_markdown", side_effect=fake_ingest),
+            patch("memex.engine.sources.sync.config") as mock_config,
+        ):
+            mock_config.COLLECTION_NAME = "memex"
+            mock_config.MAX_CONCURRENT_SYNC = 2
+            stats = await sync(cfg)
+
+        assert stats.added == 4
+        assert max_concurrent[0] >= 2, (
+            f"ingest ran with max concurrency {max_concurrent[0]} — "
+            "LLM pipeline is serialized (single consumer)"
+        )

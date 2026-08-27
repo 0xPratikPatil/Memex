@@ -27,11 +27,11 @@ _LLM_MAX_ATTEMPTS = 3
 # thread keeps clients stable and calls reliable.
 _thread_loop_local = threading.local()
 
-# Serializes sync LLM calls across worker threads. One model on one GPU can
-# only serve one request at a time anyway, and concurrent async clients
-# across threads race on the shared provider instance — a second thread's
-# client swap orphans the first thread's in-flight request forever.
-_llm_sync_lock = threading.Lock()
+# Note: LLM calls are deliberately NOT serialized across threads. Providers
+# keep thread-local httpx clients (ollama.py) so concurrent workers never
+# share/swap a client mid-request, and Ollama queues concurrent requests
+# server-side. Serializing here would make the LLM pipeline one-file-at-a-time
+# and leave the converter queues idle during every file's LLM phases.
 
 
 def _get_thread_loop() -> asyncio.AbstractEventLoop:
@@ -88,10 +88,9 @@ class LLMProvider(ABC):
             _ = asyncio.get_running_loop()
         except RuntimeError:
             loop = _get_thread_loop()
-            with _llm_sync_lock:
-                result, _attempts = _llm_retry(
-                    lambda: loop.run_until_complete(self.chat(prompt, model=model, num_predict=num_predict))
-                )
+            result, _attempts = _llm_retry(
+                lambda: loop.run_until_complete(self.chat(prompt, model=model, num_predict=num_predict))
+            )
             return result
         import concurrent.futures
 
@@ -109,10 +108,9 @@ class LLMProvider(ABC):
             _ = asyncio.get_running_loop()
         except RuntimeError:
             loop = _get_thread_loop()
-            with _llm_sync_lock:
-                return _llm_retry(
-                    lambda: loop.run_until_complete(self.chat(prompt, model=model, num_predict=num_predict))
-                )
+            return _llm_retry(
+                lambda: loop.run_until_complete(self.chat(prompt, model=model, num_predict=num_predict))
+            )
 
         import concurrent.futures
 

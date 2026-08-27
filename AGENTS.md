@@ -309,7 +309,8 @@ Display rules (ingest + sync):
 - **Log buffering** — during a live display, WARNING+ logs are buffered (`_suspend_live_logs`) and replayed after the run; log lines printed mid-display corrupt Rich's Live redraw (issue #1052, logger uses its own stderr console).
 - **Transient** — the display is erased on exit before the summary prints.
 - **Ingest prefetch** — conversions (MarkItDown/OCR) run up to 8 files ahead of the LLM pipeline (`ThreadPoolExecutor`, `MAX_AHEAD=8`), topped up before each file's LLM phases: while a file is embedding/storing, the converter already works on the next files so queue rows stay busy.
-- **Sync two-stage pipeline** — `sync.py` splits conversion from ingestion: a convert pool (≥4 workers) fed in bounded just-in-time waves (`CONVERT_AHEAD=8` in-flight, topped up before each file's LLM phases) plus a single serialized consumer running the LLM phases (context/metadata/embedding, serialized by the global LLM lock). Converter queues never idle while files remain to convert; converted files waiting for the LLM show a `… Queued` stage (not a stale `Converting`).
+- **Parallel LLM pipeline** — `ingest_text` runs across 2 workers (`LLM_WORKERS=2`) and sync's ingest stage across 2 workers: multiple files go through the LLM phases at once. LLM calls are NOT serialized (providers keep thread-local httpx clients — `llm/base.py`; Ollama queues concurrent requests server-side).
+- **Sync two-stage pipeline** — `sync.py` splits conversion from ingestion: a convert pool (≥4 workers) fed in bounded just-in-time waves (`CONVERT_AHEAD=8` in-flight, topped up before each file's LLM phases) plus a 2-worker ingest pool running the LLM phases. Converter queues never idle while files remain to convert; converted files waiting for the LLM show a `… Queued` stage (not a stale `Converting`).
 
 The `sync` command exposes a `progress_cb` callback for per-file stage reporting:
 

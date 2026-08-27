@@ -494,3 +494,56 @@ class TestIngestLookahead:
         assert "ingest complete" in result.output
         assert "8 ingested" in result.output
         assert mock_engine.ingest_text.call_count == 8
+
+
+class TestParallelIngestPipeline:
+    @pytest.fixture(autouse=True)
+    def _mock_status_store(self) -> MagicMock:
+        store = MagicMock()
+        with patch("memex.engine.ingestion.status.FileStatusStore", return_value=store):
+            yield store
+
+    @patch("memex.engine.core.pipeline.RAGEngine")
+    @patch("memex.engine.ingestion.loader.parse_file")
+    def test_llm_stage_runs_concurrently(self, mock_parse_file, mock_engine_cls, tmp_path) -> None:
+        """Multiple files run through ingest_text (LLM pipeline) at once."""
+        import threading
+        import time
+
+        sub = tmp_path / "bulk"
+        sub.mkdir()
+        for i in range(6):
+            (sub / f"f{i}.md").write_text(f"# Doc {i}")
+
+        mock_result = MagicMock()
+        mock_result.ok = True
+        mock_result.markdown = "# content"
+        mock_parse_file.return_value = mock_result
+
+        cur = [0]
+        max_concurrent = [0]
+        state_lock = threading.Lock()
+
+        def fake_ingest_text(markdown, **kwargs):
+            with state_lock:
+                cur[0] += 1
+                max_concurrent[0] = max(max_concurrent[0], cur[0])
+            time.sleep(0.1)
+            with state_lock:
+                cur[0] -= 1
+            return 1
+
+        mock_engine = MagicMock()
+        mock_engine.compute_file_hash.return_value = "hash"
+        mock_engine.ingest_text.side_effect = fake_ingest_text
+        mock_engine_cls.return_value = mock_engine
+        mock_engine.check_unmodified_local.return_value = (False, 0)
+        mock_engine.is_already_ingested.return_value = (False, 0)
+
+        result = runner.invoke(app, ["ingest", str(sub), "--recursive"])
+        assert result.exit_code == 0
+        assert "6 ingested" in result.output
+        assert max_concurrent[0] >= 2, (
+            f"ingest_text ran with max concurrency {max_concurrent[0]} — "
+            "LLM pipeline is serialized"
+        )

@@ -555,12 +555,15 @@ def ingest(
     # updates happen once the display is live.
     from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 
-    # Pipeline parallelism: conversions (MarkItDown/OCR) run up to
-    # MAX_AHEAD files ahead of the LLM stages. The pipeline is topped up
-    # before each file's LLM phases — while the main thread embeds/stores
-    # file N, the converter already works on N+1..N+8, so the queue rows
-    # stay busy instead of idling during metadata/embedding stages.
+    # Pipeline parallelism at BOTH stages:
+    #  - conversions (MarkItDown/OCR) run up to MAX_AHEAD files ahead,
+    #    topped up before each file's LLM phases;
+    #  - the LLM pipeline (ingest_text) runs across LLM_WORKERS files at
+    #    once (providers use thread-local clients; Ollama queues
+    #    server-side) so conversion queues never idle for lack of
+    #    consumers and the pipeline runs at best efficiency.
     MAX_AHEAD = 8
+    LLM_WORKERS = 2
     live_logs: list[str] = []
     with _suspend_live_logs(live_logs), progress:
         try:
@@ -576,9 +579,13 @@ def ingest(
                     tracker.mark_active(p.path, p.stage)
 
             pending: dict[Future[str], str] = {}
+            ingest_pending: dict[Future[int], str] = {}
             file_iter = iter(files)
             executor = ThreadPoolExecutor(
                 max_workers=MAX_AHEAD, thread_name_prefix="convert"
+            )
+            ingest_executor = ThreadPoolExecutor(
+                max_workers=LLM_WORKERS, thread_name_prefix="ingest"
             )
 
             def _top_up() -> None:
@@ -610,58 +617,80 @@ def ingest(
                     tracker.mark_active(src, "Parsing")
                     pending[executor.submit(parse_file, src)] = src
 
+            def _ingest_one(src: str, result) -> int | None:
+                """LLM pipeline for one converted file (runs in the ingest
+                pool). Returns chunk count, or None when skipped/failed
+                (already reported to the tracker/status store)."""
+                try:
+                    tracker.mark_active(src, "Hashing")
+                    content_hash = engine.compute_file_hash(result.markdown.encode())
+                    already, existing_chunks = engine.is_already_ingested(src, content_hash)
+                    if already:
+                        status_store.mark_skipped(src, reason="dedup")
+                        tracker.mark_done(src, "Skipped", f"{existing_chunks} chunks")
+                        return None
+                    tracker.mark_active(src, "Converting")
+                    return engine.ingest_text(
+                        result.markdown,
+                        source_identifier=src,
+                        metadata={
+                            "content_type": Path(src).suffix.lstrip("."),
+                            "content_hash": content_hash,
+                            "source_name": source_name or target.name,
+                        },
+                        content_hash=content_hash,
+                        progress_cb=_on_progress,
+                    )
+                except Exception as exc:
+                    errors.append(f"{src}: {exc}")
+                    status_store.mark_failed(src, str(exc), exc=exc)
+                    tracker.mark_done(src, "Error", str(exc)[:60])
+                    return None
+
+            def _consume_conversion(fut: Future[str]) -> None:
+                src = pending.pop(fut)
+                try:
+                    result = fut.result()
+                except Exception as exc:
+                    errors.append(f"{src}: {exc}")
+                    status_store.mark_failed(src, str(exc), exc=exc)
+                    tracker.mark_done(src, "Error", str(exc)[:60])
+                    return
+                if not result.ok:
+                    errors.append(f"{src}: {result.status} — {result.errors}")
+                    status_store.mark_failed(src, str(result.errors))
+                    tracker.mark_done(src, "Error", str(result.errors)[:60])
+                    return
+                # Top up BEFORE the LLM phases — the next wave converts
+                # while this file is embedding/storing.
+                _top_up()
+                ingest_pending[ingest_executor.submit(_ingest_one, src, result)] = src
+
             _top_up()
 
-            while pending:
-                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            while pending or ingest_pending:
+                all_futures: set[Future] = set(pending) | set(ingest_pending)
+                done, _ = wait(all_futures, return_when=FIRST_COMPLETED)
                 for fut in done:
-                    src = pending.pop(fut)
-                    try:
-                        result = fut.result()
-                    except Exception as exc:
-                        errors.append(f"{src}: {exc}")
-                        status_store.mark_failed(src, str(exc), exc=exc)
-                        tracker.mark_done(src, "Error", str(exc)[:60])
-                        continue
-                    if not result.ok:
-                        errors.append(f"{src}: {result.status} — {result.errors}")
-                        status_store.mark_failed(src, str(result.errors))
-                        tracker.mark_done(src, "Error", str(result.errors)[:60])
-                        continue
-                    try:
-                        tracker.mark_active(src, "Hashing")
-                        content_hash = engine.compute_file_hash(result.markdown.encode())
-                        already, existing_chunks = engine.is_already_ingested(src, content_hash)
-                        if already:
-                            status_store.mark_skipped(src, reason="dedup")
-                            tracker.mark_done(src, "Skipped", f"{existing_chunks} chunks")
+                    if fut in pending:
+                        _consume_conversion(fut)
+                    else:
+                        src = ingest_pending.pop(fut)
+                        try:
+                            chunks = fut.result()
+                        except Exception as exc:
+                            errors.append(f"{src}: {exc}")
                             continue
-                        # Top up BEFORE the LLM phases — the next wave
-                        # converts while this file is embedding/storing.
-                        _top_up()
-                        tracker.mark_active(src, "Converting")
-                        chunks = engine.ingest_text(
-                            result.markdown,
-                            source_identifier=src,
-                            metadata={
-                                "content_type": Path(src).suffix.lstrip("."),
-                                "content_hash": content_hash,
-                                "source_name": source_name or target.name,
-                            },
-                            content_hash=content_hash,
-                            progress_cb=_on_progress,
-                        )
+                        if chunks is None:
+                            continue
                         ingested += 1
                         total_chunks += chunks
                         status_store.mark_done(src, chunks=chunks)
                         tracker.mark_done(src, "Done", f"{chunks} chunks")
-                    except Exception as exc:
-                        errors.append(f"{src}: {exc}")
-                        status_store.mark_failed(src, str(exc), exc=exc)
-                        tracker.mark_done(src, "Error", str(exc)[:60])
                 _top_up()
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
+            ingest_executor.shutdown(wait=False, cancel_futures=True)
             queue_display.stop()
 
     for msg in live_logs:

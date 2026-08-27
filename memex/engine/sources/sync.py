@@ -336,6 +336,7 @@ async def sync(
     from memex.engine.core.pipeline import RAGEngine
 
     stats = SyncStats()
+    stats_lock = threading.Lock()  # stats mutated from convert/ingest pool threads
     suppress_deletions = False
     completed = _AtomicCounter()
 
@@ -476,7 +477,8 @@ async def sync(
         def _skip_timeout(path: str, exc: BaseException, idx: int, total: int) -> tuple | None:
             """Return a Skipped tuple when the exception is a timeout-skip."""
             if isinstance(exc, ConversionTimeoutError):
-                stats.skipped += 1
+                with stats_lock:
+                    stats.skipped += 1
                 _emit(path, "Skipped", idx, total)
                 status_store.mark_skipped(path, reason="timeout")
                 completed.increment()
@@ -632,27 +634,32 @@ async def sync(
             file_idx_counter += 1
             work_items.append(("deleted", path, None, file_idx_counter, total_files))
 
-        # Two-stage pipeline: a convert pool plus a single serialized
-        # consumer for the LLM phases. Conversions are fed in bounded
-        # just-in-time waves — the consumer tops the pipeline up before
-        # each file's LLM phases, so the MarkItDown/OCR queues keep
-        # converting the next files while the LLM works on the current
-        # one (no upfront burst, no long converter idle). The per-file
-        # pipeline is written with sync calls and proven stable in plain
-        # threads.
+        # Two-stage pipeline with bounded parallelism at BOTH stages:
+        #  - convert pool: conversions (MarkItDown/OCR) fed in just-in-time
+        #    waves (CONVERT_AHEAD in flight) so the converter queues never
+        #    idle while files remain;
+        #  - ingest pool: the LLM phases (context/metadata/embedding) run
+        #    concurrently across files (providers use thread-local clients;
+        #    Ollama queues concurrent requests server-side), so the pipeline
+        #    consumes files as fast as the resources allow.
         results: list[tuple | BaseException] = []
         if work_items:
             import concurrent.futures
 
             CONVERT_AHEAD = 8
+            INGEST_WORKERS = 2
             convert_workers = max(
                 4, int(getattr(config, "MAX_CONCURRENT_SYNC", 2) or 1) + 2
             )
             convert_pool = concurrent.futures.ThreadPoolExecutor(
                 max_workers=convert_workers, thread_name_prefix="convert"
             )
+            ingest_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=INGEST_WORKERS, thread_name_prefix="ingest"
+            )
             work_iter = iter(work_items)
             futures: dict[concurrent.futures.Future, str] = {}
+            ingest_futures: dict[concurrent.futures.Future, tuple] = {}
 
             def _in_flight(
                 _futures: dict[concurrent.futures.Future, str] = futures,
@@ -676,27 +683,37 @@ async def sync(
 
             _top_up()
             try:
-                while futures:
+                while futures or ingest_futures:
+                    all_futures = set(futures) | set(ingest_futures)
                     done, _ = concurrent.futures.wait(
-                        futures, return_when=concurrent.futures.FIRST_COMPLETED
+                        all_futures, return_when=concurrent.futures.FIRST_COMPLETED
                     )
                     for fut in done:
-                        futures.pop(fut)
-                        try:
-                            item = fut.result()
-                        except BaseException as exc:
-                            results.append(exc)
-                            continue
-                        if isinstance(item, BaseException):
-                            results.append(item)
-                            continue
-                        if item[0] == "ingest":
-                            # Top up BEFORE the LLM phases — the next wave
-                            # converts while this file is mid-LLM.
-                            _top_up()
-                            results.append(_ingest_stage(item))
+                        if fut in futures:
+                            futures.pop(fut)
+                            try:
+                                item = fut.result()
+                            except BaseException as exc:
+                                results.append(exc)
+                                continue
+                            if isinstance(item, BaseException):
+                                results.append(item)
+                                continue
+                            if item[0] == "ingest":
+                                # Top up BEFORE the LLM phases — the next wave
+                                # converts while this file is mid-LLM.
+                                _top_up()
+                                ingest_futures[
+                                    ingest_pool.submit(_ingest_stage, item)
+                                ] = item
+                            else:
+                                results.append(item)
                         else:
-                            results.append(item)
+                            item = ingest_futures.pop(fut)
+                            try:
+                                results.append(fut.result())
+                            except BaseException as exc:
+                                results.append(exc)
                     _top_up()
             except KeyboardInterrupt:
                 # Ctrl+C must stop the sync promptly. Cancel queued work and
@@ -704,11 +721,13 @@ async def sync(
                 # block minutes on LLM-heavy files). Per-file statuses are
                 # checkpointed; the next sync resumes pending files.
                 log.info("Sync interrupted — cancelling queued work")
-                for future in futures:
+                for future in list(futures) + list(ingest_futures):
                     future.cancel()
                 convert_pool.shutdown(wait=False, cancel_futures=True)
+                ingest_pool.shutdown(wait=False, cancel_futures=True)
                 raise
             convert_pool.shutdown(wait=True)
+            ingest_pool.shutdown(wait=True)
 
             for r in results:
                 if isinstance(r, BaseException):
