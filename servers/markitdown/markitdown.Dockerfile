@@ -4,7 +4,7 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir uvicorn fastapi python-multipart httpx 'markitdown[all]'
 
-COPY markitdown_server.py .
+COPY servers/markitdown/markitdown_server.py .
 
 EXPOSE 5003
 

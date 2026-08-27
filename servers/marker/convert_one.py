@@ -23,12 +23,11 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        from converter_helpers import build_converter_args
         from marker.config.parser import ConfigParser
         from marker.converters.pdf import PdfConverter
         from marker.models import create_model_dict
         from marker.output import text_from_rendered
-
-        from converter_helpers import build_converter_args
 
         config = {
             "output_format": args.format,

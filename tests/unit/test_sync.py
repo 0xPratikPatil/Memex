@@ -544,9 +544,9 @@ class TestBoundedConversionWaves:
         submissions: list[str] = []
         ingest_seen: list[int] = []
         started: list[str] = []
+        import concurrent.futures
         import threading
         import time
-        import concurrent.futures
 
         start_lock = threading.Lock()
         ingest_lock = threading.Lock()
@@ -622,7 +622,6 @@ class TestBoundedConversionWaves:
     async def test_converted_files_emit_queued_stage(self) -> None:
         """Converted files waiting for the LLM consumer emit 'Queued', not a
         stale 'Converting' — so rows show the truth while queues work ahead."""
-        import threading
         import time
 
         from memex.engine.sources.sync import sync

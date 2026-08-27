@@ -126,8 +126,9 @@ RUN groupadd -g 1001 -r appgroup && \
     chown -R appuser:appgroup /app /opt/venv/lib/python3.11/site-packages/static /opt/venv/lib/python3.11/site-packages/conversion_results /opt/venv/lib/python3.11/site-packages/debug_data
 
 # ── Job server + conversion worker (thin server, isolated subprocess worker) ──
-COPY marker_server.py /app/marker_server.py
-COPY convert_one.py /app/convert_one.py
+COPY servers/marker/marker_server.py /app/marker_server.py
+COPY servers/marker/convert_one.py /app/convert_one.py
+COPY servers/marker/converter_helpers.py /app/converter_helpers.py
 RUN mkdir -p /app/jobs && chown -R appuser:appgroup /app/jobs
 
 USER appuser

@@ -7,20 +7,18 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from servers.ocr import ocr_server
+
 
 @pytest.fixture()
 def client():
     """Create a test client with the app."""
-    from ocr_server import app
-
-    return TestClient(app)
+    return TestClient(ocr_server.app)
 
 
 @pytest.fixture()
 def loaded_state():
     """Simulate a loaded backend so /convert doesn't return 503."""
-    import ocr_server
-
     backend = MagicMock()
     backend.provider = "cpu"
     backend.vram_mb = 0
@@ -61,8 +59,6 @@ class TestQueue:
         assert body["busy"] is False
 
     def test_queue_reports_current_and_pending(self, client) -> None:
-        import ocr_server
-
         ocr_server._current_file = "scan1.pdf"
         ocr_server._pending_files.extend(["scan2.pdf", "scan3.pdf"])
         try:
@@ -78,10 +74,8 @@ class TestQueue:
 
 
 class TestModelSwap:
-    @patch("ocr_server._unload_model")
+    @patch("servers.ocr.ocr_server._unload_model")
     def test_swap_to_valid_model(self, mock_unload, client) -> None:
-        import ocr_server
-
         backend = MagicMock()
         backend.provider = "cpu"
         backend.vram_mb = 0
@@ -91,7 +85,7 @@ class TestModelSwap:
                 backend=backend, name=name, loaded=True
             )
 
-        with patch("ocr_server._load_model", side_effect=fake_load):
+        with patch("servers.ocr.ocr_server._load_model", side_effect=fake_load):
             resp = client.post("/model/swap", json={"model": "pp-ocrv6-small"})
         assert resp.status_code == 200
         body = resp.json()
@@ -108,8 +102,6 @@ class TestModelSwap:
 
 class TestRapidOcrBackend:
     def test_tier_mapping(self) -> None:
-        import ocr_server
-
         registry = ocr_server._backend_registry
         assert registry["pp-ocrv6-small"]._tier == "small"
         assert registry["pp-ocrv6-medium"]._tier == "medium"
@@ -117,7 +109,7 @@ class TestRapidOcrBackend:
 
 class TestConvert:
     @patch(
-        "ocr_server._process_image_bytes",
+        "servers.ocr.ocr_server._process_image_bytes",
         return_value={"text": "", "confidence": 0, "lines": 0},
     )
     def test_convert_single_file(self, mock_ocr, client, loaded_state) -> None:
@@ -131,7 +123,7 @@ class TestConvert:
         assert body["pages"] == [{"page": 1, "text": "", "confidence": 0, "lines": 0}]
 
     @patch(
-        "ocr_server._process_image_bytes",
+        "servers.ocr.ocr_server._process_image_bytes",
         return_value={"text": "extracted text", "confidence": 0.95, "lines": 1},
     )
     def test_convert_with_mock_ocr(self, mock_ocr, client, loaded_state) -> None:

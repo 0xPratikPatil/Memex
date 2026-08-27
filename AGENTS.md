@@ -9,7 +9,7 @@ memex/
 ├── __init__.py                  # v0.5.0
 ├── cli.py                       # Typer CLI: ingest, sync, eval, serve
 ├── mcp/
-│   ├── server.py                # 13 MCP tools via FastMCP
+│   ├── server.py                # 15 MCP tools via FastMCP
 │   └── schemas.py               # Pydantic request/response models
 └── engine/
     ├── core/
@@ -60,6 +60,24 @@ memex/
     │   ├── huggingface.py        # HuggingFace embedder
     │   └── fastembed.py          # FastEmbed embedder
     └── utils/
+```
+
+Standalone Docker service servers live in `servers/` (one dir per image; each
+Dockerfile builds from the repo root context):
+
+```
+servers/
+├── marker/                      # GPU document conversion (job-based subprocess)
+│   ├── marker.Dockerfile        # copies marker_server.py + convert_one.py + converter_helpers.py
+│   ├── marker_server.py         # FastAPI job server on :5001
+│   ├── convert_one.py           # isolated per-job conversion subprocess
+│   └── converter_helpers.py     # mode-aware model/processor filtering
+├── markitdown/                  # CPU-only conversion (DOCX, PPTX, XLSX, HTML, EPUB, …)
+│   ├── markitdown.Dockerfile
+│   └── markitdown_server.py     # FastAPI on :5003
+└── ocr/                         # PP-OCRv6 GPU/CPU auto (rapidocr) + VLM tiers
+    ├── ocr.Dockerfile
+    └── ocr_server.py            # FastAPI on :5004 (model swap + queue)
 ```
 
 ## Available Features

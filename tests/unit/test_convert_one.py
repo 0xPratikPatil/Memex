@@ -80,7 +80,7 @@ class TestBuildConverterArgs:
 
     def test_fast_mode_removes_table_rec_model(self):
         """In fast mode, table_rec_model must be deleted from artifact_dict."""
-        from converter_helpers import build_converter_args
+        from servers.marker.converter_helpers import build_converter_args
 
         config_parser = MagicMock()
         artifact_dict = {
@@ -103,7 +103,7 @@ class TestBuildConverterArgs:
 
     def test_balanced_mode_keeps_table_rec_model(self):
         """In balanced mode, table_rec_model must remain in artifact_dict."""
-        from converter_helpers import build_converter_args
+        from servers.marker.converter_helpers import build_converter_args
 
         config_parser = MagicMock()
         artifact_dict = {
@@ -124,7 +124,7 @@ class TestBuildConverterArgs:
 
     def test_fast_mode_excludes_table_processor(self):
         """In fast mode, TableProcessor must be excluded from processor list."""
-        from converter_helpers import build_converter_args
+        from servers.marker.converter_helpers import build_converter_args
 
         config_parser = MagicMock()
         artifact_dict = {"layout_model": MagicMock(), "table_rec_model": MagicMock()}
@@ -139,7 +139,7 @@ class TestBuildConverterArgs:
 
     def test_balanced_mode_includes_all_processors(self):
         """In balanced mode, processor_list passes through from config_parser."""
-        from converter_helpers import build_converter_args
+        from servers.marker.converter_helpers import build_converter_args
 
         config_parser = MagicMock()
         config_parser.get_processors.return_value = ["a.processor.ClassA"]
@@ -158,7 +158,7 @@ class TestBuildConverterArgs:
 
     def test_fast_mode_returns_all_other_models(self):
         """Fast mode only removes table_rec_model, not other models."""
-        from converter_helpers import build_converter_args
+        from servers.marker.converter_helpers import build_converter_args
 
         config_parser = MagicMock()
         artifact_dict = {

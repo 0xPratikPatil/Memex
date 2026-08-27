@@ -423,14 +423,14 @@ class TestProgressTrackerDisplay:
 
     def test_pool_sized_to_file_count_no_phantom_bars(self) -> None:
         """Few files → exactly that many slot rows (plus Overall). No phantom bars."""
-        progress, tracker = self._tracker(files=3)
+        progress, _tracker = self._tracker(files=3)
         # Overall + 3 slots — NOT the full budget of 10
         assert len(progress.tasks) == 4
         assert all(t.description == "" for t in progress.tasks[1:])
 
     def test_unused_slots_marked_unused(self) -> None:
         """Unused slots carry the unused field so columns render empty."""
-        progress, tracker = self._tracker(files=2)
+        progress, _tracker = self._tracker(files=2)
         unused = [t for t in progress.tasks if t.fields.get("unused")]
         assert len(unused) == 2
         for t in unused:

@@ -132,7 +132,7 @@ services:
   marker:
     build:
       context: .
-      dockerfile: marker.Dockerfile
+      dockerfile: servers/marker/marker.Dockerfile
       target: runtime
       # Model pre-cache downloads from models.datalab.to at build time — host
       # networking so DNS works (host systemd-resolved stub 127.0.0.53 is
@@ -217,7 +217,7 @@ services:
   markitdown:
     build:
       context: .
-      dockerfile: markitdown.Dockerfile
+      dockerfile: servers/markitdown/markitdown.Dockerfile
     container_name: memex-markitdown
     init: true
     ports:
@@ -263,7 +263,7 @@ services:
   ocr:
     build:
       context: .
-      dockerfile: ocr.Dockerfile
+      dockerfile: servers/ocr/ocr.Dockerfile
       target: ${OCR_BUILD_TARGET:-rapidocr}
     image: memex-ocr:${OCR_BUILD_TARGET:-rapidocr}
     container_name: memex-ocr

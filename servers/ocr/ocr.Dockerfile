@@ -184,7 +184,7 @@ RUN groupadd -g 1001 -r appgroup && \
 
 COPY --from=rapidocr-builder --chown=1001:1001 /opt/venv /opt/venv
 COPY --from=rapidocr-builder --chown=1001:1001 /models/rapidocr /models/rapidocr
-COPY --chown=1001:1001 ocr_server.py /app/ocr_server.py
+COPY --chown=1001:1001 servers/ocr/ocr_server.py /app/ocr_server.py
 
 USER 1001
 
@@ -223,7 +223,7 @@ RUN groupadd -g 1001 -r appgroup && \
 COPY --from=vlm-builder --chown=1001:1001 /opt/venv /opt/venv
 COPY --from=vlm-builder --chown=1001:1001 /models/huggingface /models/huggingface
 COPY --from=vlm-builder --chown=1001:1001 /models/rapidocr /models/rapidocr
-COPY --chown=1001:1001 ocr_server.py /app/ocr_server.py
+COPY --chown=1001:1001 servers/ocr/ocr_server.py /app/ocr_server.py
 
 USER 1001
 

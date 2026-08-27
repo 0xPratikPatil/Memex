@@ -7,11 +7,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from servers.markitdown import markitdown_server
+
 
 @pytest.fixture
 def client():
     """Create a test client with mocked MarkItDown."""
-    with patch("markitdown_server._get_markitdown") as mock_get:
+    with patch("servers.markitdown.markitdown_server._get_markitdown") as mock_get:
         mock_md = MagicMock()
         mock_result = MagicMock()
         mock_result.text_content = "# Hello\n\nWorld content."
@@ -19,9 +21,7 @@ def client():
         mock_md.convert.return_value = mock_result
         mock_get.return_value = mock_md
 
-        from markitdown_server import app
-
-        with TestClient(app) as c:
+        with TestClient(markitdown_server.app) as c:
             yield c, mock_md
 
 
@@ -46,7 +46,7 @@ class TestQueue:
         assert body["max_concurrent"] > 0
 
     def test_queue_reports_current_and_pending(self, client):
-        import markitdown_server
+        import servers.markitdown.markitdown_server as markitdown_server
 
         c, _ = client
         markitdown_server._current_file = "converting.docx"
