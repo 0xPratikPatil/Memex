@@ -28,6 +28,8 @@ from rich.table import Column, Table
 from memex import __version__
 from memex.engine.core.progress import FileProgress
 
+logger = logging.getLogger("memex.cli")
+
 app = typer.Typer(help="Memex RAG — CLI commands")
 console = Console()
 
