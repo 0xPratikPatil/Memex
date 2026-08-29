@@ -105,18 +105,20 @@ class MetadataExtractor:
             return {}
 
         prompt = (
-            "You are a precise named-entity extractor.\n"
-            "Return a JSON object with exactly these keys:\n"
-            '- "people": full names of people mentioned\n'
-            '- "organizations": company, agency, or institution names\n'
-            '- "locations": cities, countries, addresses, or place names\n'
-            '- "products": product names, model numbers, or brand names\n'
-            '- "dates": all dates mentioned, as readable strings (e.g. "January 15, 2026", '
-            '"Q3 2025", "2024"). Normalize partial dates (e.g. "Jan" -> "January"). '
-            "Deduplicate: if the same date appears multiple ways, keep the most complete form.\n"
-            "Each value is a list of unique strings. Use empty arrays when there are no "
-            "matches — never omit keys. Raw JSON only, no markdown fences.\n\n"
-            f"Text: {text[:1000]}"
+            "<task>Extract named entities from the text below.</task>\n\n"
+            "<rules>\n"
+            "- Return ONLY valid JSON, no explanations or markdown\n"
+            "- Each category must be a list of strings\n"
+            "- Use empty lists when no entities found\n"
+            "- Never omit any key\n"
+            "- Deduplicate: keep the most complete form\n"
+            "- Normalize dates: \"Jan\" → \"January\", \"Q3\" → \"Q3\"\n"
+            "</rules>\n\n"
+            "<output_format>\n"
+            '{"people": [], "organizations": [], "locations": [], "products": [], "dates": []}\n'
+            "</output_format>\n\n"
+            f"<text>\n{text[:1000]}\n</text>\n\n"
+            "<answer>\n"
         )
         try:
             response = self._chat(prompt)
@@ -139,14 +141,18 @@ class MetadataExtractor:
             return "unknown"
 
         prompt = (
-            "You are a document classifier.\n"
-            "Classify the document type. Choose exactly one of: "
-            "report, email, article, code, documentation, presentation, "
-            "resume, contract, invoice, meeting_notes, other.\n"
-            "Prefer 'contract' for legal agreements, deeds, trusts, and signed "
-            "documents with clauses and parties. Prefer 'report' for structured "
-            "analyses with findings. Output the type only — no punctuation, no quotes.\n\n"
-            f"Text: {text[:2000]}"
+            "<task>Classify the document type.</task>\n\n"
+            "<rules>\n"
+            "- Choose EXACTLY one type from the list\n"
+            "- Return ONLY the type name, no quotes or punctuation\n"
+            "- Prefer \"contract\" for legal agreements with clauses and parties\n"
+            "- Prefer \"report\" for structured analyses with findings\n"
+            "- Prefer \"email\" for messages with greetings/signatures\n"
+            "</rules>\n\n"
+            "<types>report, email, article, code, documentation, presentation, "
+            "resume, contract, invoice, meeting_notes, other</types>\n\n"
+            f"<text>\n{text[:2000]}\n</text>\n\n"
+            "<answer>\n"
         )
         try:
             doc_type = self._chat(prompt).strip().lower()
@@ -172,12 +178,17 @@ class MetadataExtractor:
             return []
 
         prompt = (
-            f"You are a topic tagger. Extract up to {config.MAX_TOPICS_PER_CHUNK} topic labels "
-            "from this text. Topics must be short noun phrases (2-4 words) that describe the "
-            "main subjects. Avoid generic labels like 'information' or 'details'. "
-            "Return a JSON array of strings. Use [] if no clear topics. "
-            "Raw JSON only, no markdown fences.\n\n"
-            f"Text: {text[:1000]}"
+            "<task>Extract topic labels from the text.</task>\n\n"
+            "<rules>\n"
+            "- Return a JSON array of strings\n"
+            "- Topics must be short noun phrases (2-4 words)\n"
+            "- Focus on main subjects, not subtopics\n"
+            "- Avoid generic labels: \"information\", \"details\", \"data\", \"content\"\n"
+            f"- Maximum {config.MAX_TOPICS_PER_CHUNK} topics\n"
+            "</rules>\n\n"
+            f"<output_format>[\"topic1\", \"topic2\"]</output_format>\n\n"
+            f"<text>\n{text[:1000]}\n</text>\n\n"
+            "<answer>\n"
         )
         try:
             response = self._chat(prompt)
@@ -417,19 +428,20 @@ class MetadataExtractor:
             return [{} for _ in batch]
 
         prompt = (
-            "You are a precise metadata extraction engine for a document corpus.\n"
-            "Extract metadata from each chunk below.\n\n"
-            "OUTPUT CONTRACT (strict):\n"
-            "- Return exactly ONE JSON array with one object per chunk, in the same order.\n"
-            f"- Every object must contain ALL keys: {', '.join(tasks)}.\n"
-            "- Use empty arrays for fields with no matches — never omit a key.\n"
-            "- Never add keys beyond the requested ones.\n"
-            "- Output raw JSON only — no markdown fences, no commentary.\n\n"
-            "Example for a single chunk:\n"
-            '{"entities": {"people": ["Jane Doe"], "organizations": ["Acme Corp"], '
-            '"locations": ["Mumbai"], "products": [], "dates": ["January 15, 2026"]}, '
-            '"topics": ["corporate governance"], "doc_type": "contract"}\n\n'
-            f"Chunks:\n{chunks_text}"
+            "<task>Extract metadata from each chunk below.</task>\n\n"
+            "<rules>\n"
+            "- Return exactly ONE JSON array with one object per chunk, in the same order\n"
+            f"- Every object must contain ALL keys: {', '.join(tasks)}\n"
+            "- Use empty arrays for fields with no matches — never omit a key\n"
+            "- Never add keys beyond the requested ones\n"
+            "- Output raw JSON only — no markdown fences, no commentary\n"
+            "</rules>\n\n"
+            "<output_format>\n"
+            '[{"entities": {"people": [], "organizations": [], "locations": [], "products": [], "dates": []}, '
+            '"topics": [], "doc_type": "type"}]\n'
+            "</output_format>\n\n"
+            f"<chunks>\n{chunks_text}\n</chunks>\n\n"
+            "<answer>\n"
         )
 
         try:
