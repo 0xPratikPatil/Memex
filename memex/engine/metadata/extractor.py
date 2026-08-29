@@ -35,7 +35,7 @@ _DOC_TYPES = {
 # extraction logic changes — stored chunks with an older (or missing)
 # metadata_version are re-ingested on the next sync, so new fields/prompts
 # actually reach the collection.
-METADATA_VERSION = 3
+METADATA_VERSION = 4
 
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 _URL_RE = re.compile(r"https?://[^\s<>\"']+")
@@ -106,25 +106,31 @@ class MetadataExtractor:
 
         prompt = (
             "You are a named-entity extractor for a document search index.\n"
-            "Extract entities from the text and return a JSON object.\n\n"
-            "SCHEMA (exactly these keys, each a list of strings):\n"
-            '  "people": full names of people (not titles or pronouns)\n'
-            '  "organizations": companies, agencies, institutions, teams\n'
-            '  "locations": cities, countries, regions, addresses\n'
-            '  "products": product names, model numbers, brands\n'
-            '  "dates": dates or date ranges, normalized (e.g. "2026-01-15", "Q3 2025")\n\n'
-            "RULES:\n"
-            "- Return ONLY the JSON object — no preamble, no markdown fences, no comments\n"
-            "- Use empty arrays [] when a category has no matches — never omit a key\n"
-            "- Deduplicate: same entity appears once, keep the most complete form\n"
-            "- Keep the original case of proper nouns (\"Acme Corp\", not \"acme corp\")\n"
-            "- Do not invent entities that are not explicitly in the text\n\n"
-            "EXAMPLE:\n"
-            'Text: "The contract with Tesla Motors was signed in Berlin by Anna Müller on March 3."\n'
-            'Output: {"people": ["Anna Müller"], "organizations": ["Tesla Motors"], '
-            '"locations": ["Berlin"], "products": [], "dates": ["March 3"]}\n\n'
-            f"Text: {text[:1000]}\n\n"
-            "Output:"
+            "Read the text and extract every named entity you find.\n\n"
+            "### SCHEMA\n"
+            'Return one JSON object with exactly these keys. Each value is a list of strings.\n'
+            '"people" = full names of people\n'
+            '"organizations" = companies, agencies, institutions, teams\n'
+            '"locations" = cities, countries, regions, addresses\n'
+            '"products" = product names, model numbers, brands\n'
+            '"dates" = dates and date ranges, e.g. "March 3, 2026", "Q3 2025", "2024"\n\n'
+            "### RULES\n"
+            "- Return the JSON object only, with no other text around it\n"
+            "- Keep each entity exactly as written in the text (keep original capitalization)\n"
+            "- Write [] for a key when the text has no entity of that type\n"
+            "- Include every key in every answer, even when empty\n"
+            "- List each entity only once\n\n"
+            "### EXAMPLE 1\n"
+            'Text: "Tesla Motors opened a Gigafactory near Berlin. Elon Musk spoke at the event on March 3, 2026."\n'
+            'Output: {"people": ["Elon Musk"], "organizations": ["Tesla Motors"], '
+            '"locations": ["Berlin"], "products": [], "dates": ["March 3, 2026"]}\n\n'
+            "### EXAMPLE 2\n"
+            'Text: "The quarterly revenue grew by 15 percent compared to the previous year."\n'
+            'Output: {"people": [], "organizations": [], "locations": [], '
+            '"products": [], "dates": []}\n\n'
+            "### TEXT\n"
+            f"{text[:1000]}\n\n"
+            "### OUTPUT"
         )
         try:
             response = self._chat(prompt)
@@ -150,28 +156,35 @@ class MetadataExtractor:
 
         prompt = (
             "You are a document classifier for a search index.\n"
-            "Classify the text into exactly one of these types:\n"
-            "report, email, article, code, documentation, presentation, "
-            "resume, contract, invoice, meeting_notes, other\n\n"
-            "GUIDANCE:\n"
-            '- "contract" — legal agreements, deeds, trusts, signed documents with clauses and parties\n'
-            '- "report" — structured analyses with findings, stats, recommendations\n'
-            '- "email" — messages with greeting/salutation and sign-off\n'
-            '- "invoice" — billing with amounts, line items, due dates\n'
-            '- "meeting_notes" — minutes, agenda, action items, attendee list\n'
-            '- "code" — source code, configs, scripts\n'
-            '- "documentation" — API refs, user guides, READMEs\n'
-            '- "presentation" — slide-style content, bullet-heavy with titles\n'
-            '- "resume" — CV, skills, work history, education\n'
-            '- "article" — prose with headline, byline, or journalistic tone\n'
-            '- "other" — anything that does not fit the above\n\n'
-            "Return ONLY the type name — one word, lowercase, no quotes, no punctuation, "
-            "no explanations.\n\n"
-            "EXAMPLE:\n"
-            'Text: "This Agreement is entered into by Acme Corp and Jane Doe."\n'
-            'Output: contract\n\n'
-            f"Text: {text[:2000]}\n\n"
-            "Output:"
+            "Read the text and assign exactly one of these types:\n"
+            "report, email, article, code, documentation, presentation, resume, contract, invoice, meeting_notes, other\n\n"
+            "### TYPE GUIDE\n"
+            '"contract" = legal agreements, deeds, trusts; documents with parties, clauses, signatures\n'
+            '"report" = structured analyses with findings, statistics, recommendations\n'
+            '"email" = messages with a greeting and a sign-off\n'
+            '"invoice" = billing documents with amounts, line items, due dates\n'
+            '"meeting_notes" = minutes, agendas, action items, attendee lists\n'
+            '"resume" = CVs with skills, work history, education\n'
+            '"presentation" = slide decks; short bullets under section titles\n'
+            '"documentation" = API references, user guides, READMEs\n'
+            '"code" = source code, configuration files, scripts\n'
+            '"article" = journalistic prose, blog posts, news\n'
+            '"other" = anything that fits none of the above\n\n'
+            "### RULES\n"
+            "- Write only the type name in lowercase, nothing else\n"
+            "- When unsure between two types, pick the one that matches more of the text\n\n"
+            "### EXAMPLE 1\n"
+            'Text: "This Agreement is entered into by and between Acme Corp (\"Company\") and Jane Doe (\"Client\"). The parties agree as follows..."\n'
+            "Output: contract\n\n"
+            "### EXAMPLE 2\n"
+            'Text: "Q3 results show revenue up 15% year-over-year. We recommend increasing the marketing budget."\n'
+            "Output: report\n\n"
+            "### EXAMPLE 3\n"
+            'Text: "Hi Sarah, can you send me the slides before tomorrow? Thanks, Mike"\n'
+            "Output: email\n\n"
+            "### TEXT\n"
+            f"{text[:2000]}\n\n"
+            "### OUTPUT"
         )
         try:
             doc_type = self._chat(prompt).strip().lower()
@@ -198,18 +211,23 @@ class MetadataExtractor:
 
         prompt = (
             "You are a topic tagger for a document search index.\n"
-            f"Extract up to {config.MAX_TOPICS_PER_CHUNK} topic labels from the text.\n\n"
-            "RULES:\n"
-            "- Topics must be short noun phrases (2-4 words) describing the main subjects\n"
-            "- Broad, generic labels are useless — be specific (\"machine learning\" not \"technology\")\n"
-            "- Avoid: information, details, data, content, general, overview, introduction\n"
-            "- Return ONLY a JSON array of strings — no markdown fences, no keys, no comments\n"
-            "- Use [] when the text has no clear topics\n\n"
-            "EXAMPLE:\n"
+            f"Read the text and write up to {config.MAX_TOPICS_PER_CHUNK} topic labels "
+            "that capture what the text is about.\n\n"
+            "### RULES\n"
+            "- Each topic is a short noun phrase of 2-4 words\n"
+            '- Be specific: "renewable energy policy" instead of "energy"\n'
+            "- Order topics by how central they are to the text\n"
+            "- Write [] when the text has no discernible topic\n"
+            "- Return one JSON array of strings only, with no other text\n\n"
+            "### EXAMPLE 1\n"
             'Text: "The 2025 annual report shows revenue grew 20% in the enterprise segment, driven by cloud adoption in Europe."\n'
             'Output: ["annual report", "revenue growth", "cloud adoption", "enterprise segment"]\n\n'
-            f"Text: {text[:1000]}\n\n"
-            "Output:"
+            "### EXAMPLE 2\n"
+            'Text: "Please review the attached document and let me know your thoughts when you get a chance."\n'
+            "Output: []\n\n"
+            "### TEXT\n"
+            f"{text[:1000]}\n\n"
+            "### OUTPUT"
         )
         try:
             response = self._chat(prompt)
@@ -450,23 +468,23 @@ class MetadataExtractor:
 
         prompt = (
             "You are a metadata extraction engine for a document search index.\n"
-            f"Extract metadata from each of the {len(batch)} chunks below.\n\n"
-            "TASK PER CHUNK:\n"
-            f"- {', '.join(tasks)}\n\n"
-            "OUTPUT CONTRACT (strict):\n"
-            "- Return ONE JSON array with exactly one object per chunk, in the SAME order as the input\n"
-            f"- Every object must contain ALL these keys: {', '.join(tasks)}\n"
-            "- Use empty arrays for fields with no matches — never omit a key\n"
-            "- Never add keys beyond the requested ones\n"
-            "- Output raw JSON only — no markdown fences, no commentary, no numbering\n\n"
-            "EXAMPLE (for 2 chunks, entities + topics enabled):\n"
-            'Input: [Chunk 0]: "The board approved the merger with GlobalTech." [Chunk 1]: "Revenue grew 15% this quarter."\n'
+            f"Extract metadata for each of the {len(batch)} chunks below.\n\n"
+            "### TASK\n"
+            f"For each chunk, produce exactly these fields:\n{', '.join(tasks)}\n\n"
+            "### RULES\n"
+            "- Return ONE JSON array with one object per chunk, in the SAME order as the chunks\n"
+            "- Every object contains every requested field, even when empty\n"
+            "- Write [] or {} for fields with no matches\n"
+            "- Return the JSON only, with no other text\n\n"
+            "### EXAMPLE\n"
+            'Chunks: [Chunk 0]: "The board approved the merger with GlobalTech." [Chunk 1]: "Revenue grew 15% this quarter."\n'
             'Output: [{"entities": {"people": [], "organizations": ["GlobalTech"], "locations": [], '
             '"products": [], "dates": []}, "topics": ["board approval", "merger"]}, '
             '{"entities": {"people": [], "organizations": [], "locations": [], "products": [], "dates": []}, '
             '"topics": ["revenue growth"]}]\n\n'
-            f"Chunks:\n{chunks_text}\n\n"
-            "Output:"
+            "### CHUNKS\n"
+            f"{chunks_text}\n\n"
+            "### OUTPUT"
         )
 
         try:
