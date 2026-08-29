@@ -175,19 +175,33 @@ class _ProgressTracker:
         so the region always fits below the startup banner and above the
         summary — if the terminal ever scrolls, Live's cursor-up stops
         tracking correctly and rows duplicate.
+
+        Pool must accommodate concurrent operations: up to 8 conversions
+        in flight (CONVERT_AHEAD) + 2 ingest workers = 10 concurrent files.
         """
         height = console.size.height or 24
-        return max(4, min(10, height - 15))
+        # Min 12 to handle CONVERT_AHEAD(8) + INGEST_WORKERS(2) + buffer
+        return max(12, min(20, height - 12))
 
     def _alloc(self) -> TaskID:
-        """Claim a slot: reuse a free one, else recycle the oldest done row."""
+        """Claim a slot: reuse a free one, else recycle the oldest done row.
+
+        If no free slots and no done rows, force-allocates a new task.
+        This should rarely happen with the increased pool size, but
+        gracefully handles terminal height constraints.
+        """
         if self._free_slots:
             return self._free_slots.popleft()
         if self._done_order:
             src, tid = self._done_order.popitem(last=False)
             del self._file_tasks[src]
             return tid
-        raise RuntimeError("row pool exhausted with no recyclable rows")
+        # Emergency: add a new task row (may cause visual glitch but
+        # avoids crashing the entire sync run)
+        logger.warning("Row pool exhausted — adding emergency row (may cause display glitch)")
+        return self._progress.add_task(
+            "", total=None, completed=0, stage="", detail="", unused=True
+        )
 
     def mark_active(self, src: str, stage: str) -> None:
         if src not in self._start_times:

@@ -101,7 +101,7 @@ class MetadataExtractor:
         Each value is a list of unique strings (capped by config).
         """
         if not self._llm:
-            logger.debug("No LLM provider, skipping entity extraction")
+            logger.warning("No LLM provider — entity extraction skipped")
             return {}
 
         prompt = (
@@ -123,7 +123,7 @@ class MetadataExtractor:
             entities = json.loads(self._strip_code_fences(response))
             return {k: v[: config.MAX_ENTITIES_PER_CHUNK] for k, v in entities.items() if isinstance(v, list)}
         except (json.JSONDecodeError, Exception) as exc:
-            logger.debug("Entity extraction failed: %s", exc)
+            logger.warning("Entity extraction failed: %s", exc)
             return {}
 
     # ── Document classification ───────────────────────────────────────────
@@ -135,6 +135,7 @@ class MetadataExtractor:
         presentation, resume, contract, invoice, meeting_notes, other, unknown.
         """
         if not self._llm:
+            logger.warning("No LLM provider — document classification skipped")
             return "unknown"
 
         prompt = (
@@ -156,7 +157,7 @@ class MetadataExtractor:
                     return v
             return "other"
         except Exception as exc:
-            logger.debug("Document classification failed: %s", exc)
+            logger.warning("Document classification failed: %s", exc)
             return "unknown"
 
     # ── Topic extraction ──────────────────────────────────────────────────
@@ -167,6 +168,7 @@ class MetadataExtractor:
         Returns a list of up to ``MAX_TOPICS_PER_CHUNK`` topic strings.
         """
         if not self._llm:
+            logger.warning("No LLM provider — topic extraction skipped")
             return []
 
         prompt = (
@@ -184,7 +186,7 @@ class MetadataExtractor:
                 return [str(t) for t in topics[: config.MAX_TOPICS_PER_CHUNK]]
             return []
         except (json.JSONDecodeError, Exception) as exc:
-            logger.debug("Topic extraction failed: %s", exc)
+            logger.warning("Topic extraction failed: %s", exc)
             return []
 
     # ── Language detection ────────────────────────────────────────────────
@@ -385,6 +387,10 @@ class MetadataExtractor:
     ) -> list[dict[str, Any]]:
         """Extract metadata for a batch of chunks in a single LLM call."""
         if not self._llm:
+            logger.warning(
+                "No LLM provider — metadata extraction skipped for %d chunks",
+                len(batch),
+            )
             return [{} for _ in batch]
 
         chunks_text = "\n\n".join(f"[Chunk {i}]: {c['content'][:500]}" for i, c in enumerate(batch))
@@ -453,7 +459,7 @@ class MetadataExtractor:
                 meta["structural"] = self.extract_structural(chunk_with_index, source_identifier)
             return normalized
         except (json.JSONDecodeError, Exception) as exc:
-            logger.debug("Batch metadata extraction failed, falling back to per-chunk: %s", exc)
+            logger.warning("Batch metadata extraction failed, falling back to per-chunk: %s", exc)
             return self._fallback_per_chunk(
                 batch, document_text, source_identifier, doc_type, batch_start, total_chunks
             )
@@ -467,23 +473,41 @@ class MetadataExtractor:
         batch_start: int = 0,
         total_chunks: int = 0,
     ) -> list[dict[str, Any]]:
-        """Fallback to per-chunk extraction when batch fails."""
+        """Fallback to per-chunk extraction when batch fails.
+
+        Extracts ALL metadata fields for each chunk: entities, doc_type,
+        topics, language, keywords, structural. Each extraction is independent
+        — failures in one field don't affect others.
+        """
         results = []
         for i, chunk in enumerate(batch):
             meta: dict[str, Any] = {}
             chunk_with_index = {**chunk, "chunk_index": batch_start + i, "total_chunks": total_chunks}
+
+            # Entities (LLM-based)
             if config.ENABLE_ENTITY_EXTRACTION:
                 meta["entities"] = self.extract_entities(chunk["content"])
+
+            # Document type (LLM-based, only for first chunk in batch)
             if doc_type and config.ENABLE_DOC_CLASSIFICATION and i == 0:
                 meta["doc_type"] = self.classify_document(document_text or chunk["content"])
+
+            # Topics (LLM-based)
             if config.ENABLE_TOPIC_TAGGING:
                 meta["topics"] = self.extract_topics(chunk["content"])
+
+            # Language detection (langdetect library, no LLM)
             if config.ENABLE_LANGUAGE_DETECTION:
                 lang = self.detect_language(chunk["content"])
                 if lang:
                     meta["language"] = lang
+
+            # Keywords (TF heuristics, no LLM)
             meta["keywords"] = self.extract_keywords(chunk["content"])
+
+            # Structural metadata (heuristics, no LLM)
             meta["structural"] = self.extract_structural(chunk_with_index, source_identifier)
+
             results.append(meta)
         return results
 

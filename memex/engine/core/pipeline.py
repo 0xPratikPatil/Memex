@@ -671,6 +671,25 @@ class RAGEngine:
                 )
                 for chunk, meta in zip(raw_chunks, batch_meta, strict=True):
                     chunk["metadata"] = meta
+
+                # Log metadata extraction summary for debugging
+                chunks_with_entities = sum(
+                    1 for m in batch_meta if m.get("entities")
+                )
+                chunks_with_topics = sum(
+                    1 for m in batch_meta if m.get("topics")
+                )
+                logger.info(
+                    "Metadata extracted for %d chunks: %d with entities, %d with topics",
+                    len(batch_meta),
+                    chunks_with_entities,
+                    chunks_with_topics,
+                )
+                if chunks_with_entities == 0 and len(batch_meta) > 0:
+                    logger.warning(
+                        "No entities extracted for any chunk — check LLM availability "
+                        "and config flags (metadata.entity_extraction, metadata.extraction_enabled)"
+                    )
             finally:
                 gpu_lock.release("llm")
 
