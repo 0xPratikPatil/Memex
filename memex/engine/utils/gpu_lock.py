@@ -130,6 +130,11 @@ class GpuLock:
         self._owner: str | None = None
         self._lock = threading.Lock()
 
+    def held_by(self) -> str | None:
+        """Return the current exclusive owner, or None when the GPU is free."""
+        with self._lock:
+            return self._owner
+
     def acquire(self, owner: str) -> None:
         """Acquire the GPU for *owner* if VRAM is tight.
 

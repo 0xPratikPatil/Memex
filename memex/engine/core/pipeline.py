@@ -615,7 +615,9 @@ class RAGEngine:
         Handles: dedup, contextual retrieval, metadata extraction, embedding, Qdrant upsert.
         """
 
-        def _progress(msg: str, pct: int) -> None:
+        def _progress(
+            msg: str, pct: int, stage: PipelineStage | None = None
+        ) -> None:
             if progress_cb:
                 progress_cb(
                     FileProgress(
@@ -627,7 +629,7 @@ class RAGEngine:
                     )
                 )
             logger.info("ingest [%d%%] %s", pct, msg)
-            self._record_stage(source_identifier, pct)
+            self._record_stage(source_identifier, pct, stage=stage)
 
         # Every ingest path (MCP tools, CLI, sync) must leave a status record
         # — otherwise rag_processing_status shows nothing for files ingested
@@ -642,60 +644,71 @@ class RAGEngine:
         if not raw_chunks:
             raise ValueError("No valid text chunks after deduplication.")
 
-        # ── Contextual retrieval ──────────────────────────────────────────
+        # ── Contextual retrieval + metadata (one GPU lock hold) ──────────
+        # Both phases use the LLM on GPU. Holding the lock across BOTH phases
+        # (instead of acquire/release per phase) stops marker from grabbing
+        # the GPU in between and evicting Ollama models — a ~5-10s reload
+        # stall on every file. Embedding does NOT take this lock: Ollama
+        # serves embed+chat concurrently and the embed batch is the payload,
+        # not a model reload.
+        from memex.engine.core.progress import PipelineStage, activity_registry
         from memex.engine.utils.gpu_lock import gpu_lock
 
-        ctx_gen: ContextGenerator | None = None
-        document_summary = ""
-        if config.ENABLE_CONTEXTUAL_RETRIEVAL:
+        if config.ENABLE_CONTEXTUAL_RETRIEVAL or config.ENABLE_METADATA_EXTRACTION:
+            other = gpu_lock.held_by()
+            if other and other != "llm":
+                _progress(
+                    PipelineStage.WAITING_GPU, 70, stage=PipelineStage.WAITING_GPU
+                )
+                activity_registry.report(source_identifier, PipelineStage.WAITING_GPU)
             gpu_lock.acquire("llm")
             try:
-                ctx_gen = ContextGenerator(self._llm)
-                if config.CONTEXT_STRATEGY == "summary":
-                    _progress("Generating document summary...", 71)
-                    try:
-                        document_summary = ctx_gen.generate_document_summary(document_text or "")
-                    except Exception:
-                        logger.warning("Document summary generation failed, falling back to header strategy")
-                        logger.debug("Document summary failure detail", exc_info=True)
-                _progress("Adding context to chunks...", 73)
-                raw_chunks = ctx_gen.enrich_chunks(raw_chunks, document_summary=document_summary)
-            finally:
-                gpu_lock.release("llm")
+                # ── Contextual retrieval ──────────────────────────────────
+                ctx_gen: ContextGenerator | None = None
+                document_summary = ""
+                if config.ENABLE_CONTEXTUAL_RETRIEVAL:
+                    ctx_gen = ContextGenerator(self._llm)
+                    if config.CONTEXT_STRATEGY == "summary":
+                        _progress("Generating document summary...", 71)
+                        try:
+                            document_summary = ctx_gen.generate_document_summary(document_text or "")
+                        except Exception:
+                            logger.warning("Document summary generation failed, falling back to header strategy")
+                            logger.debug("Document summary failure detail", exc_info=True)
+                    _progress("Adding context to chunks...", 73)
+                    raw_chunks = ctx_gen.enrich_chunks(raw_chunks, document_summary=document_summary)
 
-        # ── Metadata extraction ──────────────────────────────────────────
-        metadata_extractor: MetadataExtractor | None = None
-        if config.ENABLE_METADATA_EXTRACTION:
-            gpu_lock.acquire("llm")
-            try:
-                metadata_extractor = MetadataExtractor(self._llm)
-                _progress("Extracting metadata...", 74)
-                batch_meta = metadata_extractor.extract_batch(
-                    chunks=raw_chunks,
-                    document_text=document_text,
-                    source_identifier=source_identifier,
-                )
-                for chunk, meta in zip(raw_chunks, batch_meta, strict=True):
-                    chunk["metadata"] = meta
-
-                # Log metadata extraction summary for debugging
-                chunks_with_entities = sum(
-                    1 for m in batch_meta if m.get("entities")
-                )
-                chunks_with_topics = sum(
-                    1 for m in batch_meta if m.get("topics")
-                )
-                logger.info(
-                    "Metadata extracted for %d chunks: %d with entities, %d with topics",
-                    len(batch_meta),
-                    chunks_with_entities,
-                    chunks_with_topics,
-                )
-                if chunks_with_entities == 0 and len(batch_meta) > 0:
-                    logger.warning(
-                        "No entities extracted for any chunk — check LLM availability "
-                        "and config flags (metadata.entity_extraction, metadata.extraction_enabled)"
+                # ── Metadata extraction ──────────────────────────────────
+                metadata_extractor: MetadataExtractor | None = None
+                if config.ENABLE_METADATA_EXTRACTION:
+                    metadata_extractor = MetadataExtractor(self._llm)
+                    _progress("Extracting metadata...", 74)
+                    batch_meta = metadata_extractor.extract_batch(
+                        chunks=raw_chunks,
+                        document_text=document_text,
+                        source_identifier=source_identifier,
                     )
+                    for chunk, meta in zip(raw_chunks, batch_meta, strict=True):
+                        chunk["metadata"] = meta
+
+                    # Log metadata extraction summary for debugging
+                    chunks_with_entities = sum(
+                        1 for m in batch_meta if m.get("entities")
+                    )
+                    chunks_with_topics = sum(
+                        1 for m in batch_meta if m.get("topics")
+                    )
+                    logger.info(
+                        "Metadata extracted for %d chunks: %d with entities, %d with topics",
+                        len(batch_meta),
+                        chunks_with_entities,
+                        chunks_with_topics,
+                    )
+                    if chunks_with_entities == 0 and len(batch_meta) > 0:
+                        logger.warning(
+                            "No entities extracted for any chunk — check LLM availability "
+                            "and config flags (metadata.entity_extraction, metadata.extraction_enabled)"
+                        )
             finally:
                 gpu_lock.release("llm")
 
@@ -704,16 +717,20 @@ class RAGEngine:
         raw_texts = [strip_context_prefix(c["content"]) for c in raw_chunks]
 
         # Dense (raw), sparse (enriched), and contextual dense (enriched) are
-        # independent — run all three concurrently to minimise latency
+        # independent — run all three concurrently to minimise latency.
+        # Dense goes through the cross-file batch accumulator so small files
+        # share one Ollama embed call (64 texts) instead of 1-3 text calls.
         import concurrent.futures
+
+        from memex.engine.ingestion.embed_batcher import submit_dense
 
         contextual_vecs: list[list[float]] | None = None
         max_workers = 3 if config.ENABLE_CONTEXTUAL_RETRIEVAL else 2
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-            dense_future = pool.submit(self._dense_embed_batch, raw_texts)
+            dense_future = pool.submit(submit_dense, raw_texts)
             sparse_future = pool.submit(self._sparse_embed, chunk_texts)
             if config.ENABLE_CONTEXTUAL_RETRIEVAL:
-                contextual_future = pool.submit(self._dense_embed_batch, chunk_texts)
+                contextual_future = pool.submit(submit_dense, chunk_texts)
             else:
                 contextual_future = None
 
@@ -819,6 +836,12 @@ class RAGEngine:
             FileStatusStore(self._get_qdrant()).mark_done(source_identifier, chunks=len(points))
         except Exception:
             logger.debug("Status mark_done skipped for %s", source_identifier, exc_info=True)
+        try:
+            from memex.engine.core.progress import activity_registry
+
+            activity_registry.remove(source_identifier)
+        except Exception:
+            logger.debug("Activity removal skipped for %s", source_identifier, exc_info=True)
         return len(points)
 
     def ingest_text(
@@ -896,23 +919,34 @@ class RAGEngine:
             document_text=markdown,
         )
 
-    def _record_stage(self, source_identifier: str, pct: int) -> None:
+    def _record_stage(
+        self, source_identifier: str, pct: int, stage: PipelineStage | None = None
+    ) -> None:
         """Record the pipeline stage for a source in the file status store.
 
-        Maps the ingest progress percentage to a PipelineStage and writes it
-        as a ``processing`` self-loop. Failures here are non-fatal — status
+        Maps the ingest progress percentage to a PipelineStage (or uses the
+        explicit ``stage`` when given) and writes it as a ``processing``
+        self-loop. Also reports into the activity registry so the TUI's LLM
+        activity row shows live phases. Failures here are non-fatal — status
         tracking must never break ingestion.
         """
-        if pct <= 72:
-            stage = PipelineStage.CONVERTING
-        elif pct <= 74:
-            stage = PipelineStage.CONTEXT
-        elif pct <= 76:
-            stage = PipelineStage.METADATA
-        elif pct <= 89:
-            stage = PipelineStage.EMBEDDING
-        else:
-            stage = PipelineStage.STORING
+        if stage is None:
+            if pct <= 72:
+                stage = PipelineStage.CONVERTING
+            elif pct <= 74:
+                stage = PipelineStage.CONTEXT
+            elif pct <= 76:
+                stage = PipelineStage.METADATA
+            elif pct <= 89:
+                stage = PipelineStage.EMBEDDING
+            else:
+                stage = PipelineStage.STORING
+        try:
+            from memex.engine.core.progress import activity_registry
+
+            activity_registry.report(source_identifier, stage)
+        except Exception:
+            logger.debug("Activity report skipped for %s", source_identifier, exc_info=True)
         try:
             from memex.engine.ingestion.status import FileStatusStore
 

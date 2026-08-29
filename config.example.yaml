@@ -93,7 +93,7 @@ contextual_retrieval:
   strategy: summary
   model: ""
   max_tokens: 50
-  batch_size: 5
+  batch_size: 10
   max_batches: 8                      # cap LLM batches per doc; rest use header fallback
 
 gpu:

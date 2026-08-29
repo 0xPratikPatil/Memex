@@ -26,7 +26,7 @@ from rich.progress import (
 from rich.table import Column, Table
 
 from memex import __version__
-from memex.engine.core.progress import FileProgress
+from memex.engine.core.progress import FileProgress, PipelineStage
 
 logger = logging.getLogger("memex.cli")
 
@@ -77,6 +77,7 @@ _STAGE_ICONS: dict[str, str] = {
     "Parsing": "↓",
     "Converting": "⚙",
     "Queued": "…",
+    "Waiting GPU": "⧗",
     "OCR": "◎",
     "Chunking": "▶",
     "Context": ">",
@@ -191,17 +192,17 @@ class _ProgressTracker:
         """Max file-slot rows for sync's rolling window (ingest sizes the
         pool to the file count instead).
 
-        Total live rows = Overall + 2 queue rows + this pool. Kept small
+        Total live rows = Overall + 3 queue rows + this pool. Kept small
         so the region always fits below the startup banner and above the
         summary — if the terminal ever scrolls, Live's cursor-up stops
         tracking correctly and rows duplicate.
 
         Pool must accommodate concurrent operations: up to 8 conversions
-        in flight (CONVERT_AHEAD) + 2 ingest workers = 10 concurrent files.
+        in flight (CONVERT_AHEAD) + 4 LLM workers = 12 concurrent files.
         """
         height = console.size.height or 24
-        # Min 12 to handle CONVERT_AHEAD(8) + INGEST_WORKERS(2) + buffer
-        return max(12, min(20, height - 12))
+        # Min 12 to handle CONVERT_AHEAD(8) + LLM_WORKERS(4) + buffer
+        return max(12, min(20, height - 4))
 
     def _alloc(self) -> TaskID:
         """Claim a slot: reuse a free one, else recycle the oldest done row.
@@ -465,6 +466,116 @@ class _QueueDisplay:
             self._client.close()
 
 
+class _LlmActivityDisplay:
+    """Live LLM activity row: which files are in which LLM phase right now.
+
+    Reads the in-process ActivityRegistry (updated by the pipeline on every
+    phase transition) and Ollama's ``/api/ps`` (loaded models + processor).
+    Renders ``◎ context: a.pdf · metadata: b.pdf · embed: c.pdf`` while LLM
+    phases run, ``waiting gpu`` when files are queued but no LLM phase is
+    active, and ``· idle · qwen2.5:1.5b (GPU)`` otherwise — so a host
+    running CPU-only Ollama is immediately visible.
+    """
+
+    POLL_INTERVAL_S = 0.5
+    _PHASE_ORDER = (
+        PipelineStage.WAITING_GPU,
+        PipelineStage.CONTEXT,
+        PipelineStage.METADATA,
+        PipelineStage.EMBEDDING,
+        PipelineStage.STORING,
+    )
+
+    def __init__(self, progress: Progress) -> None:
+        self._progress = progress
+        self._stop = threading.Event()
+        self._task: TaskID | None = None
+        import httpx
+
+        self._client = httpx.Client(
+            timeout=httpx.Timeout(connect=1.0, read=1.5, write=1.0, pool=1.0),
+            limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
+        )
+        self._model_hint = ""
+
+    def start(self) -> None:
+        self._task = self._progress.add_task(
+            "[bold magenta]LLM activity",
+            total=None,
+            stage="· idle",
+            detail="",
+        )
+        threading.Thread(
+            target=self._poll, daemon=True, name="llm-activity-poll"
+        ).start()
+
+    def _poll(self) -> None:
+        from memex.engine.core.progress import activity_registry
+
+        while not self._stop.wait(self.POLL_INTERVAL_S):
+            if self._task is None:
+                continue
+            try:
+                snapshot = activity_registry.snapshot()
+            except Exception:
+                snapshot = {}
+
+            active: dict[str, list[str]] = {}
+            queued = 0
+            for src, phase in snapshot.items():
+                if phase in self._PHASE_ORDER:
+                    active.setdefault(str(phase), []).append(_short_name(src))
+                elif phase == PipelineStage.QUEUED:
+                    queued += 1
+
+            if active:
+                parts = []
+                for phase in self._PHASE_ORDER:
+                    files = active.get(str(phase))
+                    if files:
+                        parts.append(f"{phase.lower()}: {', '.join(files)}")
+                self._progress.update(
+                    self._task, stage=f"◎ {' · '.join(parts)}", detail=""
+                )
+            elif queued:
+                self._progress.update(
+                    self._task,
+                    stage=f"waiting gpu · {queued} queued",
+                    detail="",
+                )
+            else:
+                hint = self._model_hint or "idle"
+                self._progress.update(self._task, stage=f"· {hint}", detail="")
+            self._refresh_model_hint()
+
+    def _refresh_model_hint(self) -> None:
+        """Best-effort fetch of loaded Ollama models + processor."""
+        from memex.engine.core import config as engine_config
+
+        base = engine_config.LLM_BASE_URL.rstrip("/")
+        try:
+            resp = self._client.get(f"{base}/api/ps")
+            if resp.status_code != 200:
+                return
+            models = resp.json().get("models", [])
+            if not models:
+                self._model_hint = "idle · no models loaded"
+                return
+            parts = []
+            for m in models[:2]:
+                name = m.get("name", "?")
+                proc = (m.get("size_vram") or 0) > 0 and "GPU" or "CPU"
+                parts.append(f"{_short_name(name, 24)} ({proc})")
+            self._model_hint = "idle · " + ", ".join(parts)
+        except Exception:
+            pass
+
+    def stop(self) -> None:
+        self._stop.set()
+        with contextlib.suppress(Exception):
+            self._client.close()
+
+
 def _setup_logging(verbose: bool, *, quiet: bool = False) -> None:
     """Configure logging; quiet suppresses INFO noise during live displays."""
     from memex.engine.core.logging_setup import setup_logging
@@ -629,6 +740,8 @@ def ingest(
     tracker = _ProgressTracker(progress, total=total)
     queue_display = _QueueDisplay(progress)
     queue_display.start()
+    llm_display = _LlmActivityDisplay(progress)
+    llm_display.start()
     # Pool sized to the file count — visible bars match the file count,
     # never more (no phantom rows).
     tracker.add_slots(min(len(files), tracker._row_pool_size()))
@@ -645,13 +758,18 @@ def ingest(
     #    once (providers use thread-local clients; Ollama queues
     #    server-side) so conversion queues never idle for lack of
     #    consumers and the pipeline runs at best efficiency.
+    # LLM workers match OLLAMA_NUM_PARALLEL (4) — more would only queue
+    # server-side without extra throughput.
     MAX_AHEAD = 8
-    LLM_WORKERS = 2
+    LLM_WORKERS = 4
     live_logs: list[str] = []
     with _suspend_live_logs(live_logs), progress:
         try:
             def _on_progress(p: FileProgress) -> None:
                 if p.stage in _TERMINAL_STAGES:
+                    from memex.engine.core.progress import activity_registry
+
+                    activity_registry.remove(p.path)
                     detail = ""
                     if p.stage == "Error" and p.error:
                         detail = p.error[:60]
@@ -775,6 +893,7 @@ def ingest(
             executor.shutdown(wait=False, cancel_futures=True)
             ingest_executor.shutdown(wait=False, cancel_futures=True)
             queue_display.stop()
+            llm_display.stop()
 
     for msg in live_logs:
         console.print(f"[yellow]  {msg}[/]")
@@ -818,6 +937,8 @@ def sync(
     tracker = _ProgressTracker(progress, total=None)
     queue_display = _QueueDisplay(progress)
     queue_display.start()
+    llm_display = _LlmActivityDisplay(progress)
+    llm_display.start()
     # Rolling window pool; unused slots render as empty lines.
     tracker.add_slots(tracker._row_pool_size())
     # All rows pre-created before Live starts (see ingest — fixed row
@@ -833,6 +954,9 @@ def sync(
                     seen_total = p.total
                     tracker.set_total(p.total)
                 if p.stage in _TERMINAL_STAGES:
+                    from memex.engine.core.progress import activity_registry
+
+                    activity_registry.remove(p.path)
                     detail = ""
                     if p.stage == "Error" and p.error:
                         detail = p.error[:60]
@@ -876,6 +1000,7 @@ def sync(
                 os._exit(130)
         finally:
             queue_display.stop()
+            llm_display.stop()
         if seen_total == 0:
             tracker.set_total(1)
             progress.update(tracker.overall, completed=1)

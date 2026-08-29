@@ -647,7 +647,9 @@ async def sync(
             import concurrent.futures
 
             CONVERT_AHEAD = 8
-            INGEST_WORKERS = 2
+            # Match OLLAMA_NUM_PARALLEL (4) — more would queue server-side
+            # without extra throughput.
+            INGEST_WORKERS = 4
             convert_workers = max(
                 4, int(getattr(config, "MAX_CONCURRENT_SYNC", 2) or 1) + 2
             )
