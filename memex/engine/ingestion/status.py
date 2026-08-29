@@ -44,6 +44,9 @@ class IngestionStatus:
 
 
 # Explicit state machine — no illegal transitions.
+# Terminal self-transitions (done→done, skipped→skipped, failed→failed) are
+# allowed: multiple writers (pipeline, CLI, sync, MCP) may re-report the same
+# terminal state — e.g. the pipeline marks a file done and the CLI confirms it.
 VALID_TRANSITIONS: dict[str, set[str]] = {
     IngestionStatus.PENDING: {IngestionStatus.PROCESSING, IngestionStatus.SKIPPED, IngestionStatus.FAILED},
     IngestionStatus.PROCESSING: {
@@ -58,8 +61,8 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
         IngestionStatus.FAILED,  # re-failure during retry
     },
     IngestionStatus.RETRY: {IngestionStatus.PROCESSING, IngestionStatus.FAILED},
-    IngestionStatus.DONE: {IngestionStatus.PROCESSING},
-    IngestionStatus.SKIPPED: {IngestionStatus.PROCESSING},
+    IngestionStatus.DONE: {IngestionStatus.PROCESSING, IngestionStatus.DONE},
+    IngestionStatus.SKIPPED: {IngestionStatus.PROCESSING, IngestionStatus.SKIPPED},
 }
 
 _TERMINAL = {IngestionStatus.DONE, IngestionStatus.SKIPPED}

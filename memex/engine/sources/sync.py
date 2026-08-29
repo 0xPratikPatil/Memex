@@ -380,7 +380,7 @@ async def sync(
                 FileProgress(
                     path=path,
                     total=total,
-                    current=completed.value,
+                    current=idx,
                     stage=stage,
                     chunks=chunks,
                     error=error,

@@ -225,6 +225,9 @@ class _ProgressTracker:
             )
         else:
             self._progress.update(tid, stage=_stage_label(stage))
+        # Reactivated (retry) — the row is no longer done, so _alloc must
+        # not recycle it for another file while this one is active again.
+        self._done_order.pop(src, None)
 
     def mark_done(self, src: str, stage: str, detail: str = "") -> None:
         start = self._start_times.setdefault(src, time.monotonic())
@@ -344,6 +347,14 @@ class _QueueDisplay:
         self._progress = progress
         self._stop = threading.Event()
         self._tasks: dict[str, TaskID] = {}
+        # One shared client — httpx.get() would open a fresh connection every
+        # 0.1s poll (10 conns/sec/service), a needless TIME_WAIT churn.
+        import httpx
+
+        self._client = httpx.Client(
+            timeout=httpx.Timeout(connect=1.0, read=1.5, write=1.0, pool=1.0),
+            limits=httpx.Limits(max_connections=2, max_keepalive_connections=2),
+        )
 
     def start(self) -> None:
         from memex.engine.core import config as engine_config
@@ -368,12 +379,10 @@ class _QueueDisplay:
             ).start()
 
     def _poll(self, label: str, base_url: str, task: TaskID) -> None:
-        import httpx
-
         url = f"{base_url.rstrip('/')}/queue"
         while not self._stop.wait(self.POLL_INTERVAL_S):
             try:
-                resp = httpx.get(url, timeout=1.5)
+                resp = self._client.get(url)
                 if resp.status_code != 200:
                     continue
                 data = resp.json()
@@ -405,6 +414,8 @@ class _QueueDisplay:
 
     def stop(self) -> None:
         self._stop.set()
+        with contextlib.suppress(Exception):
+            self._client.close()
 
 
 def _setup_logging(verbose: bool, *, quiet: bool = False) -> None:

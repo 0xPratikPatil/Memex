@@ -49,18 +49,33 @@ class TestQueue:
         import servers.markitdown.markitdown_server as markitdown_server
 
         c, _ = client
-        markitdown_server._current_file = "converting.docx"
+        markitdown_server._active_files.extend(["converting.docx"])
         markitdown_server._pending_files.extend(["wait1.pdf", "wait2.pdf"])
         try:
             resp = c.get("/queue")
             assert resp.status_code == 200
             body = resp.json()
             assert body["current"] == "converting.docx"
+            assert body["active"] == ["converting.docx"]
             assert body["pending"] == ["wait1.pdf", "wait2.pdf"]
             assert body["queued"] == 2
+            assert body["busy"] is True
         finally:
-            markitdown_server._current_file = None
+            markitdown_server._active_files.clear()
             markitdown_server._pending_files.clear()
+
+    def test_queue_reports_all_concurrent_files(self, client):
+        import servers.markitdown.markitdown_server as markitdown_server
+
+        c, _ = client
+        markitdown_server._active_files.extend(["one.pdf", "two.pdf"])
+        try:
+            resp = c.get("/queue")
+            body = resp.json()
+            assert body["current"] == "one.pdf"
+            assert body["active"] == ["one.pdf", "two.pdf"]
+        finally:
+            markitdown_server._active_files.clear()
 
 
 class TestConvert:
