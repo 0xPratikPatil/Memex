@@ -105,24 +105,32 @@ class MetadataExtractor:
             return {}
 
         prompt = (
-            "<task>Extract named entities from the text below.</task>\n\n"
-            "<rules>\n"
-            "- Return ONLY valid JSON, no explanations or markdown\n"
-            "- Each category must be a list of strings\n"
-            "- Use empty lists when no entities found\n"
-            "- Never omit any key\n"
-            "- Deduplicate: keep the most complete form\n"
-            "- Normalize dates: \"Jan\" → \"January\", \"Q3\" → \"Q3\"\n"
-            "</rules>\n\n"
-            "<output_format>\n"
-            '{"people": [], "organizations": [], "locations": [], "products": [], "dates": []}\n'
-            "</output_format>\n\n"
-            f"<text>\n{text[:1000]}\n</text>\n\n"
-            "<answer>\n"
+            "You are a named-entity extractor for a document search index.\n"
+            "Extract entities from the text and return a JSON object.\n\n"
+            "SCHEMA (exactly these keys, each a list of strings):\n"
+            '  "people": full names of people (not titles or pronouns)\n'
+            '  "organizations": companies, agencies, institutions, teams\n'
+            '  "locations": cities, countries, regions, addresses\n'
+            '  "products": product names, model numbers, brands\n'
+            '  "dates": dates or date ranges, normalized (e.g. "2026-01-15", "Q3 2025")\n\n'
+            "RULES:\n"
+            "- Return ONLY the JSON object — no preamble, no markdown fences, no comments\n"
+            "- Use empty arrays [] when a category has no matches — never omit a key\n"
+            "- Deduplicate: same entity appears once, keep the most complete form\n"
+            "- Keep the original case of proper nouns (\"Acme Corp\", not \"acme corp\")\n"
+            "- Do not invent entities that are not explicitly in the text\n\n"
+            "EXAMPLE:\n"
+            'Text: "The contract with Tesla Motors was signed in Berlin by Anna Müller on March 3."\n'
+            'Output: {"people": ["Anna Müller"], "organizations": ["Tesla Motors"], '
+            '"locations": ["Berlin"], "products": [], "dates": ["March 3"]}\n\n'
+            f"Text: {text[:1000]}\n\n"
+            "Output:"
         )
         try:
             response = self._chat(prompt)
-            entities = json.loads(self._strip_code_fences(response))
+            entities = self._extract_json(response)
+            if not isinstance(entities, dict):
+                raise json.JSONDecodeError("not a JSON object", response, 0)
             return {k: v[: config.MAX_ENTITIES_PER_CHUNK] for k, v in entities.items() if isinstance(v, list)}
         except (json.JSONDecodeError, Exception) as exc:
             logger.warning("Entity extraction failed: %s", exc)
@@ -141,18 +149,29 @@ class MetadataExtractor:
             return "unknown"
 
         prompt = (
-            "<task>Classify the document type.</task>\n\n"
-            "<rules>\n"
-            "- Choose EXACTLY one type from the list\n"
-            "- Return ONLY the type name, no quotes or punctuation\n"
-            "- Prefer \"contract\" for legal agreements with clauses and parties\n"
-            "- Prefer \"report\" for structured analyses with findings\n"
-            "- Prefer \"email\" for messages with greetings/signatures\n"
-            "</rules>\n\n"
-            "<types>report, email, article, code, documentation, presentation, "
-            "resume, contract, invoice, meeting_notes, other</types>\n\n"
-            f"<text>\n{text[:2000]}\n</text>\n\n"
-            "<answer>\n"
+            "You are a document classifier for a search index.\n"
+            "Classify the text into exactly one of these types:\n"
+            "report, email, article, code, documentation, presentation, "
+            "resume, contract, invoice, meeting_notes, other\n\n"
+            "GUIDANCE:\n"
+            '- "contract" — legal agreements, deeds, trusts, signed documents with clauses and parties\n'
+            '- "report" — structured analyses with findings, stats, recommendations\n'
+            '- "email" — messages with greeting/salutation and sign-off\n'
+            '- "invoice" — billing with amounts, line items, due dates\n'
+            '- "meeting_notes" — minutes, agenda, action items, attendee list\n'
+            '- "code" — source code, configs, scripts\n'
+            '- "documentation" — API refs, user guides, READMEs\n'
+            '- "presentation" — slide-style content, bullet-heavy with titles\n'
+            '- "resume" — CV, skills, work history, education\n'
+            '- "article" — prose with headline, byline, or journalistic tone\n'
+            '- "other" — anything that does not fit the above\n\n'
+            "Return ONLY the type name — one word, lowercase, no quotes, no punctuation, "
+            "no explanations.\n\n"
+            "EXAMPLE:\n"
+            'Text: "This Agreement is entered into by Acme Corp and Jane Doe."\n'
+            'Output: contract\n\n'
+            f"Text: {text[:2000]}\n\n"
+            "Output:"
         )
         try:
             doc_type = self._chat(prompt).strip().lower()
@@ -178,21 +197,23 @@ class MetadataExtractor:
             return []
 
         prompt = (
-            "<task>Extract topic labels from the text.</task>\n\n"
-            "<rules>\n"
-            "- Return a JSON array of strings\n"
-            "- Topics must be short noun phrases (2-4 words)\n"
-            "- Focus on main subjects, not subtopics\n"
-            "- Avoid generic labels: \"information\", \"details\", \"data\", \"content\"\n"
-            f"- Maximum {config.MAX_TOPICS_PER_CHUNK} topics\n"
-            "</rules>\n\n"
-            f"<output_format>[\"topic1\", \"topic2\"]</output_format>\n\n"
-            f"<text>\n{text[:1000]}\n</text>\n\n"
-            "<answer>\n"
+            "You are a topic tagger for a document search index.\n"
+            f"Extract up to {config.MAX_TOPICS_PER_CHUNK} topic labels from the text.\n\n"
+            "RULES:\n"
+            "- Topics must be short noun phrases (2-4 words) describing the main subjects\n"
+            "- Broad, generic labels are useless — be specific (\"machine learning\" not \"technology\")\n"
+            "- Avoid: information, details, data, content, general, overview, introduction\n"
+            "- Return ONLY a JSON array of strings — no markdown fences, no keys, no comments\n"
+            "- Use [] when the text has no clear topics\n\n"
+            "EXAMPLE:\n"
+            'Text: "The 2025 annual report shows revenue grew 20% in the enterprise segment, driven by cloud adoption in Europe."\n'
+            'Output: ["annual report", "revenue growth", "cloud adoption", "enterprise segment"]\n\n'
+            f"Text: {text[:1000]}\n\n"
+            "Output:"
         )
         try:
             response = self._chat(prompt)
-            topics = json.loads(self._strip_code_fences(response))
+            topics = self._extract_json(response)
             if isinstance(topics, list):
                 return [str(t) for t in topics[: config.MAX_TOPICS_PER_CHUNK]]
             return []
@@ -428,20 +449,24 @@ class MetadataExtractor:
             return [{} for _ in batch]
 
         prompt = (
-            "<task>Extract metadata from each chunk below.</task>\n\n"
-            "<rules>\n"
-            "- Return exactly ONE JSON array with one object per chunk, in the same order\n"
-            f"- Every object must contain ALL keys: {', '.join(tasks)}\n"
+            "You are a metadata extraction engine for a document search index.\n"
+            f"Extract metadata from each of the {len(batch)} chunks below.\n\n"
+            "TASK PER CHUNK:\n"
+            f"- {', '.join(tasks)}\n\n"
+            "OUTPUT CONTRACT (strict):\n"
+            "- Return ONE JSON array with exactly one object per chunk, in the SAME order as the input\n"
+            f"- Every object must contain ALL these keys: {', '.join(tasks)}\n"
             "- Use empty arrays for fields with no matches — never omit a key\n"
             "- Never add keys beyond the requested ones\n"
-            "- Output raw JSON only — no markdown fences, no commentary\n"
-            "</rules>\n\n"
-            "<output_format>\n"
-            '[{"entities": {"people": [], "organizations": [], "locations": [], "products": [], "dates": []}, '
-            '"topics": [], "doc_type": "type"}]\n'
-            "</output_format>\n\n"
-            f"<chunks>\n{chunks_text}\n</chunks>\n\n"
-            "<answer>\n"
+            "- Output raw JSON only — no markdown fences, no commentary, no numbering\n\n"
+            "EXAMPLE (for 2 chunks, entities + topics enabled):\n"
+            'Input: [Chunk 0]: "The board approved the merger with GlobalTech." [Chunk 1]: "Revenue grew 15% this quarter."\n'
+            'Output: [{"entities": {"people": [], "organizations": ["GlobalTech"], "locations": [], '
+            '"products": [], "dates": []}, "topics": ["board approval", "merger"]}, '
+            '{"entities": {"people": [], "organizations": [], "locations": [], "products": [], "dates": []}, '
+            '"topics": ["revenue growth"]}]\n\n'
+            f"Chunks:\n{chunks_text}\n\n"
+            "Output:"
         )
 
         try:
@@ -449,7 +474,7 @@ class MetadataExtractor:
             # far more than 400 — truncation caused JSON parse failures and
             # 10x slower per-chunk fallback calls.
             response = self._chat(prompt, num_predict=1200)
-            parsed = json.loads(self._strip_code_fences(response))
+            parsed = self._extract_json(response)
             if not isinstance(parsed, list):
                 parsed = [parsed]
             if len(parsed) < len(batch):
@@ -543,6 +568,52 @@ class MetadataExtractor:
     def _strip_code_fences(text: str) -> str:
         """Remove markdown code fences (```json ... ```) from LLM output."""
         return re.sub(r"```(?:json)?\s*\n?(.*?)\n?\s*```", r"\1", text, flags=re.DOTALL).strip()
+
+    @staticmethod
+    def _extract_json(text: str) -> Any:
+        """Parse JSON out of noisy LLM output.
+
+        Tries full-string parse first, then scans for the first balanced
+        ``{...}`` object or ``[...]`` array — models often wrap JSON in
+        prose ("Here is the result: ...") or trail with comments.
+        """
+        import json as _json
+
+        if not text:
+            return None
+        cleaned = MetadataExtractor._strip_code_fences(text)
+        try:
+            return _json.loads(cleaned)
+        except _json.JSONDecodeError:
+            pass
+        for i, ch in enumerate(cleaned):
+            if ch not in "{[":
+                continue
+            depth = 0
+            in_str = False
+            esc = False
+            for j in range(i, len(cleaned)):
+                c = cleaned[j]
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif c == "\\":
+                        esc = True
+                    elif c == '"':
+                        in_str = False
+                    continue
+                if c == '"':
+                    in_str = True
+                elif c in "{[":
+                    depth += 1
+                elif c in "}]":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            return _json.loads(cleaned[i : j + 1])
+                        except _json.JSONDecodeError:
+                            break
+        return None
 
     def _chat(self, prompt: str, num_predict: int = 200) -> str:
         """Call LLM provider synchronously."""

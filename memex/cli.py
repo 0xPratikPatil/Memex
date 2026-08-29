@@ -195,6 +195,9 @@ class _ProgressTracker:
         if self._done_order:
             src, tid = self._done_order.popitem(last=False)
             del self._file_tasks[src]
+            # Restart the elapsed clock — a recycled slot would otherwise
+            # show the accumulated time of every file that used it before.
+            self._progress.reset(tid)
             return tid
         # Emergency: add a new task row (may cause visual glitch but
         # avoids crashing the entire sync run)
@@ -376,14 +379,20 @@ class _QueueDisplay:
                 continue
 
             current = data.get("current")
+            active = list(data.get("active") or ())
             pending = list(data.get("pending") or [])
             recent = list(data.get("recently_completed") or [])
 
-            if current or pending:
-                detail = f"waiting: {', '.join(pending)}" if pending else ""
+            # `active` lists every file converting concurrently (the
+            # markitdown service runs up to MAX_CONCURRENT at once).
+            if not active and current:
+                active = [current]
+            if active or pending:
+                now = ", ".join(_short_name(n) for n in active)
+                detail = f"waiting: {', '.join(_short_name(n) for n in pending)}" if pending else ""
                 self._progress.update(
                     task,
-                    stage=f"◎ now: {_short_name(current)}" if current else "◎ starting…",
+                    stage=f"◎ now: {now}",
                     detail=detail,
                 )
             elif recent:

@@ -42,7 +42,9 @@ MAX_CONCURRENT = int(os.environ.get("MARKITDOWN_MAX_CONCURRENT", "2"))
 _convert_semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
 # Live queue state (exposed via GET /queue).
-_current_file: str | None = None
+# _active_files holds ALL files currently converting (MAX_CONCURRENT of
+# them) — a single _current_file clobbers on the second concurrent job.
+_active_files: deque[str] = deque()
 _pending_files: deque[str] = deque()
 
 # Recently completed conversions — ring buffer so the CLI poller can see
@@ -74,7 +76,7 @@ async def health() -> dict[str, str]:
 
 @app.get("/queue")
 async def queue_status() -> dict:
-    """Live queue state: which file is converting now, which are waiting."""
+    """Live queue state: which files are converting now, which are waiting."""
     now = time.monotonic()
     recent = [
         name
@@ -82,10 +84,11 @@ async def queue_status() -> dict:
         if now - ts < _RECENTLY_COMPLETED_TTL_S
     ]
     return {
-        "current": _current_file,
+        "current": _active_files[0] if _active_files else None,
+        "active": list(_active_files),
         "pending": list(_pending_files),
         "queued": len(_pending_files),
-        "busy": _convert_semaphore.locked(),
+        "busy": bool(_active_files),
         "max_concurrent": MAX_CONCURRENT,
         "recently_completed": recent,
     }
@@ -97,18 +100,16 @@ async def convert(
     filename: str = Form(default=""),
 ) -> JSONResponse:
     """Convert a document to Markdown (CPU work offloaded to threads)."""
-    global _current_file
-
     name = filename or file.filename or "document"
 
-    if _convert_semaphore.locked():
+    if len(_active_files) >= MAX_CONCURRENT:
         _pending_files.append(name)
         logger.info(
             "conversion busy — queued %s (%d waiting)", name, len(_pending_files)
         )
 
     async with _convert_semaphore:
-        _current_file = name
+        _active_files.append(name)
         with contextlib.suppress(ValueError):
             _pending_files.remove(name)
 
@@ -145,7 +146,8 @@ async def convert(
                 status_code=500,
             )
         finally:
-            _current_file = None
+            with contextlib.suppress(ValueError):
+                _active_files.remove(name)
             _RECENTLY_COMPLETED.append((name, time.monotonic()))
 
 
