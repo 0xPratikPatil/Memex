@@ -103,6 +103,24 @@ def _short_name(path: str, max_len: int = 40) -> str:
     return f"{name[: max_len - 3]}..."
 
 
+def _idle_hint(label: str, data: dict) -> str:
+    """Idle-state text for a queue row — informative, never a bare 'idle'.
+
+    The OCR row historically sat on "· idle" for entire runs (no scanned
+    docs), which read as a broken/stuck service. Show what the service
+    actually is so the row always carries context.
+    """
+    if label == "OCR":
+        model = data.get("model") or ""
+        provider = data.get("provider") or ""
+        if model and provider:
+            return f"idle · {model} ({provider})"
+        if model:
+            return f"idle · {model}"
+        return "idle · no scanned docs"
+    return "idle"
+
+
 def _fmt_dur(seconds: float) -> str:
     """Human duration: 2.3s / 1m05s / 1h02m."""
     if seconds < 60:
@@ -337,16 +355,23 @@ class _QueueDisplay:
     and updates one Progress row per service. Rows sit right after the
     Overall row and are always visible. Conversions can finish in under a
     second, so the poll is fast and the last activity is remembered for a
-    few seconds — the row shows "◎ now: file" while busy and "· done:
-    file" right after, so work is always visible.
+    while — the row shows "◎ now: file" while busy, "· done: file" right
+    after, and keeps that state during the LLM phases instead of dropping
+    back to "idle" (conversions burst at the start; the LLM pipeline is
+    the slow part — idle there makes the queue look stuck).
     """
 
     POLL_INTERVAL_S = 0.1
+    # How long the last observed activity stays on screen after the server's
+    # 5s recently-completed window expires (covers the LLM phases of the run).
+    STICKY_ACTIVITY_S = 30.0
 
     def __init__(self, progress: Progress) -> None:
         self._progress = progress
         self._stop = threading.Event()
         self._tasks: dict[str, TaskID] = {}
+        self._last_activity: dict[str, tuple[str, float]] = {}
+        self._has_activity: dict[str, bool] = {}
         # One shared client — httpx.get() would open a fresh connection every
         # 0.1s poll (10 conns/sec/service), a needless TIME_WAIT churn.
         import httpx
@@ -398,19 +423,41 @@ class _QueueDisplay:
             # markitdown service runs up to MAX_CONCURRENT at once).
             if not active and current:
                 active = [current]
+            now = time.monotonic()
             if active or pending:
-                now = ", ".join(_short_name(n) for n in active)
-                detail = f"waiting: {', '.join(_short_name(n) for n in pending)}" if pending else ""
-                self._progress.update(
-                    task,
-                    stage=f"◎ now: {now}",
-                    detail=detail,
+                stage = (
+                    f"◎ now: {', '.join(_short_name(n) for n in active)}"
+                    if active
+                    else "◎ starting…"
                 )
+                detail = (
+                    f"waiting: {', '.join(_short_name(n) for n in pending)}"
+                    if pending
+                    else ""
+                )
+                self._last_activity[label] = (stage, now)
+                self._has_activity[label] = True
+                self._progress.update(task, stage=stage, detail=detail)
             elif recent:
                 names = ", ".join(_short_name(n) for n in recent[-2:])
-                self._progress.update(task, stage=f"· done: {names}", detail="")
+                stage = f"· done: {names}"
+                self._last_activity[label] = (stage, now)
+                self._has_activity[label] = True
+                self._progress.update(task, stage=stage, detail="")
+            elif self._has_activity.get(label):
+                # Keep the last activity on screen while the LLM pipeline
+                # works — the server's recent-window already expired, but
+                # the run is clearly mid-flight (files converted moments ago).
+                stage, ts = self._last_activity.get(label, ("· idle", 0))
+                if now - ts < self.STICKY_ACTIVITY_S:
+                    self._progress.update(task, stage=stage, detail="")
+                    continue
+                self._has_activity[label] = False
+                idle = f"· {_idle_hint(label, data)}"
+                self._progress.update(task, stage=idle, detail="")
             else:
-                self._progress.update(task, stage="· idle", detail="")
+                idle = f"· {_idle_hint(label, data)}"
+                self._progress.update(task, stage=idle, detail="")
 
     def stop(self) -> None:
         self._stop.set()
