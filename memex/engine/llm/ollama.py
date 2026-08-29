@@ -56,18 +56,21 @@ class OllamaLLM(LLMProvider):
         """Post to ``/api/chat`` and return assistant content.
 
         Handles responses where the model outputs a ``thinking`` field
-        instead of ``content`` (e.g. for reasoning models).
+        instead of ``content`` (e.g. for reasoning models like Qwen3.5).
         """
         client = self._get_client()
         options: dict[str, Any] = {"temperature": 0}
         if num_predict is not None:
             options["num_predict"] = num_predict
+        # think=False must be top-level — placing it inside options is
+        # silently ignored by Ollama for thinking models (qwen3.5, deepseek-r1).
         resp = await client.post(
             f"{self._base_url}/api/chat",
             json={
                 "model": model or self._model,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
+                "think": False,
                 "options": options,
             },
         )
