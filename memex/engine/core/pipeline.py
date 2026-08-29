@@ -629,6 +629,12 @@ class RAGEngine:
             logger.info("ingest [%d%%] %s", pct, msg)
             self._record_stage(source_identifier, pct)
 
+        # Every ingest path (MCP tools, CLI, sync) must leave a status record
+        # — otherwise rag_processing_status shows nothing for files ingested
+        # outside the sync/CLI flow. mark_pending only creates the record when
+        # absent; an existing PROCESSING record (sync's stage updates) survives.
+        self._ensure_status_record(source_identifier)
+
         # Remove exact duplicate chunks within the document
         from memex.engine.ingestion.hashing import dedup_chunks
 
@@ -807,6 +813,12 @@ class RAGEngine:
             raise
 
         logger.info("Ingested %d chunks for '%s'", len(points), source_identifier)
+        try:
+            from memex.engine.ingestion.status import FileStatusStore
+
+            FileStatusStore(self._get_qdrant()).mark_done(source_identifier, chunks=len(points))
+        except Exception:
+            logger.debug("Status mark_done skipped for %s", source_identifier, exc_info=True)
         return len(points)
 
     def ingest_text(
@@ -908,6 +920,23 @@ class RAGEngine:
             store.update_stage(source_identifier, stage)
         except Exception:
             logger.debug("Status stage recording skipped for %s", source_identifier, exc_info=True)
+
+    def _ensure_status_record(self, source_identifier: str) -> None:
+        """Create a pending status record if none exists.
+
+        ``mark_pending`` is an upsert — calling it unconditionally here would
+        clobber sync's PROCESSING record (and its live stage). Only create
+        when the file has no record yet, so every ingest path (MCP tools,
+        CLI, sync) becomes visible in ``rag_processing_status``.
+        """
+        try:
+            from memex.engine.ingestion.status import FileStatusStore
+
+            store = FileStatusStore(self._get_qdrant())
+            if store.get_status(source_identifier) is None:
+                store.mark_pending(source_identifier)
+        except Exception:
+            logger.debug("Status record creation skipped for %s", source_identifier, exc_info=True)
 
     def _build_search_filter(
         self,
